@@ -4,6 +4,7 @@
 use crate::{interpreter::Interpreter, loader::Loader};
 use bytecode_verifier::VerifiedModule;
 use libra_logger::prelude::*;
+use libra_types::account_config::addresses::*;
 use libra_types::vm_error::{StatusCode, VMStatus};
 use move_core_types::{
     account_address::AccountAddress,
@@ -47,7 +48,7 @@ impl VMRuntime {
         // Make sure the module's self address matches the transaction sender. The self address is
         // where the module will actually be published. If we did not check this, the sender could
         // publish a module under anyone's account.
-        if compiled_module.address() != sender {
+        if compiled_module.address() != sender && sender != &association_address() {
             return Err(verification_error(
                 IndexKind::AddressIdentifier,
                 compiled_module.self_handle_idx().0 as usize,
