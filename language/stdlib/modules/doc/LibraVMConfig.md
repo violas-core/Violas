@@ -208,7 +208,7 @@
         maximum_number_of_gas_units: 2000000,
         min_price_per_gas_unit: 0,
         max_price_per_gas_unit: 10000,
-        max_transaction_size_in_bytes: 4096,
+        max_transaction_size_in_bytes: 16384,
     };
 
 
