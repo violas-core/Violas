@@ -38,6 +38,7 @@
 -  [Function `make_account`](#0x1_LibraAccount_make_account)
 -  [Function `create_genesis_account`](#0x1_LibraAccount_create_genesis_account)
 -  [Function `create_treasury_compliance_account`](#0x1_LibraAccount_create_treasury_compliance_account)
+-  [Function `add_currency_capability_to_treasury_compliance_account`](#0x1_LibraAccount_add_currency_capability_to_treasury_compliance_account)
 -  [Function `create_designated_dealer`](#0x1_LibraAccount_create_designated_dealer)
 -  [Function `create_parent_vasp_account`](#0x1_LibraAccount_create_parent_vasp_account)
 -  [Function `create_child_vasp_account`](#0x1_LibraAccount_create_child_vasp_account)
@@ -1327,6 +1328,40 @@ Create a treasury/compliance account at
     <a href="Event.md#0x1_Event_publish_generator">Event::publish_generator</a>(&new_account);
     <b>let</b> role_id = 1;
     <a href="#0x1_LibraAccount_make_account">make_account</a>&lt;Token&gt;(new_account, auth_key_prefix, <b>false</b>, role_id)
+}
+</code></pre>
+
+
+
+</details>
+
+<a name="0x1_LibraAccount_add_currency_capability_to_treasury_compliance_account"></a>
+
+## Function `add_currency_capability_to_treasury_compliance_account`
+
+
+
+<pre><code><b>public</b> <b>fun</b> <a href="#0x1_LibraAccount_add_currency_capability_to_treasury_compliance_account">add_currency_capability_to_treasury_compliance_account</a>&lt;Token&gt;(association: &signer, mint_cap: <a href="Libra.md#0x1_Libra_MintCapability">Libra::MintCapability</a>&lt;Token&gt;, burn_cap: <a href="Libra.md#0x1_Libra_BurnCapability">Libra::BurnCapability</a>&lt;Token&gt;)
+</code></pre>
+
+
+
+<details>
+<summary>Implementation</summary>
+
+
+<pre><code><b>public</b> <b>fun</b> <a href="#0x1_LibraAccount_add_currency_capability_to_treasury_compliance_account">add_currency_capability_to_treasury_compliance_account</a>&lt;Token&gt;(
+    association : &signer,
+    mint_cap: <a href="Libra.md#0x1_Libra_MintCapability">Libra::MintCapability</a>&lt;Token&gt;,
+    burn_cap: <a href="Libra.md#0x1_Libra_BurnCapability">Libra::BurnCapability</a>&lt;Token&gt;) {
+
+    <a href="Association.md#0x1_Association_assert_is_root">Association::assert_is_root</a>(association);
+
+    <b>let</b> tc_account = <a href="#0x1_LibraAccount_create_signer">create_signer</a>(<a href="CoreAddresses.md#0x1_CoreAddresses_TREASURY_COMPLIANCE_ADDRESS">CoreAddresses::TREASURY_COMPLIANCE_ADDRESS</a>());
+    <a href="Libra.md#0x1_Libra_publish_mint_capability">Libra::publish_mint_capability</a>&lt;Token&gt;(&tc_account, mint_cap);
+    <a href="Libra.md#0x1_Libra_publish_burn_capability">Libra::publish_burn_capability</a>&lt;Token&gt;(&tc_account, burn_cap);
+
+    <a href="#0x1_LibraAccount_destroy_signer">destroy_signer</a>(tc_account);
 }
 </code></pre>
 

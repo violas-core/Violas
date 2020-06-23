@@ -560,6 +560,20 @@ module LibraAccount {
         make_account<Token>(new_account, auth_key_prefix, false, role_id)
     }
 
+    // add currency mint and burn capbility to teasury compliance account
+    public fun add_currency_capability_to_treasury_compliance_account<Token>(
+        association : &signer,
+        mint_cap: Libra::MintCapability<Token>,
+        burn_cap: Libra::BurnCapability<Token>) {
+
+        Association::assert_is_root(association);
+        
+        let tc_account = create_signer(CoreAddresses::TREASURY_COMPLIANCE_ADDRESS());        
+        Libra::publish_mint_capability<Token>(&tc_account, mint_cap);
+        Libra::publish_burn_capability<Token>(&tc_account, burn_cap);
+        
+        destroy_signer(tc_account);
+    }
 
     ///////////////////////////////////////////////////////////////////////////
     // Designated Dealer API
