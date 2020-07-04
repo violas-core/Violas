@@ -35,13 +35,19 @@ pub enum Error {
     #[error("{0} is not set, SafetyRules is not initialized")]
     NotInitialized(String),
 
+    #[error(
+        "SafetyRules is configured to verify signature but the \
+             vote proposal doesn't carry a signature"
+    )]
+    SignatureNotFound,
+
     /// This proposal's round is less than round of preferred block.
     /// Returns the id of the preferred block.
     #[error(
         "Proposal's round is lower than round of preferred block at round {:?}",
         preferred_round
     )]
-    ProposalRoundLowerThenPreferredBlock { preferred_round: Round },
+    ProposalRoundLowerThanPreferredBlock { preferred_round: Round },
 
     /// This proposal is too old - return last_voted_round
     #[error(
@@ -57,8 +63,8 @@ pub enum Error {
     #[error("Serialization error: {0}")]
     SerializationError(String),
 
-    #[error("Waypoint mismatch: {0}")]
-    WaypointMismatch(String),
+    #[error("Invalid EpochChangeProof: {0}")]
+    InvalidEpochChangeProof(String),
 }
 
 impl From<anyhow::Error> for Error {

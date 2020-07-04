@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{
-    noise::{stream::NoiseStream, HandshakeAuthMode, NoiseUpgrader},
+    noise::{stream::NoiseStream, AntiReplayTimestamps, HandshakeAuthMode, NoiseUpgrader},
     protocols::{
         identity::exchange_handshake,
         wire::handshake::v1::{HandshakeMsg, MessagingProtocolVersion, SupportedProtocols},
@@ -13,12 +13,13 @@ use futures::{
     io::{AsyncRead, AsyncWrite},
     stream::{Stream, StreamExt, TryStreamExt},
 };
-use libra_config::{config::HANDSHAKE_VERSION, network_id::NetworkId};
+use libra_config::{chain_id::ChainId, config::HANDSHAKE_VERSION, network_id::NetworkId};
 use libra_crypto::x25519;
 use libra_logger::prelude::*;
 use libra_network_address::{parse_dns_tcp, parse_ip_tcp, parse_memory, NetworkAddress};
 use libra_types::PeerId;
 use netcore::transport::{tcp, ConnectionOrigin, Transport};
+use serde::Serialize;
 use std::{
     collections::HashMap,
     convert::TryFrom,
@@ -60,7 +61,7 @@ pub trait TSocket: AsyncRead + AsyncWrite + Send + Debug + Unpin + 'static {}
 impl<T> TSocket for T where T: AsyncRead + AsyncWrite + Send + Debug + Unpin + 'static {}
 
 /// Unique local identifier for a connection.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, Serialize)]
 pub struct ConnectionId(u32);
 
 impl From<u32> for ConnectionId {
@@ -88,7 +89,7 @@ impl ConnectionIdGenerator {
 }
 
 /// Metadata associated with an established and fully upgraded connection.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct ConnectionMetadata {
     peer_id: PeerId,
     connection_id: ConnectionId,
@@ -150,22 +151,22 @@ pub async fn perform_handshake<T: TSocket>(
     origin: ConnectionOrigin,
     own_handshake: &HandshakeMsg,
 ) -> io::Result<Connection<T>> {
-    let handshake_other = exchange_handshake(&own_handshake, &mut socket).await?;
-    if own_handshake.network_id != handshake_other.network_id {
+    let remote_handshake = exchange_handshake(&own_handshake, &mut socket).await?;
+    if !own_handshake.verify(&remote_handshake) {
         return Err(io::Error::new(
             io::ErrorKind::Other,
             format!(
-                "network_ids don't match own: {:?} received: {:?}",
-                own_handshake.network_id, handshake_other.network_id
+                "Handshakes don't match networks own: {:?} received: {:?}",
+                own_handshake, remote_handshake
             ),
         ));
     }
 
-    let intersecting_protocols = own_handshake.find_common_protocols(&handshake_other);
+    let intersecting_protocols = own_handshake.find_common_protocols(&remote_handshake);
     match intersecting_protocols {
         None => {
             info!("No matching protocols found for connection with peer: {:?}. Handshake received: {:?}",
-                  peer_id.short_str(), handshake_other);
+                  peer_id.short_str(), remote_handshake);
             Err(io::Error::new(
                 io::ErrorKind::Other,
                 "no matching messaging protocol",
@@ -239,7 +240,10 @@ async fn upgrade_outbound<T: TSocket>(
     let socket = fut_socket.await?;
 
     // noise handshake
-    let socket = ctxt.noise.upgrade_outbound(socket, remote_pubkey).await?;
+    let socket = ctxt
+        .noise
+        .upgrade_outbound(socket, remote_pubkey, AntiReplayTimestamps::now)
+        .await?;
 
     // sanity check: Noise IK should always guarantee this is true
     debug_assert_eq!(remote_pubkey, socket.get_remote_static());
@@ -280,10 +284,11 @@ where
         identity_key: x25519::PrivateKey,
         trusted_peers: Option<Arc<RwLock<HashMap<PeerId, x25519::PublicKey>>>>,
         handshake_version: u8,
+        chain_id: ChainId,
         network_id: NetworkId,
         application_protocols: SupportedProtocols,
     ) -> Self {
-        let mut own_handshake = HandshakeMsg::new(network_id);
+        let mut own_handshake = HandshakeMsg::new(chain_id, network_id);
         own_handshake.add(SUPPORTED_MESSAGING_PROTOCOL, application_protocols);
         let identity_pubkey = identity_key.public_key();
 
@@ -575,13 +580,14 @@ mod test {
         let supported_protocols = SupportedProtocols::from(
             [ProtocolId::ConsensusRpc, ProtocolId::DiscoveryDirectSend].iter(),
         );
-
+        let chain_id = ChainId::default();
         let listener_transport = LibraNetTransport::new(
             base_transport.clone(),
             listener_peer_id,
             listener_key,
             trusted_peers.clone(),
             HANDSHAKE_VERSION,
+            chain_id.clone(),
             NetworkId::Validator,
             supported_protocols.clone(),
         );
@@ -592,6 +598,7 @@ mod test {
             dialer_key,
             trusted_peers.clone(),
             HANDSHAKE_VERSION,
+            chain_id,
             NetworkId::Validator,
             supported_protocols.clone(),
         );
@@ -852,7 +859,7 @@ mod test {
     fn handshake_network_id_mismatch() {
         let (outbound, inbound) = MemorySocket::new_pair();
 
-        let mut server_handshake = HandshakeMsg::new(NetworkId::Validator);
+        let mut server_handshake = HandshakeMsg::new(ChainId::default(), NetworkId::Validator);
         // This is required to ensure that test doesn't get an error for a different reason
         server_handshake.add(
             MessagingProtocolVersion::V1,

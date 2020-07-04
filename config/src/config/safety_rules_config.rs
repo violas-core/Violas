@@ -10,6 +10,7 @@ use std::{net::SocketAddr, path::PathBuf};
 pub struct SafetyRulesConfig {
     pub backend: SecureBackend,
     pub service: SafetyRulesService,
+    pub verify_vote_proposal_signature: bool,
 }
 
 impl Default for SafetyRulesConfig {
@@ -17,6 +18,7 @@ impl Default for SafetyRulesConfig {
         Self {
             backend: SecureBackend::InMemoryStorage,
             service: SafetyRulesService::Thread,
+            verify_vote_proposal_signature: true,
         }
     }
 }
@@ -31,8 +33,7 @@ impl SafetyRulesConfig {
 
 /// Defines how safety rules should be executed
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[serde(tag = "type")]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", tag = "type")]
 pub enum SafetyRulesService {
     /// This runs safety rules in the same thread as event processor
     Local,
@@ -49,6 +50,7 @@ pub enum SafetyRulesService {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct RemoteService {
     pub server_address: SocketAddr,
 }

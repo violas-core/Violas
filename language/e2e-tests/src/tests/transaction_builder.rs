@@ -132,6 +132,77 @@ fn create_parent_and_child_vasp() {
 }
 
 #[test]
+fn create_child_vasp_all_currencies() {
+    let mut executor = FakeExecutor::from_genesis_file();
+    let association = Account::new_association();
+    let blessed = Account::new_blessed_tc();
+    let parent = Account::new();
+    let child = Account::new();
+
+    let mut keygen = KeyGen::from_seed([9u8; 32]);
+    let (_vasp_compliance_private_key, vasp_compliance_public_key) = keygen.generate_keypair();
+
+    // create a parent VASP
+    let add_all_currencies = true;
+    executor.execute_and_apply(association.signed_script_txn(
+        encode_create_parent_vasp_account(
+            account_config::coin1_tag(),
+            *parent.address(),
+            parent.auth_key_prefix(),
+            vec![],
+            vec![],
+            vasp_compliance_public_key.to_bytes().to_vec(),
+            add_all_currencies,
+        ),
+        1,
+    ));
+
+    let amount = 100;
+    // mint to the parent VASP
+    executor.execute_and_apply(blessed.signed_script_txn(
+        encode_mint_script(
+            account_config::coin1_tag(),
+            parent.address(),
+            vec![],
+            amount,
+        ),
+        0,
+    ));
+
+    assert!(executor
+        .read_balance_resource(&parent, account::coin1_currency_code())
+        .is_some());
+    assert!(executor
+        .read_balance_resource(&parent, account::coin2_currency_code())
+        .is_some());
+    assert!(executor
+        .read_balance_resource(&parent, account::lbr_currency_code())
+        .is_some());
+
+    // create a child VASP with a balance of amount
+    executor.execute_and_apply(parent.signed_script_txn(
+        encode_create_child_vasp_account(
+            account_config::coin1_tag(),
+            *child.address(),
+            child.auth_key_prefix(),
+            add_all_currencies,
+            amount,
+        ),
+        0,
+    ));
+
+    assert!(executor
+        .read_balance_resource(&parent, account::coin1_currency_code())
+        .is_some());
+    assert!(executor
+        .read_balance_resource(&child, account::coin2_currency_code())
+        .is_some());
+    assert!(executor
+        .read_balance_resource(&child, account::lbr_currency_code())
+        .is_some());
+}
+
+#[test]
 fn create_child_vasp_with_balance() {
     let mut executor = FakeExecutor::from_genesis_file();
     let association = Account::new_association();
@@ -256,7 +327,7 @@ fn dual_attestation_payment() {
             account_config::lbr_type_tag(),
             &payment_sender.address(),
             vec![],
-            2_000_000,
+            5_000_000,
         ),
         0,
     ));
@@ -273,7 +344,7 @@ fn dual_attestation_payment() {
         0,
     ));
     {
-        // Transaction >= 1000 threshold goes through signature verification with valid signature, passes
+        // Transaction >= 1_000_000 threshold goes through signature verification with valid signature, passes
         // Do the offline protocol: generate a payment id, sign with the receiver's private key, include
         // in transaction from sender's account
         let ref_id = lcs::to_bytes(&7777u64).unwrap();
@@ -311,16 +382,16 @@ fn dual_attestation_payment() {
         );
     }
     {
-        // transaction >= 1000 threshold goes through signature verification but has an
+        // transaction >= 1_000_000 (set in DualAttestation.move) threshold goes through signature verification but has an
         // structurally invalid signature. Fails.
         let ref_id = [0u8; 32].to_vec();
         let output = executor.execute_transaction(payment_sender.signed_script_txn(
             encode_transfer_with_metadata_script(
                 account_config::lbr_type_tag(),
                 *payment_receiver.address(),
-                1000,
+                1_000_000,
                 ref_id,
-                b"what a signature".to_vec(),
+                b"invalid signature".to_vec(),
             ),
             2,
         ));
@@ -332,9 +403,9 @@ fn dual_attestation_payment() {
     }
 
     {
-        // transaction >= 1000 threshold goes through signature verification with invalid signature, aborts
+        // transaction >= 1_000_000 threshold goes through signature verification with invalid signature, aborts
         let ref_id = lcs::to_bytes(&9999u64).unwrap();
-        let payment_amount = 1000u64;
+        let payment_amount = 1_000_000u64;
         // UTF8-encoded string "@@$$LIBRA_ATTEST$$@@" without length prefix
         let mut domain_separator = vec![
             0x40, 0x40, 0x24, 0x24, 0x4C, 0x49, 0x42, 0x52, 0x41, 0x5F, 0x41, 0x54, 0x54, 0x45,
@@ -372,7 +443,7 @@ fn dual_attestation_payment() {
     {
         // similar, but with empty payment ID (make sure signature is still invalid!)
         let ref_id = vec![];
-        let payment_amount = 1000u64;
+        let payment_amount = 1_000_000u64;
         // UTF8-encoded string "@@$$LIBRA_ATTEST$$@@" without length prefix
         let mut domain_separator = vec![
             0x40, 0x40, 0x24, 0x24, 0x4C, 0x49, 0x42, 0x52, 0x41, 0x5F, 0x41, 0x54, 0x54, 0x45,
@@ -519,7 +590,7 @@ fn dual_attestation_payment() {
         // rotated.
         let ref_id = lcs::to_bytes(&9999u64).unwrap();
         // choose an amount above the dual attestation threshold
-        let payment_amount = 1005;
+        let payment_amount = 1_000_000u64;
         // UTF8-encoded string "@@$$LIBRA_ATTEST$$@@" without length prefix
         let mut domain_separator = vec![
             0x40, 0x40, 0x24, 0x24, 0x4C, 0x49, 0x42, 0x52, 0x41, 0x5F, 0x41, 0x54, 0x54, 0x45,

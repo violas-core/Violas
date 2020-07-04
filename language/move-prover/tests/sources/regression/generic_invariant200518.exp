@@ -1,5 +1,5 @@
 Move prover returns: exiting with boogie verification errors
-error:  A postcondition might not hold on this return path.
+error: post-condition does not hold
 
     ┌── tests/sources/regression/generic_invariant200518.move:63:9 ───
     │
@@ -7,11 +7,12 @@ error:  A postcondition might not hold on this return path.
     │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
     │
     =     at tests/sources/regression/generic_invariant200518.move:24:5: remove_privilege (entry)
+    =     at tests/sources/regression/generic_invariant200518.move:26:57: remove_privilege
+    =         addr = <redacted>,
+    =         $t1 = <redacted>
     =     at tests/sources/regression/generic_invariant200518.move:40:5: root_address (entry)
     =     at tests/sources/regression/generic_invariant200518.move:40:5: root_address (exit)
     =         result = <redacted>
     =     at tests/sources/regression/generic_invariant200518.move:26:9: remove_privilege
-    =         addr = <redacted>,
-    =         $t1 = <redacted>
     =     at tests/sources/regression/generic_invariant200518.move:28:46: remove_privilege
     =     at tests/sources/regression/generic_invariant200518.move:24:5: remove_privilege (exit)

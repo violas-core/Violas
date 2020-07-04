@@ -3,7 +3,7 @@
 
 use crate::{
     manifest::state_snapshot::{StateSnapshotBackup, StateSnapshotChunk},
-    storage::{BackupHandleRef, BackupStorage, FileHandle},
+    storage::{BackupHandleRef, BackupStorage, FileHandle, ShellSafeName},
     ReadRecordBytes,
 };
 use anyhow::{anyhow, Result};
@@ -14,7 +14,8 @@ use libra_types::{
     account_state_blob::AccountStateBlob, ledger_info::LedgerInfoWithSignatures,
     proof::TransactionInfoWithProof, transaction::Version,
 };
-use std::{mem::size_of, sync::Arc};
+use once_cell::sync::Lazy;
+use std::{convert::TryInto, mem::size_of, str::FromStr, sync::Arc};
 use structopt::StructOpt;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio_util::compat::FuturesAsyncReadCompatExt;
@@ -23,7 +24,7 @@ use tokio_util::compat::FuturesAsyncReadCompatExt;
 pub struct BackupServiceClientOpt {
     #[structopt(
         long = "backup-service-port",
-        about = "Backup service port. The service must listen on localhost."
+        help = "Backup service port. The service must listen on localhost."
     )]
     pub port: u16,
 }
@@ -95,7 +96,7 @@ impl BackupServiceClient {
 
 #[derive(StructOpt)]
 pub struct GlobalBackupOpt {
-    #[structopt(long = "max-chunk-size", about = "Maximum chunk file size in bytes.")]
+    #[structopt(long = "max-chunk-size", help = "Maximum chunk file size in bytes.")]
     pub max_chunk_size: usize,
 }
 
@@ -103,7 +104,7 @@ pub struct GlobalBackupOpt {
 pub struct StateSnapshotBackupOpt {
     #[structopt(
         long = "state-version",
-        about = "Version at which a state snapshot to be taken."
+        help = "Version at which a state snapshot to be taken."
     )]
     pub version: Version,
 }
@@ -193,24 +194,30 @@ impl StateSnapshotBackupController {
 }
 
 impl StateSnapshotBackupController {
-    fn backup_name(&self) -> String {
-        format!("state_ver_{}", self.version)
+    fn backup_name(&self) -> ShellSafeName {
+        format!("state_ver_{}", self.version).try_into().unwrap()
     }
 
-    fn manifest_name() -> &'static str {
-        "state.manifest"
+    fn manifest_name() -> &'static ShellSafeName {
+        static NAME: Lazy<ShellSafeName> =
+            Lazy::new(|| ShellSafeName::from_str("state.manifest").unwrap());
+        &NAME
     }
 
-    fn proof_name() -> &'static str {
-        "state.proof"
+    fn proof_name() -> &'static ShellSafeName {
+        static NAME: Lazy<ShellSafeName> =
+            Lazy::new(|| ShellSafeName::from_str("state.proof").unwrap());
+        &NAME
     }
 
-    fn chunk_name(first_idx: usize) -> String {
-        format!("{}-.chunk", first_idx)
+    fn chunk_name(first_idx: usize) -> ShellSafeName {
+        format!("{}-.chunk", first_idx).try_into().unwrap()
     }
 
-    fn chunk_proof_name(first_idx: usize, last_idx: usize) -> String {
+    fn chunk_proof_name(first_idx: usize, last_idx: usize) -> ShellSafeName {
         format!("{}-{}.proof", first_idx, last_idx)
+            .try_into()
+            .unwrap()
     }
 
     fn parse_key(record: &Bytes) -> Result<HashValue> {
@@ -262,9 +269,8 @@ impl StateSnapshotBackupController {
         chunks: Vec<StateSnapshotChunk>,
     ) -> Result<FileHandle> {
         let proof_bytes = self.client.get_state_root_proof(self.version).await?;
-        let (txn_info, ledger_info): (TransactionInfoWithProof, LedgerInfoWithSignatures) =
+        let (txn_info, _): (TransactionInfoWithProof, LedgerInfoWithSignatures) =
             lcs::from_bytes(&proof_bytes)?;
-        assert_eq!(ledger_info.ledger_info().version(), self.version);
 
         let (proof_handle, mut proof_file) = self
             .storage

@@ -162,7 +162,7 @@ impl ValidatorConfig {
             )?);
             let waypoint = db_bootstrapper::bootstrap_db_if_empty::<LibraVM>(&db_rw, &genesis)?
                 .ok_or_else(|| format_err!("Failed to bootstrap empty DB."))?;
-            WaypointConfig::FromConfig { waypoint }
+            WaypointConfig::FromConfig(waypoint)
         } else {
             WaypointConfig::None
         };
@@ -203,7 +203,7 @@ impl ValidatorConfig {
                         .ok_or_else(|| Error::MissingSafetyRulesHost)?
                         .clone(),
                     ca_certificate: None,
-                    token: Token::new_config(
+                    token: Token::FromConfig(
                         self.safety_rules_token
                             .as_ref()
                             .ok_or_else(|| Error::MissingSafetyRulesToken)?

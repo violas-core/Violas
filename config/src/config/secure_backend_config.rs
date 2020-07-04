@@ -1,13 +1,15 @@
 // Copyright (c) The Libra Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use anyhow::{anyhow, Result};
+use crate::config::Error;
+use libra_secure_storage::{
+    GitHubStorage, InMemoryStorage, NamespacedStorage, OnDiskStorage, Storage, VaultStorage,
+};
 use serde::{Deserialize, Serialize};
 use std::{fs::File, io::Read, path::PathBuf};
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[serde(tag = "type")]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", tag = "type")]
 pub enum SecureBackend {
     GitHub(GitHubConfig),
     InMemoryStorage,
@@ -16,20 +18,22 @@ pub enum SecureBackend {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct GitHubConfig {
     /// The owner or account that hosts a repository
-    pub owner: String,
+    pub repository_owner: String,
     /// The repository where storage will mount
     pub repository: String,
     /// The authorization token for accessing the repository
     pub token: Token,
-    /// A namespace is an optional portion of the path to a key stored within OnDiskStorage. For
+    /// A namespace is an optional portion of the path to a key stored within GitHubConfig. For
     /// example, a key, S, without a namespace would be available in S, with a namespace, N, it
     /// would be in N/S.
     pub namespace: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct VaultConfig {
     /// Optional SSL Certificate for the vault host, this is expected to be a full path.
     pub ca_certificate: Option<PathBuf>,
@@ -44,16 +48,17 @@ pub struct VaultConfig {
 }
 
 impl VaultConfig {
-    pub fn ca_certificate(&self) -> Result<String> {
+    pub fn ca_certificate(&self) -> Result<String, Error> {
         let path = self
             .ca_certificate
             .as_ref()
-            .ok_or_else(|| anyhow!("No Certificate path"))?;
+            .ok_or_else(|| Error::Missing("ca_certificate"))?;
         read_file(path)
     }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct OnDiskStorageConfig {
     // Required path for on disk storage
     pub path: PathBuf,
@@ -67,37 +72,30 @@ pub struct OnDiskStorageConfig {
 
 /// Tokens can either be directly within this config or stored somewhere on disk.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[serde(tag = "type")]
 #[serde(rename_all = "snake_case")]
 pub enum Token {
-    FromConfig(TokenFromConfig),
+    FromConfig(String),
     /// This is an absolute path and not relative to data_dir
-    FromDisk(TokenFromDisk),
+    FromDisk(PathBuf),
 }
 
 impl Token {
-    pub fn new_config(token: String) -> Token {
-        Token::FromConfig(TokenFromConfig { token })
-    }
-
-    pub fn new_disk(path: PathBuf) -> Token {
-        Token::FromDisk(TokenFromDisk { path })
-    }
-
-    pub fn read_token(&self) -> Result<String> {
+    pub fn read_token(&self) -> Result<String, Error> {
         match self {
-            Token::FromDisk(from_disk) => read_file(&from_disk.path),
-            Token::FromConfig(from_config) => Ok(from_config.token.clone()),
+            Token::FromDisk(path) => read_file(path),
+            Token::FromConfig(token) => Ok(token.clone()),
         }
     }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct TokenFromConfig {
     token: String,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct TokenFromDisk {
     path: PathBuf,
 }
@@ -126,13 +124,51 @@ impl OnDiskStorageConfig {
     }
 }
 
-fn read_file(path: &PathBuf) -> Result<String> {
-    let mut file = File::open(path)?;
+fn read_file(path: &PathBuf) -> Result<String, Error> {
+    let mut file =
+        File::open(path).map_err(|e| Error::IO(path.to_str().unwrap().to_string(), e))?;
     let mut contents = String::new();
-    file.read_to_string(&mut contents)?;
+    file.read_to_string(&mut contents)
+        .map_err(|e| Error::IO(path.to_str().unwrap().to_string(), e))?;
     Ok(contents)
 }
 
+impl From<&SecureBackend> for Storage {
+    fn from(backend: &SecureBackend) -> Self {
+        match backend {
+            SecureBackend::GitHub(config) => {
+                let storage = GitHubStorage::new(
+                    config.repository_owner.clone(),
+                    config.repository.clone(),
+                    config.token.read_token().expect("Unable to read token"),
+                );
+                if let Some(namespace) = &config.namespace {
+                    Storage::from(NamespacedStorage::new(Box::new(storage), namespace.clone()))
+                } else {
+                    Storage::from(storage)
+                }
+            }
+            SecureBackend::InMemoryStorage => Storage::from(InMemoryStorage::new()),
+            SecureBackend::OnDiskStorage(config) => {
+                let storage = OnDiskStorage::new(config.path());
+                if let Some(namespace) = &config.namespace {
+                    Storage::from(NamespacedStorage::new(Box::new(storage), namespace.clone()))
+                } else {
+                    Storage::from(storage)
+                }
+            }
+            SecureBackend::Vault(config) => Storage::from(VaultStorage::new(
+                config.server.clone(),
+                config.token.read_token().expect("Unable to read token"),
+                config.namespace.clone(),
+                config
+                    .ca_certificate
+                    .as_ref()
+                    .map(|_| config.ca_certificate().unwrap()),
+            )),
+        }
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -150,9 +186,7 @@ mod tests {
                 namespace: None,
                 server: "127.0.0.1:8200".to_string(),
                 ca_certificate: None,
-                token: Token::FromConfig(TokenFromConfig {
-                    token: "test".to_string(),
-                }),
+                token: Token::FromConfig("test".to_string()),
             },
         };
 
@@ -160,8 +194,7 @@ mod tests {
 vault:
     server: "127.0.0.1:8200"
     token:
-        type: "from_config"
-        token: "test"
+        from_config: "test"
         "#;
 
         let de_from_config: Config = serde_yaml::from_str(text_from_config).unwrap();
@@ -177,9 +210,7 @@ vault:
                 namespace: None,
                 server: "127.0.0.1:8200".to_string(),
                 ca_certificate: None,
-                token: Token::FromDisk(TokenFromDisk {
-                    path: PathBuf::from("/token"),
-                }),
+                token: Token::FromDisk(PathBuf::from("/token")),
             },
         };
 
@@ -187,8 +218,7 @@ vault:
 vault:
     server: "127.0.0.1:8200"
     token:
-        type: "from_disk"
-        path: "/token"
+        from_disk: "/token"
         "#;
 
         let de_from_disk: Config = serde_yaml::from_str(text_from_disk).unwrap();
@@ -204,10 +234,10 @@ vault:
         let mut file = File::create(temppath.path()).unwrap();
         file.write_all(b"disk_token").unwrap();
 
-        let disk = Token::new_disk(temppath.path().to_path_buf());
+        let disk = Token::FromDisk(temppath.path().to_path_buf());
         assert_eq!("disk_token", disk.read_token().unwrap());
 
-        let config = Token::new_config("config_token".to_string());
+        let config = Token::FromConfig("config_token".to_string());
         assert_eq!("config_token", config.read_token().unwrap());
     }
 }
