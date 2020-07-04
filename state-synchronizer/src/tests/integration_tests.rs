@@ -9,6 +9,7 @@ use anyhow::{bail, Result};
 use executor_types::ExecutedTrees;
 use futures::executor::block_on;
 use libra_config::{
+    chain_id::ChainId,
     config::{PeerNetworkId, RoleType},
     network_id::NetworkId,
 };
@@ -22,7 +23,7 @@ use libra_types::{
     validator_info::ValidatorInfo, validator_signer::ValidatorSigner,
     validator_verifier::random_validator_verifier, waypoint::Waypoint,
 };
-use network::validator_network::network_builder::{AuthenticationMode, NetworkBuilder};
+use network_builder::builder::{AuthenticationMode, NetworkBuilder};
 use rand::{rngs::StdRng, SeedableRng};
 use std::{
     collections::HashMap,
@@ -94,8 +95,11 @@ impl ExecutorProxyTrait for MockExecutorProxy {
         Ok(self.storage.read().unwrap().get_epoch_changes(epoch))
     }
 
-    fn get_ledger_info(&self, version: u64) -> Result<LedgerInfoWithSignatures> {
-        self.storage.read().unwrap().get_ledger_info(version)
+    fn get_epoch_ending_ledger_info(&self, version: u64) -> Result<LedgerInfoWithSignatures> {
+        self.storage
+            .read()
+            .unwrap()
+            .get_epoch_ending_ledger_info(version)
     }
 
     fn load_on_chain_configs(&mut self) -> Result<()> {
@@ -250,9 +254,10 @@ impl SynchronizerEnv {
         }
         let mut network_builder = NetworkBuilder::new(
             self.runtime.handle().clone(),
+            ChainId::default(),
             self.network_id.clone(),
-            self.peer_ids[new_peer_idx],
             RoleType::Validator,
+            self.peer_ids[new_peer_idx],
             addr,
         );
         network_builder
@@ -264,7 +269,8 @@ impl SynchronizerEnv {
             .add_connectivity_manager()
             .add_gossip_discovery();
 
-        let (sender, events) = crate::network::add_to_network(&mut network_builder);
+        let (sender, events) =
+            network_builder.add_protocol_handler(crate::network::network_endpoint_config());
         let peer_addr = network_builder.build();
 
         let mut config = config_builder::test_config().0;
@@ -344,12 +350,16 @@ impl SynchronizerEnv {
             .highest_local_li()
     }
 
-    // Find LedgerInfo for a given version.
-    fn get_ledger_info(&self, peer_id: usize, version: u64) -> Result<LedgerInfoWithSignatures> {
+    // Find LedgerInfo for a epoch boundary version
+    fn get_epoch_ending_ledger_info(
+        &self,
+        peer_id: usize,
+        version: u64,
+    ) -> Result<LedgerInfoWithSignatures> {
         self.storage_proxies[peer_id]
             .read()
             .unwrap()
-            .get_ledger_info(version)
+            .get_epoch_ending_ledger_info(version)
     }
 
     fn wait_for_version(&self, peer_id: usize, target_version: u64) -> bool {
@@ -536,7 +546,7 @@ fn catch_up_with_waypoints() {
     env.commit(0, 950); // At this point peer 0 is at epoch 10 and version 950
 
     // Create a waypoint based on LedgerInfo of peer 0 at version 700 (epoch 7)
-    let waypoint_li = env.get_ledger_info(0, 700).unwrap();
+    let waypoint_li = env.get_epoch_ending_ledger_info(0, 700).unwrap();
     let waypoint = Waypoint::new_epoch_boundary(waypoint_li.ledger_info()).unwrap();
 
     env.start_next_synchronizer(

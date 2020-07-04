@@ -9,9 +9,9 @@ use crate::{
 use anyhow::{bail, ensure, format_err};
 use libra_crypto::{ed25519::Ed25519Signature, hash::CryptoHash, HashValue};
 use libra_types::{
-    block_info::BlockInfo, block_metadata::BlockMetadata, epoch_state::EpochState,
-    ledger_info::LedgerInfo, transaction::Version, validator_signer::ValidatorSigner,
-    validator_verifier::ValidatorVerifier,
+    account_address::AccountAddress, block_info::BlockInfo, block_metadata::BlockMetadata,
+    epoch_state::EpochState, ledger_info::LedgerInfo, transaction::Version,
+    validator_signer::ValidatorSigner, validator_verifier::ValidatorVerifier,
 };
 use mirai_annotations::debug_checked_verify_eq;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -194,7 +194,7 @@ impl Block {
 
     /// Verifies that the proposal and the QC are correctly signed.
     /// If this is the genesis block, we skip these checks.
-    pub fn validate_signatures(&self, validator: &ValidatorVerifier) -> anyhow::Result<()> {
+    pub fn validate_signature(&self, validator: &ValidatorVerifier) -> anyhow::Result<()> {
         match self.block_data.block_type() {
             BlockType::Genesis => bail!("We should not accept genesis from others"),
             BlockType::NilBlock => self.quorum_cert().verify(validator),
@@ -295,7 +295,7 @@ impl From<&Block> for BlockMetadata {
                 .cloned()
                 .collect(),
             // For nil block, we use 0x0 which is convention for nil address in move.
-            block.author().unwrap_or_default(),
+            block.author().unwrap_or(AccountAddress::ZERO),
         )
     }
 }

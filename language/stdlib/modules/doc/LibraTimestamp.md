@@ -65,7 +65,7 @@
 
 
 <pre><code><b>public</b> <b>fun</b> <a href="#0x1_LibraTimestamp_initialize">initialize</a>(association: &signer) {
-    // Only callable by the <a href="Association.md#0x1_Association">Association</a> address
+    // Operational constraint, only callable by the Association address
     <b>assert</b>(<a href="Signer.md#0x1_Signer_address_of">Signer::address_of</a>(association) == <a href="CoreAddresses.md#0x1_CoreAddresses_ASSOCIATION_ROOT_ADDRESS">CoreAddresses::ASSOCIATION_ROOT_ADDRESS</a>(), 1);
 
     // TODO: Should the initialized value be passed in <b>to</b> genesis?
@@ -255,7 +255,7 @@ Auxiliary function to get the association's Unix time in microseconds.
 
 
 <pre><code><b>define</b> <a href="#0x1_LibraTimestamp_only_root_addr_has_ctm">only_root_addr_has_ctm</a>(): bool {
-    all(domain&lt;address&gt;(), |addr|
+    (forall addr: address:
         exists&lt;<a href="#0x1_LibraTimestamp_CurrentTimeMicroseconds">CurrentTimeMicroseconds</a>&gt;(addr)
             ==&gt; addr == <a href="#0x1_LibraTimestamp_root_address">root_address</a>())
 }
@@ -275,7 +275,7 @@ CurrentTimeMicroseconds, then it should not exist.
 
 <pre><code><b>schema</b> <a href="#0x1_LibraTimestamp_OnlyRootAddressHasTimestamp">OnlyRootAddressHasTimestamp</a> {
     <b>invariant</b> <b>module</b> !<a href="#0x1_LibraTimestamp_root_ctm_initialized">root_ctm_initialized</a>()
-                        ==&gt; all(domain&lt;address&gt;(), |addr| !exists&lt;<a href="#0x1_LibraTimestamp_CurrentTimeMicroseconds">CurrentTimeMicroseconds</a>&gt;(addr));
+                        ==&gt; (forall addr: address: !exists&lt;<a href="#0x1_LibraTimestamp_CurrentTimeMicroseconds">CurrentTimeMicroseconds</a>&gt;(addr));
 }
 </code></pre>
 

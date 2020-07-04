@@ -1,27 +1,58 @@
 // Copyright (c) The Libra Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::type_not_allowed;
+use crate::common::type_not_allowed;
 use libra_types::transaction::{ArgumentABI, ScriptABI, TypeArgumentABI};
 use move_core_types::language_storage::TypeTag;
 
-use std::io::{Result, Write};
+use std::{
+    io::{Result, Write},
+    path::PathBuf,
+};
 
+/// Output transaction builders in Python for the given ABIs.
 pub fn output(out: &mut dyn Write, abis: &[ScriptABI]) -> Result<()> {
-    output_preamble(out)?;
+    output_preamble(out, None, None)?;
     for abi in abis {
         output_builder(out, abi)?;
     }
     Ok(())
 }
 
-fn output_preamble(out: &mut dyn Write) -> Result<()> {
+fn output_with_optional_packages(
+    out: &mut dyn Write,
+    abis: &[ScriptABI],
+    serde_package_name: Option<String>,
+    libra_package_name: Option<String>,
+) -> Result<()> {
+    output_preamble(out, serde_package_name, libra_package_name)?;
+    for abi in abis {
+        output_builder(out, abi)?;
+    }
+    Ok(())
+}
+
+fn quote_from_package(package_name: Option<String>) -> String {
+    match package_name {
+        None => "".to_string(),
+        Some(name) => format!("from {} ", name),
+    }
+}
+
+fn output_preamble(
+    out: &mut dyn Write,
+    serde_package_name: Option<String>,
+    libra_package_name: Option<String>,
+) -> Result<()> {
     writeln!(
         out,
         r#"# pyre-ignore-all-errors
-import libra_types as libra
 import typing
-import serde_types as st"#
+{}import serde_types as st
+{}import libra_types as libra
+"#,
+        quote_from_package(serde_package_name),
+        quote_from_package(libra_package_name),
     )
 }
 
@@ -41,7 +72,9 @@ fn output_builder(out: &mut dyn Write, abi: &ScriptABI) -> Result<()> {
     writeln!(
         out,
         r#"    return libra.Script(
+        # fmt: off
         code={},
+        # fmt: on
         ty_args=[{}],
         args=[{}],
     )"#,
@@ -53,6 +86,7 @@ fn output_builder(out: &mut dyn Write, abi: &ScriptABI) -> Result<()> {
 }
 
 fn quote_doc(doc: &str) -> String {
+    let doc = crate::common::prepare_doc_string(doc);
     let s: Vec<_> = doc.splitn(2, |c| c == '.').collect();
     if s.len() <= 1 || s[1].is_empty() {
         format!("    \"\"\"{}.\"\"\"", s[0])
@@ -82,7 +116,7 @@ fn quote_parameters(args: &[ArgumentABI]) -> Vec<String> {
 
 fn quote_code(code: &[u8]) -> String {
     format!(
-        "bytes([{}])",
+        "[{}]",
         code.iter()
             .map(|x| format!("{}", x))
             .collect::<Vec<_>>()
@@ -114,7 +148,7 @@ fn quote_type(type_tag: &TypeTag) -> String {
         U128 => "st.uint128".into(),
         Address => "libra.AccountAddress".into(),
         Vector(type_tag) => match type_tag.as_ref() {
-            U8 => "bytes".into(),
+            U8 => "typing.Sequence[st.uint8]".into(),
             _ => type_not_allowed(type_tag),
         },
 
@@ -136,5 +170,50 @@ fn make_transaction_argument(type_tag: &TypeTag, name: &str) -> String {
         },
 
         Struct(_) | Signer => type_not_allowed(type_tag),
+    }
+}
+
+pub struct Installer {
+    install_dir: PathBuf,
+    serde_package_name: Option<String>,
+    libra_package_name: Option<String>,
+}
+
+impl Installer {
+    pub fn new(
+        install_dir: PathBuf,
+        serde_package_name: Option<String>,
+        libra_package_name: Option<String>,
+    ) -> Self {
+        Installer {
+            install_dir,
+            serde_package_name,
+            libra_package_name,
+        }
+    }
+
+    fn open_module_init_file(&self, name: &str) -> Result<std::fs::File> {
+        let dir_path = self.install_dir.join(name);
+        std::fs::create_dir_all(&dir_path)?;
+        std::fs::File::create(dir_path.join("__init__.py"))
+    }
+}
+
+impl crate::SourceInstaller for Installer {
+    type Error = Box<dyn std::error::Error>;
+
+    fn install_transaction_builders(
+        &self,
+        name: &str,
+        abis: &[ScriptABI],
+    ) -> std::result::Result<(), Self::Error> {
+        let mut file = self.open_module_init_file(name)?;
+        output_with_optional_packages(
+            &mut file,
+            abis,
+            self.serde_package_name.clone(),
+            self.libra_package_name.clone(),
+        )?;
+        Ok(())
     }
 }

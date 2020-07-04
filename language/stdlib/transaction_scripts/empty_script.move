@@ -1,3 +1,4 @@
 script {
-fun main() { }
+/// Used for testing.
+fun empty_script() { }
 }

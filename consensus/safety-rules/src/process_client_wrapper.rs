@@ -3,14 +3,14 @@
 
 use crate::{test_utils, ConsensusState, Error, SafetyRulesManager, TSafetyRules};
 use consensus_types::{
-    block::Block, block_data::BlockData, quorum_cert::QuorumCert, timeout::Timeout, vote::Vote,
-    vote_proposal::VoteProposal,
+    block::Block, block_data::BlockData, timeout::Timeout, vote::Vote,
+    vote_proposal::MaybeSignedVoteProposal,
 };
 use libra_config::{
     config::{NodeConfig, RemoteService, SafetyRulesService, SecureBackend, WaypointConfig},
     utils,
 };
-use libra_crypto::ed25519::Ed25519Signature;
+use libra_crypto::ed25519::{Ed25519PrivateKey, Ed25519Signature};
 use libra_types::{epoch_change::EpochChangeProof, validator_signer::ValidatorSigner};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
@@ -21,10 +21,11 @@ pub struct ProcessClientWrapper {
     signer: ValidatorSigner,
     _safety_rules_manager: SafetyRulesManager,
     safety_rules: Box<dyn TSafetyRules>,
+    execution_private_key: Option<Ed25519PrivateKey>,
 }
 
 impl ProcessClientWrapper {
-    pub fn new(backend: SecureBackend) -> Self {
+    pub fn new(backend: SecureBackend, verify_vote_proposal_signature: bool) -> Self {
         let server_port = utils::get_available_port();
         let server_address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), server_port);
 
@@ -32,13 +33,7 @@ impl ProcessClientWrapper {
         let mut config = NodeConfig::random();
 
         let mut test_config = config.test.as_ref().unwrap().clone();
-        let author = config
-            .validator_network
-            .as_ref()
-            .unwrap()
-            .identity
-            .peer_id_from_config()
-            .unwrap();
+        let author = config.validator_network.as_ref().unwrap().peer_id();
         let private_key = test_config
             .consensus_keypair
             .as_mut()
@@ -46,10 +41,12 @@ impl ProcessClientWrapper {
             .take_private()
             .unwrap();
         let signer = ValidatorSigner::new(author, private_key);
-        let waypoint = test_utils::validator_signers_to_waypoints(&[&signer]);
-        config.base.waypoint = WaypointConfig::FromConfig { waypoint };
+        let waypoint = test_utils::validator_signers_to_waypoint(&[&signer]);
+        config.base.waypoint = WaypointConfig::FromConfig(waypoint);
 
         config.consensus.safety_rules.backend = backend;
+        config.consensus.safety_rules.verify_vote_proposal_signature =
+            verify_vote_proposal_signature;
         config.consensus.safety_rules.service = SafetyRulesService::SpawnedProcess(remote_service);
 
         let safety_rules_manager = SafetyRulesManager::new(&mut config);
@@ -59,11 +56,20 @@ impl ProcessClientWrapper {
             signer,
             _safety_rules_manager: safety_rules_manager,
             safety_rules,
+            execution_private_key: test_config
+                .execution_keypair
+                .as_mut()
+                .unwrap()
+                .take_private(),
         }
     }
 
     pub fn signer(&self) -> ValidatorSigner {
         self.signer.clone()
+    }
+
+    pub fn execution_private_key(&mut self) -> Ed25519PrivateKey {
+        self.execution_private_key.take().expect("must exist")
     }
 }
 
@@ -76,11 +82,10 @@ impl TSafetyRules for ProcessClientWrapper {
         self.safety_rules.initialize(proof)
     }
 
-    fn update(&mut self, qc: &QuorumCert) -> Result<(), Error> {
-        self.safety_rules.update(qc)
-    }
-
-    fn construct_and_sign_vote(&mut self, vote_proposal: &VoteProposal) -> Result<Vote, Error> {
+    fn construct_and_sign_vote(
+        &mut self,
+        vote_proposal: &MaybeSignedVoteProposal,
+    ) -> Result<Vote, Error> {
         self.safety_rules.construct_and_sign_vote(vote_proposal)
     }
 

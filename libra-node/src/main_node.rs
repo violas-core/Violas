@@ -8,27 +8,25 @@ use executor::{db_bootstrapper::bootstrap_db_if_empty, Executor};
 use executor_types::ChunkExecutor;
 use futures::{channel::mpsc::channel, executor::block_on};
 use libra_config::{
-    config::{DiscoveryMethod, NetworkConfig, NodeConfig, RoleType},
+    config::{NetworkConfig, NodeConfig, RoleType},
     utils::get_genesis_txn,
 };
 use libra_json_rpc::bootstrap_from_config as bootstrap_rpc;
 use libra_logger::prelude::*;
 use libra_mempool::gen_mempool_reconfig_subscription;
 use libra_metrics::metric_server;
-use libra_secure_storage::config;
-use libra_types::waypoint::Waypoint;
 use libra_vm::LibraVM;
 use libradb::LibraDB;
-use network::validator_network::network_builder::{AuthenticationMode, NetworkBuilder};
 use network_simple_onchain_discovery::{
     gen_simple_discovery_reconfig_subscription, ConfigurationChangeListener,
 };
-use onchain_discovery::builder::OnchainDiscoveryBuilder;
 use state_synchronizer::StateSynchronizer;
-use std::{boxed::Box, collections::HashMap, net::ToSocketAddrs, sync::Arc, thread, time::Instant};
-use storage_interface::{DbReader, DbReaderWriter};
+use std::{boxed::Box, net::ToSocketAddrs, sync::Arc, thread, time::Instant};
+use storage_interface::DbReaderWriter;
 use storage_service::start_storage_service_with_db;
-use tokio::runtime::{Builder, Runtime};
+use tokio::runtime::Runtime;
+
+use debug_interface::libra_trace;
 
 const AC_SMP_CHANNEL_BUFFER_SIZE: usize = 1_024;
 const INTRA_NODE_CHANNEL_BUFFER_SIZE: usize = 1;
@@ -57,103 +55,13 @@ fn setup_debug_interface(config: &NodeConfig) -> NodeDebugService {
     .next()
     .unwrap();
 
+    libra_trace::set_libra_trace(&config.debug_interface.libra_trace.sampling)
+        .expect("Failed to set libra trace sampling rate.");
+
     NodeDebugService::new(addr)
 }
 
-// TODO(abhayb): Move to network crate (similar to consensus).
-pub fn setup_network(
-    config: &mut NetworkConfig,
-    role: RoleType,
-    libra_db: Arc<dyn DbReader>,
-    waypoint: Waypoint,
-) -> (Runtime, NetworkBuilder) {
-    let runtime = Builder::new()
-        .thread_name("network-")
-        .threaded_scheduler()
-        .enable_all()
-        .build()
-        .expect("Failed to start runtime. Won't be able to start networking.");
-
-    let identity_key = config::identity_key(config);
-    let peer_id = config::peer_id(config);
-
-    let mut network_builder = NetworkBuilder::new(
-        runtime.handle().clone(),
-        config.network_id.clone(),
-        peer_id,
-        role,
-        config.listen_address.clone(),
-    );
-    network_builder.add_connection_monitoring();
-
-    // Sanity check seed peer addresses.
-    config
-        .verify_seed_peer_addrs()
-        .expect("Seed peer addresses must be well-formed");
-    let seed_peers = config.seed_peers.clone();
-
-    if config.mutual_authentication {
-        let network_peers = config.network_peers.clone();
-        let trusted_peers = if role == RoleType::Validator {
-            // for validators, trusted_peers is empty will be populated from consensus
-            HashMap::new()
-        } else {
-            network_peers
-        };
-
-        info!(
-            "network setup: role: {}, seed_peers: {:?}, trusted_peers: {:?}",
-            role, seed_peers, trusted_peers,
-        );
-
-        network_builder
-            .authentication_mode(AuthenticationMode::Mutual(identity_key))
-            .trusted_peers(trusted_peers)
-            .seed_peers(seed_peers)
-            .connectivity_check_interval_ms(config.connectivity_check_interval_ms)
-            .add_connectivity_manager();
-    } else {
-        // Enforce the outgoing connection (dialer) verifies the identity of the listener (server)
-        network_builder.authentication_mode(AuthenticationMode::ServerOnly(identity_key));
-        if !seed_peers.is_empty() {
-            network_builder
-                .seed_peers(seed_peers)
-                .add_connectivity_manager();
-        }
-    }
-
-    match &config.discovery_method {
-        DiscoveryMethod::Gossip(gossip_config) => {
-            network_builder
-                .advertised_address(gossip_config.advertised_address.clone())
-                .discovery_interval_ms(gossip_config.discovery_interval_ms)
-                .add_gossip_discovery();
-        }
-        DiscoveryMethod::Onchain => {
-            let (network_tx, discovery_events) =
-                onchain_discovery::network_interface::add_to_network(&mut network_builder);
-            let onchain_discovery_builder = OnchainDiscoveryBuilder::build(
-                network_builder
-                    .conn_mgr_reqs_tx()
-                    .expect("ConnectivityManager must be installed"),
-                network_tx,
-                discovery_events,
-                network_builder.network_context().clone(),
-                libra_db,
-                waypoint,
-                runtime.handle(),
-            );
-            onchain_discovery_builder.start(runtime.handle());
-        }
-        DiscoveryMethod::None => {}
-    }
-
-    (runtime, network_builder)
-}
-
 pub fn setup_environment(node_config: &mut NodeConfig) -> LibraHandle {
-    crash_handler::setup_panic_handler();
-
     // Some of our code uses the rayon global thread pool. Name the rayon threads so it doesn't
     // cause confusion, otherwise the threads would have their parent's name.
     rayon::ThreadPoolBuilder::new()
@@ -205,7 +113,7 @@ pub fn setup_environment(node_config: &mut NodeConfig) -> LibraHandle {
         gen_consensus_reconfig_subscription();
     reconfig_subscriptions.push(consensus_reconfig_subscription);
 
-    let waypoint = config::waypoint(&node_config.base.waypoint);
+    let waypoint = node_config.base.waypoint.waypoint();
 
     // Gather all network configs into a single vector.
     // TODO:  consider explicitly encoding the role in the NetworkConfig
@@ -221,20 +129,26 @@ pub fn setup_environment(node_config: &mut NodeConfig) -> LibraHandle {
     // Instantiate every network and collect the requisite endpoints for state_sync, mempool, and consensus.
     for (role, network_config) in network_configs {
         // Perform common instantiation steps
-        let (runtime, mut network_builder) =
-            setup_network(network_config, role, Arc::clone(&db_rw.reader), waypoint);
+        let (runtime, mut network_builder) = network_builder::builder::setup_network(
+            &node_config.base.chain_id,
+            role,
+            network_config,
+            Arc::clone(&db_rw.reader),
+            waypoint,
+        );
         let peer_id = network_builder.peer_id();
 
         // Create the endpoints to connect the Network to StateSynchronizer.
-        let (state_sync_sender, state_sync_events) =
-            state_synchronizer::network::add_to_network(&mut network_builder);
+        let (state_sync_sender, state_sync_events) = network_builder
+            .add_protocol_handler(state_synchronizer::network::network_endpoint_config());
         state_sync_network_handles.push((peer_id, state_sync_sender, state_sync_events));
 
-        // Create the endpoints to connect the network to MemPool.
-        let (mempool_sender, mempool_events) = libra_mempool::network::add_to_network(
-            &mut network_builder,
-            node_config.mempool.max_broadcasts_per_peer,
-        );
+        // Create the endpoints t connect the Network to MemPool.
+        let (mempool_sender, mempool_events) =
+            network_builder.add_protocol_handler(libra_mempool::network::network_endpoint_config(
+                // TODO:  Make this configuration option more clear.
+                node_config.mempool.max_broadcasts_per_peer,
+            ));
         mempool_network_handles.push((peer_id, mempool_sender, mempool_events));
 
         match role {
@@ -259,9 +173,10 @@ pub fn setup_environment(node_config: &mut NodeConfig) -> LibraHandle {
                         .spawn(network_config_listener.start(simple_discovery_reconfig_rx));
                 };
 
-                consensus_network_handles = Some(consensus::network_interface::add_to_network(
-                    &mut network_builder,
-                ));
+                consensus_network_handles =
+                    Some(network_builder.add_protocol_handler(
+                        consensus::network_interface::network_endpoint_config(),
+                    ));
             }
             // Currently no FullNode network specific steps.
             RoleType::FullNode => (),

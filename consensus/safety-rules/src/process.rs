@@ -6,7 +6,6 @@ use crate::{
     remote_service::{self, RemoteService},
     safety_rules_manager,
 };
-use consensus_types::common::Author;
 use libra_config::config::{NodeConfig, SafetyRulesService};
 
 use std::net::SocketAddr;
@@ -17,8 +16,10 @@ pub struct Process {
 
 impl Process {
     pub fn new(mut config: NodeConfig) -> Self {
-        let (author, storage) = safety_rules_manager::extract_service_inputs(&mut config);
+        let storage = safety_rules_manager::storage(&mut config);
 
+        let verify_vote_proposal_signature =
+            config.consensus.safety_rules.verify_vote_proposal_signature;
         let service = &config.consensus.safety_rules.service;
         let service = match &service {
             SafetyRulesService::Process(service) => service,
@@ -29,23 +30,27 @@ impl Process {
 
         Self {
             data: Some(ProcessData {
-                author,
                 server_addr,
                 storage,
+                verify_vote_proposal_signature,
             }),
         }
     }
 
     pub fn start(&mut self) {
         let data = self.data.take().expect("Unable to retrieve ProcessData");
-        remote_service::execute(data.author, data.storage, data.server_addr);
+        remote_service::execute(
+            data.storage,
+            data.server_addr,
+            data.verify_vote_proposal_signature,
+        );
     }
 }
 
 struct ProcessData {
-    author: Author,
     server_addr: SocketAddr,
     storage: PersistentSafetyStorage,
+    verify_vote_proposal_signature: bool,
 }
 
 pub struct ProcessService {

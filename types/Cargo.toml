@@ -11,7 +11,7 @@ edition = "2018"
 
 [dependencies]
 anyhow = "1.0.31"
-bytes = "0.5.4"
+bytes = "0.5.5"
 chrono = { version = "0.4.11", default-features = false, features = ["clock"] }
 hex = "0.4.2"
 itertools = { version = "0.9.0", default-features = false }
@@ -21,9 +21,9 @@ proptest = { version = "0.10.0", default-features = false, optional = true }
 proptest-derive = { version = "0.2.0", default-features = false, optional = true }
 radix_trie = { version = "0.1.6", default-features = false }
 rand = "0.7.3"
-serde = { version = "1.0.112", default-features = false }
+serde = { version = "1.0.114", default-features = false }
 serde_bytes = "0.11.5"
-thiserror = "1.0.19"
+thiserror = "1.0.20"
 tiny-keccak = { version = "2.0.2", default-features = false, features = ["sha3"] }
 
 lcs = { path = "../common/lcs", version = "0.1.0", package = "libra-canonical-serialization" }
