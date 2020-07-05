@@ -26,6 +26,7 @@ module LibraAccount {
     use 0x1::Roles::{Self, Capability, AssociationRootRole, ParentVASPRole, TreasuryComplianceRole};
     use 0x1::SlidingNonce::CreateSlidingNonce;
     use 0x1::LibraConfig::CreateOnChainConfig;
+    use 0x1::FixedPoint32;
 
     resource struct AccountFreezing {}
     resource struct AccountUnfreezing {}
@@ -557,22 +558,52 @@ module LibraAccount {
         SlidingNonce::publish_nonce_resource(sliding_nonce_creation_capability, &new_account);
         Event::publish_generator(&new_account);
         make_account(new_account, auth_key_prefix)
-    }
+    }   
 
-    // add currency mint and burn capbility to teasury compliance account
-    public fun add_currency_capability_to_treasury_compliance_account<Token>(
+    // register a currency and assign the minting and burning capability to treasury compliance account
+    public fun register_currency_with_tc_account<CoinType>(
         association : &signer,
-        mint_cap: Libra::MintCapability<Token>,
-        burn_cap: Libra::BurnCapability<Token>) {
+        exchange_rate_denom: u64,
+        exchange_rate_num: u64,
+        is_synthetic: bool,
+        scaling_factor: u64,
+        fractional_part: u64,
+        currency_code: vector<u8>, ) {
+        
+        assert(
+            Signer::address_of(association) == CoreAddresses::CURRENCY_INFO_ADDRESS(),
+            8
+        );
 
-        Association::assert_is_root(association);
+        // exchange rate to LBR
+        let rate = FixedPoint32::create_from_rational(
+            exchange_rate_denom,
+            exchange_rate_num,
+        );
+
+        let tc_account = create_signer(CoreAddresses::TREASURY_COMPLIANCE_ADDRESS());          
+        let currency_registration_capability = Roles::extract_privilege_to_capability<Libra::RegisterNewCurrency>(&tc_account);
+        let tc_capability = Roles::extract_privilege_to_capability<TreasuryComplianceRole>(&tc_account);
+
+        let (mint_cap, burn_cap) = Libra::register_currency<CoinType>(
+            association,
+            &currency_registration_capability,
+            rate,
+            is_synthetic, 
+            scaling_factor,
+            fractional_part,
+            currency_code,
+        );
+
+        Libra::publish_mint_capability<CoinType>(&tc_account, mint_cap, &tc_capability);
+        Libra::publish_burn_capability<CoinType>(&tc_account, burn_cap, &tc_capability);
         
-        let tc_account = create_signer(CoreAddresses::TREASURY_COMPLIANCE_ADDRESS());        
-        Libra::publish_mint_capability<Token>(&tc_account, mint_cap);
-        Libra::publish_burn_capability<Token>(&tc_account, burn_cap);
-        
+        Roles::restore_capability_to_privilege(&tc_account, currency_registration_capability);
+        Roles::restore_capability_to_privilege(&tc_account, tc_capability);
+
         destroy_signer(tc_account);
     }
+
 
     ///////////////////////////////////////////////////////////////////////////
     // Designated Dealer API

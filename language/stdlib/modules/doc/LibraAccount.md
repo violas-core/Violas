@@ -44,6 +44,7 @@
 -  [Function `create_root_association_account`](#0x1_LibraAccount_create_root_association_account)
 -  [Function `create_treasury_compliance_account`](#0x1_LibraAccount_create_treasury_compliance_account)
 -  [Function `add_currency_capability_to_treasury_compliance_account`](#0x1_LibraAccount_add_currency_capability_to_treasury_compliance_account)
+-  [Function `register_currency_with_tc_account`](#0x1_LibraAccount_register_currency_with_tc_account)
 -  [Function `create_designated_dealer`](#0x1_LibraAccount_create_designated_dealer)
 -  [Function `create_parent_vasp_account`](#0x1_LibraAccount_create_parent_vasp_account)
 -  [Function `create_child_vasp_account`](#0x1_LibraAccount_create_child_vasp_account)
@@ -1480,11 +1481,80 @@ Create a treasury/compliance account at
     mint_cap: <a href="Libra.md#0x1_Libra_MintCapability">Libra::MintCapability</a>&lt;Token&gt;,
     burn_cap: <a href="Libra.md#0x1_Libra_BurnCapability">Libra::BurnCapability</a>&lt;Token&gt;) {
 
-    <a href="Association.md#0x1_Association_assert_is_root">Association::assert_is_root</a>(association);
+    <b>assert</b>(
+        <a href="Signer.md#0x1_Signer_address_of">Signer::address_of</a>(association) == <a href="CoreAddresses.md#0x1_CoreAddresses_CURRENCY_INFO_ADDRESS">CoreAddresses::CURRENCY_INFO_ADDRESS</a>(),
+        8
+    );
 
     <b>let</b> tc_account = <a href="#0x1_LibraAccount_create_signer">create_signer</a>(<a href="CoreAddresses.md#0x1_CoreAddresses_TREASURY_COMPLIANCE_ADDRESS">CoreAddresses::TREASURY_COMPLIANCE_ADDRESS</a>());
-    <a href="Libra.md#0x1_Libra_publish_mint_capability">Libra::publish_mint_capability</a>&lt;Token&gt;(&tc_account, mint_cap);
-    <a href="Libra.md#0x1_Libra_publish_burn_capability">Libra::publish_burn_capability</a>&lt;Token&gt;(&tc_account, burn_cap);
+    <b>let</b> tc_capability = <a href="Roles.md#0x1_Roles_extract_privilege_to_capability">Roles::extract_privilege_to_capability</a>&lt;TreasuryComplianceRole&gt;(&tc_account);
+
+    <a href="Libra.md#0x1_Libra_publish_mint_capability">Libra::publish_mint_capability</a>&lt;Token&gt;(&tc_account, mint_cap, &tc_capability);
+    <a href="Libra.md#0x1_Libra_publish_burn_capability">Libra::publish_burn_capability</a>&lt;Token&gt;(&tc_account, burn_cap, &tc_capability);
+
+    <a href="Roles.md#0x1_Roles_restore_capability_to_privilege">Roles::restore_capability_to_privilege</a>(&tc_account, tc_capability);
+    <a href="#0x1_LibraAccount_destroy_signer">destroy_signer</a>(tc_account);
+}
+</code></pre>
+
+
+
+</details>
+
+<a name="0x1_LibraAccount_register_currency_with_tc_account"></a>
+
+## Function `register_currency_with_tc_account`
+
+
+
+<pre><code><b>public</b> <b>fun</b> <a href="#0x1_LibraAccount_register_currency_with_tc_account">register_currency_with_tc_account</a>&lt;CoinType&gt;(association: &signer, exchange_rate_denom: u64, exchange_rate_num: u64, is_synthetic: bool, scaling_factor: u64, fractional_part: u64, currency_code: vector&lt;u8&gt;)
+</code></pre>
+
+
+
+<details>
+<summary>Implementation</summary>
+
+
+<pre><code><b>public</b> <b>fun</b> <a href="#0x1_LibraAccount_register_currency_with_tc_account">register_currency_with_tc_account</a>&lt;CoinType&gt;(
+    association : &signer,
+    exchange_rate_denom: u64,
+    exchange_rate_num: u64,
+    is_synthetic: bool,
+    scaling_factor: u64,
+    fractional_part: u64,
+    currency_code: vector&lt;u8&gt;, ) {
+
+    <b>assert</b>(
+        <a href="Signer.md#0x1_Signer_address_of">Signer::address_of</a>(association) == <a href="CoreAddresses.md#0x1_CoreAddresses_CURRENCY_INFO_ADDRESS">CoreAddresses::CURRENCY_INFO_ADDRESS</a>(),
+        8
+    );
+
+    // exchange rate <b>to</b> <a href="LBR.md#0x1_LBR">LBR</a>
+    <b>let</b> rate = <a href="FixedPoint32.md#0x1_FixedPoint32_create_from_rational">FixedPoint32::create_from_rational</a>(
+        exchange_rate_denom,
+        exchange_rate_num,
+    );
+
+    <b>let</b> tc_account = <a href="#0x1_LibraAccount_create_signer">create_signer</a>(<a href="CoreAddresses.md#0x1_CoreAddresses_TREASURY_COMPLIANCE_ADDRESS">CoreAddresses::TREASURY_COMPLIANCE_ADDRESS</a>());
+    <b>let</b> currency_registration_capability = <a href="Roles.md#0x1_Roles_extract_privilege_to_capability">Roles::extract_privilege_to_capability</a>&lt;<a href="Libra.md#0x1_Libra_RegisterNewCurrency">Libra::RegisterNewCurrency</a>&gt;(&tc_account);
+    <b>let</b> tc_capability = <a href="Roles.md#0x1_Roles_extract_privilege_to_capability">Roles::extract_privilege_to_capability</a>&lt;TreasuryComplianceRole&gt;(&tc_account);
+
+    <b>let</b> (mint_cap, burn_cap) = <a href="Libra.md#0x1_Libra_register_currency">Libra::register_currency</a>&lt;CoinType&gt;(
+        association,
+        &currency_registration_capability,
+        rate,
+        is_synthetic,
+        scaling_factor,
+        fractional_part,
+        currency_code,
+    );
+
+    <a href="Libra.md#0x1_Libra_publish_mint_capability">Libra::publish_mint_capability</a>&lt;CoinType&gt;(&tc_account, mint_cap, &tc_capability);
+    <a href="Libra.md#0x1_Libra_publish_burn_capability">Libra::publish_burn_capability</a>&lt;CoinType&gt;(&tc_account, burn_cap, &tc_capability);
+
+    <a href="Roles.md#0x1_Roles_restore_capability_to_privilege">Roles::restore_capability_to_privilege</a>(&tc_account, currency_registration_capability);
+    <a href="Roles.md#0x1_Roles_restore_capability_to_privilege">Roles::restore_capability_to_privilege</a>(&tc_account, tc_capability);
 
     <a href="#0x1_LibraAccount_destroy_signer">destroy_signer</a>(tc_account);
 }
