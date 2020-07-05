@@ -43,7 +43,6 @@
 -  [Function `create_config_account`](#0x1_LibraAccount_create_config_account)
 -  [Function `create_root_association_account`](#0x1_LibraAccount_create_root_association_account)
 -  [Function `create_treasury_compliance_account`](#0x1_LibraAccount_create_treasury_compliance_account)
--  [Function `add_currency_capability_to_treasury_compliance_account`](#0x1_LibraAccount_add_currency_capability_to_treasury_compliance_account)
 -  [Function `register_currency_with_tc_account`](#0x1_LibraAccount_register_currency_with_tc_account)
 -  [Function `create_designated_dealer`](#0x1_LibraAccount_create_designated_dealer)
 -  [Function `create_parent_vasp_account`](#0x1_LibraAccount_create_parent_vasp_account)
@@ -1454,46 +1453,6 @@ Create a treasury/compliance account at
     <a href="SlidingNonce.md#0x1_SlidingNonce_publish_nonce_resource">SlidingNonce::publish_nonce_resource</a>(sliding_nonce_creation_capability, &new_account);
     <a href="Event.md#0x1_Event_publish_generator">Event::publish_generator</a>(&new_account);
     <a href="#0x1_LibraAccount_make_account">make_account</a>(new_account, auth_key_prefix)
-}
-</code></pre>
-
-
-
-</details>
-
-<a name="0x1_LibraAccount_add_currency_capability_to_treasury_compliance_account"></a>
-
-## Function `add_currency_capability_to_treasury_compliance_account`
-
-
-
-<pre><code><b>public</b> <b>fun</b> <a href="#0x1_LibraAccount_add_currency_capability_to_treasury_compliance_account">add_currency_capability_to_treasury_compliance_account</a>&lt;Token&gt;(association: &signer, mint_cap: <a href="Libra.md#0x1_Libra_MintCapability">Libra::MintCapability</a>&lt;Token&gt;, burn_cap: <a href="Libra.md#0x1_Libra_BurnCapability">Libra::BurnCapability</a>&lt;Token&gt;)
-</code></pre>
-
-
-
-<details>
-<summary>Implementation</summary>
-
-
-<pre><code><b>public</b> <b>fun</b> <a href="#0x1_LibraAccount_add_currency_capability_to_treasury_compliance_account">add_currency_capability_to_treasury_compliance_account</a>&lt;Token&gt;(
-    association : &signer,
-    mint_cap: <a href="Libra.md#0x1_Libra_MintCapability">Libra::MintCapability</a>&lt;Token&gt;,
-    burn_cap: <a href="Libra.md#0x1_Libra_BurnCapability">Libra::BurnCapability</a>&lt;Token&gt;) {
-
-    <b>assert</b>(
-        <a href="Signer.md#0x1_Signer_address_of">Signer::address_of</a>(association) == <a href="CoreAddresses.md#0x1_CoreAddresses_CURRENCY_INFO_ADDRESS">CoreAddresses::CURRENCY_INFO_ADDRESS</a>(),
-        8
-    );
-
-    <b>let</b> tc_account = <a href="#0x1_LibraAccount_create_signer">create_signer</a>(<a href="CoreAddresses.md#0x1_CoreAddresses_TREASURY_COMPLIANCE_ADDRESS">CoreAddresses::TREASURY_COMPLIANCE_ADDRESS</a>());
-    <b>let</b> tc_capability = <a href="Roles.md#0x1_Roles_extract_privilege_to_capability">Roles::extract_privilege_to_capability</a>&lt;TreasuryComplianceRole&gt;(&tc_account);
-
-    <a href="Libra.md#0x1_Libra_publish_mint_capability">Libra::publish_mint_capability</a>&lt;Token&gt;(&tc_account, mint_cap, &tc_capability);
-    <a href="Libra.md#0x1_Libra_publish_burn_capability">Libra::publish_burn_capability</a>&lt;Token&gt;(&tc_account, burn_cap, &tc_capability);
-
-    <a href="Roles.md#0x1_Roles_restore_capability_to_privilege">Roles::restore_capability_to_privilege</a>(&tc_account, tc_capability);
-    <a href="#0x1_LibraAccount_destroy_signer">destroy_signer</a>(tc_account);
 }
 </code></pre>
 

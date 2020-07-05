@@ -559,7 +559,7 @@ module LibraAccount {
         Event::publish_generator(&new_account);
         make_account(new_account, auth_key_prefix)
     }   
-
+    
     // register a currency and assign the minting and burning capability to treasury compliance account
     public fun register_currency_with_tc_account<CoinType>(
         association : &signer,
