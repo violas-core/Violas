@@ -85,4 +85,12 @@ impl CurrencyInfoResource {
     pub fn try_from_bytes(bytes: &[u8]) -> Result<Self> {
         lcs::from_bytes(bytes).map_err(Into::into)
     }
+
+    pub fn total_value(&self) -> u128 {
+        self.total_value
+    }
+
+    pub fn preburn_value(&self) -> u64 {
+        self.preburn_value
+    }
 }
