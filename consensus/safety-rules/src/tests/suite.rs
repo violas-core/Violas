@@ -3,11 +3,8 @@
 
 use crate::{test_utils, Error, SafetyRules, TSafetyRules};
 use consensus_types::{
-    block::{block_test_utils::random_payload, Block},
-    common::Round,
-    quorum_cert::QuorumCert,
-    timeout::Timeout,
-    vote_proposal::MaybeSignedVoteProposal,
+    block::block_test_utils::random_payload, common::Round, quorum_cert::QuorumCert,
+    timeout::Timeout, vote_proposal::MaybeSignedVoteProposal,
 };
 use libra_crypto::{
     ed25519::Ed25519PrivateKey,
@@ -16,29 +13,11 @@ use libra_crypto::{
 use libra_global_constants::CONSENSUS_KEY;
 use libra_secure_storage::CryptoStorage;
 use libra_types::{
-    epoch_change::EpochChangeProof,
-    epoch_state::EpochState,
-    ledger_info::{LedgerInfo, LedgerInfoWithSignatures},
-    on_chain_config::ValidatorSet,
-    validator_info::ValidatorInfo,
-    validator_signer::ValidatorSigner,
+    epoch_state::EpochState, validator_signer::ValidatorSigner,
     validator_verifier::ValidatorVerifier,
 };
-use std::collections::BTreeMap;
 
 type Proof = test_utils::Proof;
-
-fn make_genesis(signer: &ValidatorSigner) -> (EpochChangeProof, QuorumCert) {
-    let validator_info =
-        ValidatorInfo::new_with_test_network_keys(signer.author(), signer.public_key(), 1);
-    let validator_set = ValidatorSet::new(vec![validator_info]);
-    let li = LedgerInfo::mock_genesis(Some(validator_set));
-    let block = Block::make_genesis_block_from_ledger_info(&li);
-    let qc = QuorumCert::certificate_for_genesis_from_ledger_info(&li, block.id());
-    let lis = LedgerInfoWithSignatures::new(li, BTreeMap::new());
-    let proof = EpochChangeProof::new(vec![lis], false);
-    (proof, qc)
-}
 
 fn make_proposal_with_qc_and_proof(
     round: Round,
@@ -60,35 +39,35 @@ fn make_proposal_with_parent(
     test_utils::make_proposal_with_parent(vec![], round, parent, committed, signer, exec_key)
 }
 
-type TestInfo = (
-    Box<dyn TSafetyRules>,
-    ValidatorSigner,
-    Option<Ed25519PrivateKey>,
-);
+pub type Callback = Box<
+    dyn Fn() -> (
+        Box<dyn TSafetyRules + Send + Sync>,
+        ValidatorSigner,
+        Option<Ed25519PrivateKey>,
+    ),
+>;
 
-type Callback = fn(bool) -> TestInfo;
-
-pub fn run_test_suite(func: Callback, verify_vote_proposal_signature: bool) {
-    test_bad_execution_output(func(verify_vote_proposal_signature));
-    test_commit_rule_consecutive_rounds(func(verify_vote_proposal_signature));
-    test_end_to_end(func(verify_vote_proposal_signature));
-    test_initialize(func(verify_vote_proposal_signature));
-    test_preferred_block_rule(func(verify_vote_proposal_signature));
-    test_sign_timeout(func(verify_vote_proposal_signature));
-    test_voting(func(verify_vote_proposal_signature));
-    test_voting_potential_commit_id(func(verify_vote_proposal_signature));
-    test_voting_bad_epoch(func(verify_vote_proposal_signature));
-    test_sign_old_proposal(func(verify_vote_proposal_signature));
-    test_sign_proposal_with_bad_signer(func(verify_vote_proposal_signature));
-    test_sign_proposal_with_invalid_qc(func(verify_vote_proposal_signature));
-    test_sign_proposal_with_early_preferred_round(func(verify_vote_proposal_signature));
-    test_uninitialized_signer(func(verify_vote_proposal_signature));
-    test_reconcile_key(func(verify_vote_proposal_signature));
-    test_validator_not_in_set(func(verify_vote_proposal_signature));
-    test_key_not_in_store(func(verify_vote_proposal_signature));
+pub fn run_test_suite(safety_rules: &Callback) {
+    test_bad_execution_output(safety_rules);
+    test_commit_rule_consecutive_rounds(safety_rules);
+    test_end_to_end(safety_rules);
+    test_initialize(safety_rules);
+    test_preferred_block_rule(safety_rules);
+    test_sign_timeout(safety_rules);
+    test_voting(safety_rules);
+    test_voting_potential_commit_id(safety_rules);
+    test_voting_bad_epoch(safety_rules);
+    test_sign_old_proposal(safety_rules);
+    test_sign_proposal_with_bad_signer(safety_rules);
+    test_sign_proposal_with_invalid_qc(safety_rules);
+    test_sign_proposal_with_early_preferred_round(safety_rules);
+    test_uninitialized_signer(safety_rules);
+    test_reconcile_key(safety_rules);
+    test_validator_not_in_set(safety_rules);
+    test_key_not_in_store(safety_rules);
 }
 
-fn test_bad_execution_output(test_info: TestInfo) {
+fn test_bad_execution_output(safety_rules: &Callback) {
     // build a tree of the following form:
     //                 _____
     //                /     \
@@ -96,9 +75,9 @@ fn test_bad_execution_output(test_info: TestInfo) {
     //
     // evil_a3 attempts to append to a1 but fails append only check
     // a3 works as it properly extends a2
-    let (mut safety_rules, signer, key) = test_info;
+    let (mut safety_rules, signer, key) = safety_rules();
 
-    let (proof, genesis_qc) = make_genesis(&signer);
+    let (proof, genesis_qc) = test_utils::make_genesis(&signer);
     let round = genesis_qc.certified_block().round();
 
     let a1 = test_utils::make_proposal_with_qc(round + 1, genesis_qc, &signer, key.as_ref());
@@ -137,7 +116,7 @@ fn test_bad_execution_output(test_info: TestInfo) {
     assert!(a3_block.is_ok());
 }
 
-fn test_commit_rule_consecutive_rounds(test_info: TestInfo) {
+fn test_commit_rule_consecutive_rounds(safety_rules: &Callback) {
     // build a tree of the following form:
     //             ___________
     //            /           \
@@ -146,9 +125,9 @@ fn test_commit_rule_consecutive_rounds(test_info: TestInfo) {
     //
     // a1 cannot be committed after a3 gathers QC because a1 and a2 are not consecutive
     // a2 can be committed after a4 gathers QC
-    let (mut safety_rules, signer, key) = test_info;
+    let (mut safety_rules, signer, key) = safety_rules();
 
-    let (proof, genesis_qc) = make_genesis(&signer);
+    let (proof, genesis_qc) = test_utils::make_genesis(&signer);
     let round = genesis_qc.certified_block().round();
 
     let a1 =
@@ -168,10 +147,10 @@ fn test_commit_rule_consecutive_rounds(test_info: TestInfo) {
     safety_rules.construct_and_sign_vote(&a4).unwrap();
 }
 
-fn test_end_to_end(test_info: TestInfo) {
-    let (mut safety_rules, signer, key) = test_info;
+fn test_end_to_end(safety_rules: &Callback) {
+    let (mut safety_rules, signer, key) = safety_rules();
 
-    let (proof, genesis_qc) = make_genesis(&signer);
+    let (proof, genesis_qc) = test_utils::make_genesis(&signer);
     let round = genesis_qc.certified_block().round();
 
     let data = random_payload(2048);
@@ -226,19 +205,19 @@ fn test_end_to_end(test_info: TestInfo) {
 
 /// Initialize from scratch, ensure that SafetyRules can properly initialize from a Waypoint and
 /// that it rejects invalid LedgerInfos or those that do not match.
-fn test_initialize(test_info: TestInfo) {
-    let (mut safety_rules, signer, _key) = test_info;
+fn test_initialize(safety_rules: &Callback) {
+    let (mut safety_rules, signer, _key) = safety_rules();
 
     let state = safety_rules.consensus_state().unwrap();
     assert_eq!(state.last_voted_round(), 0);
     assert_eq!(state.preferred_round(), 0);
     assert_eq!(state.epoch(), 1);
 
-    let (proof, _genesis_qc) = make_genesis(&signer);
+    let (proof, _genesis_qc) = test_utils::make_genesis(&signer);
     safety_rules.initialize(&proof).unwrap();
 
     let signer1 = ValidatorSigner::from_int(1);
-    let (bad_proof, _bad_genesis_qc) = make_genesis(&signer1);
+    let (bad_proof, _bad_genesis_qc) = test_utils::make_genesis(&signer1);
 
     match safety_rules.initialize(&bad_proof) {
         Err(Error::InvalidEpochChangeProof(_)) => (),
@@ -246,7 +225,7 @@ fn test_initialize(test_info: TestInfo) {
     };
 }
 
-fn test_preferred_block_rule(test_info: TestInfo) {
+fn test_preferred_block_rule(safety_rules: &Callback) {
     // Preferred block is the highest 2-chain head.
     //
     // build a tree of the following form:
@@ -256,9 +235,9 @@ fn test_preferred_block_rule(test_info: TestInfo) {
     //         \_____/ \_____/ \_____/
     //
     // PB should change from genesis to b1 and then a2.
-    let (mut safety_rules, signer, key) = test_info;
+    let (mut safety_rules, signer, key) = safety_rules();
 
-    let (proof, genesis_qc) = make_genesis(&signer);
+    let (proof, genesis_qc) = test_utils::make_genesis(&signer);
     let genesis_round = genesis_qc.certified_block().round();
     let round = genesis_round;
 
@@ -320,10 +299,10 @@ fn test_preferred_block_rule(test_info: TestInfo) {
 /// that poorly set last_voted_rounds both historical and in the future fail as well as
 /// synchronization issues on preferred round are correct. Effectivelly ensure that equivocation is
 /// impossible for signing timeouts.
-fn test_sign_timeout(test_info: TestInfo) {
-    let (mut safety_rules, signer, key) = test_info;
+fn test_sign_timeout(safety_rules: &Callback) {
+    let (mut safety_rules, signer, key) = safety_rules();
 
-    let (proof, genesis_qc) = make_genesis(&signer);
+    let (proof, genesis_qc) = test_utils::make_genesis(&signer);
     let round = genesis_qc.certified_block().round();
     let epoch = genesis_qc.certified_block().epoch();
 
@@ -348,7 +327,7 @@ fn test_sign_timeout(test_info: TestInfo) {
 
     // Verify cannot sign round older rounds now
     let actual_err = safety_rules.sign_timeout(&timeout).unwrap_err();
-    let expected_err = Error::BadTimeoutLastVotedRound(timeout.round(), timeout.round() + 1);
+    let expected_err = Error::IncorrectLastVotedRound(timeout.round(), timeout.round() + 1);
     assert_eq!(actual_err, expected_err);
 
     // Verify cannot sign last_voted_round < vote < preferred_round
@@ -356,7 +335,7 @@ fn test_sign_timeout(test_info: TestInfo) {
     let preferred_round = p4.block().quorum_cert().parent_block().round();
     let ptimeout = Timeout::new(timeout.epoch(), preferred_round - 1);
     let actual_err = safety_rules.sign_timeout(&ptimeout).unwrap_err();
-    let expected_err = Error::BadTimeoutPreferredRound(ptimeout.round(), preferred_round);
+    let expected_err = Error::IncorrectPreferredRound(ptimeout.round(), preferred_round);
     assert_eq!(actual_err, expected_err);
 
     // Verify cannot sign for different epoch
@@ -366,7 +345,7 @@ fn test_sign_timeout(test_info: TestInfo) {
     assert_eq!(actual_err, expected_err);
 }
 
-fn test_voting(test_info: TestInfo) {
+fn test_voting(safety_rules: &Callback) {
     // build a tree of the following form:
     //             _____    __________
     //            /     \  /          \
@@ -385,9 +364,9 @@ fn test_voting(test_info: TestInfo) {
     // a4 (ok), potential commit is None
     // a4 (old proposal)
     // b4 (round lower then round of pb. PB: a2, parent(b4)=b2)
-    let (mut safety_rules, signer, key) = test_info;
+    let (mut safety_rules, signer, key) = safety_rules();
 
-    let (proof, genesis_qc) = make_genesis(&signer);
+    let (proof, genesis_qc) = test_utils::make_genesis(&signer);
     let round = genesis_qc.certified_block().round();
 
     let a1 =
@@ -398,6 +377,7 @@ fn test_voting(test_info: TestInfo) {
     let a3 = make_proposal_with_parent(round + 5, &a2, None, &signer, key.as_ref());
     let b3 = make_proposal_with_parent(round + 6, &b2, None, &signer, key.as_ref());
     let a4 = make_proposal_with_parent(round + 7, &a3, None, &signer, key.as_ref());
+    let a4_prime = make_proposal_with_parent(round + 7, &a2, None, &signer, key.as_ref());
     let b4 = make_proposal_with_parent(round + 8, &b2, None, &signer, key.as_ref());
 
     safety_rules.initialize(&proof).unwrap();
@@ -413,10 +393,7 @@ fn test_voting(test_info: TestInfo) {
 
     assert_eq!(
         safety_rules.construct_and_sign_vote(&b2),
-        Err(Error::OldProposal {
-            last_voted_round: 4,
-            proposal_round: 3,
-        })
+        Err(Error::IncorrectLastVotedRound(3, 4))
     );
 
     vote = safety_rules.construct_and_sign_vote(&a3).unwrap();
@@ -429,25 +406,29 @@ fn test_voting(test_info: TestInfo) {
     assert_eq!(vote.ledger_info().consensus_block_id(), HashValue::zero());
 
     assert_eq!(
-        safety_rules.construct_and_sign_vote(&a4),
-        Err(Error::OldProposal {
-            last_voted_round: 7,
-            proposal_round: 7,
-        })
+        safety_rules.construct_and_sign_vote(&a3),
+        Err(Error::IncorrectLastVotedRound(5, 7))
     );
+
+    // return the last vote for the same round
+    assert_eq!(
+        safety_rules.construct_and_sign_vote(&a4_prime),
+        Ok(vote.clone())
+    );
+    assert_eq!(safety_rules.construct_and_sign_vote(&a4), Ok(vote));
 
     assert_eq!(
         safety_rules.construct_and_sign_vote(&b4),
-        Err(Error::ProposalRoundLowerThanPreferredBlock { preferred_round: 4 })
+        Err(Error::IncorrectPreferredRound(3, 4))
     );
 }
 
-fn test_voting_bad_epoch(test_info: TestInfo) {
+fn test_voting_bad_epoch(safety_rules: &Callback) {
     // Test to verify epoch is the same between parent and proposed in a vote proposal
     // genesis--a1 -> a2 fails due to jumping to a different epoch
-    let (mut safety_rules, signer, key) = test_info;
+    let (mut safety_rules, signer, key) = safety_rules();
 
-    let (proof, genesis_qc) = make_genesis(&signer);
+    let (proof, genesis_qc) = test_utils::make_genesis(&signer);
     let round = genesis_qc.certified_block().round();
 
     let a1 = test_utils::make_proposal_with_qc(round + 1, genesis_qc, &signer, key.as_ref());
@@ -470,7 +451,7 @@ fn test_voting_bad_epoch(test_info: TestInfo) {
     );
 }
 
-fn test_voting_potential_commit_id(test_info: TestInfo) {
+fn test_voting_potential_commit_id(safety_rules: &Callback) {
     // Test the potential ledger info that we're going to use in case of voting
     // build a tree of the following form:
     //            _____
@@ -480,9 +461,9 @@ fn test_voting_potential_commit_id(test_info: TestInfo) {
     //
     // All the votes before a4 cannot produce any potential commits.
     // A potential commit for proposal a4 is a2, a potential commit for proposal a5 is a3.
-    let (mut safety_rules, signer, key) = test_info;
+    let (mut safety_rules, signer, key) = safety_rules();
 
-    let (proof, genesis_qc) = make_genesis(&signer);
+    let (proof, genesis_qc) = test_utils::make_genesis(&signer);
     let round = genesis_qc.certified_block().round();
 
     let a1 =
@@ -519,12 +500,12 @@ fn test_voting_potential_commit_id(test_info: TestInfo) {
     );
 }
 
-fn test_sign_old_proposal(test_info: TestInfo) {
+fn test_sign_old_proposal(safety_rules: &Callback) {
     // Test to sign a proposal which makes no progress, compared with last voted round
 
-    let (mut safety_rules, signer, key) = test_info;
+    let (mut safety_rules, signer, key) = safety_rules();
 
-    let (proof, genesis_qc) = make_genesis(&signer);
+    let (proof, genesis_qc) = test_utils::make_genesis(&signer);
     let round = genesis_qc.certified_block().round();
     safety_rules.initialize(&proof).unwrap();
 
@@ -532,21 +513,15 @@ fn test_sign_old_proposal(test_info: TestInfo) {
     let err = safety_rules
         .sign_proposal(a1.block().block_data().clone())
         .unwrap_err();
-    assert_eq!(
-        err,
-        Error::OldProposal {
-            last_voted_round: 0,
-            proposal_round: 0,
-        }
-    );
+    assert_eq!(err, Error::IncorrectLastVotedRound(0, 0));
 }
 
-fn test_sign_proposal_with_bad_signer(test_info: TestInfo) {
+fn test_sign_proposal_with_bad_signer(safety_rules: &Callback) {
     // Test to sign a proposal signed by an unrecognizable signer
 
-    let (mut safety_rules, signer, key) = test_info;
+    let (mut safety_rules, signer, key) = safety_rules();
 
-    let (proof, genesis_qc) = make_genesis(&signer);
+    let (proof, genesis_qc) = test_utils::make_genesis(&signer);
     let round = genesis_qc.certified_block().round();
     safety_rules.initialize(&proof).unwrap();
 
@@ -566,13 +541,13 @@ fn test_sign_proposal_with_bad_signer(test_info: TestInfo) {
     );
 }
 
-fn test_sign_proposal_with_invalid_qc(test_info: TestInfo) {
+fn test_sign_proposal_with_invalid_qc(safety_rules: &Callback) {
     // Test to sign a proposal with an invalid qc inherited from proposal a2, which
     // is signed by a bad_signer.
 
-    let (mut safety_rules, signer, key) = test_info;
+    let (mut safety_rules, signer, key) = safety_rules();
 
-    let (proof, genesis_qc) = make_genesis(&signer);
+    let (proof, genesis_qc) = test_utils::make_genesis(&signer);
     let round = genesis_qc.certified_block().round();
     safety_rules.initialize(&proof).unwrap();
 
@@ -598,10 +573,10 @@ fn test_sign_proposal_with_invalid_qc(test_info: TestInfo) {
     );
 }
 
-fn test_sign_proposal_with_early_preferred_round(test_info: TestInfo) {
-    let (mut safety_rules, signer, key) = test_info;
+fn test_sign_proposal_with_early_preferred_round(safety_rules: &Callback) {
+    let (mut safety_rules, signer, key) = safety_rules();
 
-    let (proof, genesis_qc) = make_genesis(&signer);
+    let (proof, genesis_qc) = test_utils::make_genesis(&signer);
     let round = genesis_qc.certified_block().round();
     safety_rules.initialize(&proof).unwrap();
 
@@ -628,23 +603,20 @@ fn test_sign_proposal_with_early_preferred_round(test_info: TestInfo) {
     let err = safety_rules
         .sign_proposal(a5.block().block_data().clone())
         .unwrap_err();
-    assert_eq!(
-        err,
-        Error::ProposalRoundLowerThanPreferredBlock { preferred_round: 2 }
-    );
+    assert_eq!(err, Error::IncorrectPreferredRound(0, 2));
 }
 
-fn test_uninitialized_signer(test_info: TestInfo) {
+fn test_uninitialized_signer(safety_rules: &Callback) {
     // Testing for an uninitialized Option<ValidatorSigner>
 
-    let (mut safety_rules, signer, key) = test_info;
+    let (mut safety_rules, signer, key) = safety_rules();
 
-    let (proof, genesis_qc) = make_genesis(&signer);
+    let (proof, genesis_qc) = test_utils::make_genesis(&signer);
     let round = genesis_qc.certified_block().round();
 
     let a1 = test_utils::make_proposal_with_qc(round + 1, genesis_qc, &signer, key.as_ref());
     let err = safety_rules.construct_and_sign_vote(&a1).unwrap_err();
-    assert_eq!(err, Error::NotInitialized("epoch_state".into()));
+    assert_eq!(err, Error::NotInitialized("validator_signer".into()));
     let err = safety_rules
         .sign_proposal(a1.block().block_data().clone())
         .unwrap_err();
@@ -654,14 +626,14 @@ fn test_uninitialized_signer(test_info: TestInfo) {
     safety_rules.construct_and_sign_vote(&a1).unwrap();
 }
 
-fn test_validator_not_in_set(test_info: TestInfo) {
+fn test_validator_not_in_set(safety_rules: &Callback) {
     // Testing for a validator missing from the validator set
     // It does so by updating the safey rule to an epoch state, which does not contain the
     // current validator and check the consensus state
 
-    let (mut safety_rules, signer, key) = test_info;
+    let (mut safety_rules, signer, key) = safety_rules();
 
-    let (mut proof, genesis_qc) = make_genesis(&signer);
+    let (mut proof, genesis_qc) = test_utils::make_genesis(&signer);
     let round = genesis_qc.certified_block().round();
 
     safety_rules.initialize(&proof).unwrap();
@@ -698,7 +670,7 @@ fn test_validator_not_in_set(test_info: TestInfo) {
     assert_eq!(state.in_validator_set(), false);
 }
 
-fn test_reconcile_key(_test_info: TestInfo) {
+fn test_reconcile_key(_safety_rules: &Callback) {
     // Test to verify desired consensus key can be retrieved according to validator set.
     // It does so by updating the safey rule to a desired epoch state, reconciling old signer key
     // with the new one. Later when it tries to verify the QC signed by the old signer key, safety
@@ -711,7 +683,7 @@ fn test_reconcile_key(_test_info: TestInfo) {
     let new_pub_key = storage.internal_store().rotate_key(CONSENSUS_KEY).unwrap();
     let mut safety_rules = Box::new(SafetyRules::new(storage, false));
 
-    let (mut proof, genesis_qc) = make_genesis(&signer);
+    let (mut proof, genesis_qc) = test_utils::make_genesis(&signer);
     let round = genesis_qc.certified_block().round();
 
     safety_rules.initialize(&proof).unwrap();
@@ -759,9 +731,9 @@ fn test_reconcile_key(_test_info: TestInfo) {
 }
 
 // Tests for fetching a missing validator key from persistent storage.
-fn test_key_not_in_store(test_info: TestInfo) {
-    let (mut safety_rules, signer, key) = test_info;
-    let (mut proof, genesis_qc) = make_genesis(&signer);
+fn test_key_not_in_store(safety_rules: &Callback) {
+    let (mut safety_rules, signer, key) = safety_rules();
+    let (mut proof, genesis_qc) = test_utils::make_genesis(&signer);
     let round = genesis_qc.certified_block().round();
 
     safety_rules.initialize(&proof).unwrap();
@@ -789,12 +761,7 @@ fn test_key_not_in_store(test_info: TestInfo) {
         .ledger_info_with_sigs
         .push(a2.block().quorum_cert().ledger_info().clone());
     let err = safety_rules.initialize(&proof).unwrap_err();
-    assert_eq!(
-        err,
-        Error::InternalError {
-            error: "Validator key not found".into()
-        }
-    );
+    assert_eq!(err, Error::InternalError("Validator key not found".into()));
 
     let state = safety_rules.consensus_state().unwrap();
     assert_eq!(state.in_validator_set(), false);

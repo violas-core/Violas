@@ -9,16 +9,16 @@ use anyhow::{anyhow, ensure};
 use bytes::Bytes;
 use channel::{self, libra_channel, message_queues::QueueStyle};
 use consensus_types::{
-    block_retrieval::{BlockRetrievalRequest, BlockRetrievalResponse},
+    block_retrieval::{BlockRetrievalRequest, BlockRetrievalResponse, MAX_BLOCKS_PER_REQUEST},
     common::Author,
     proposal_msg::ProposalMsg,
     sync_info::SyncInfo,
     vote_msg::VoteMsg,
 };
 use futures::{channel::oneshot, stream::select, SinkExt, Stream, StreamExt, TryStreamExt};
+use inject_error::inject_error;
 use libra_logger::prelude::*;
 use libra_metrics::monitor;
-use libra_security_logger::{security_log, SecurityEvent};
 use libra_types::{
     account_address::AccountAddress, epoch_change::EpochChangeProof,
     validator_verifier::ValidatorVerifier,
@@ -78,6 +78,7 @@ impl NetworkSender {
 
     /// Tries to retrieve num of blocks backwards starting from id from the given peer: the function
     /// returns a future that is fulfilled with BlockRetrievalResponse.
+    #[inject_error(probability = 0.05)]
     pub async fn request_block(
         &mut self,
         retrieval_request: BlockRetrievalRequest,
@@ -101,10 +102,9 @@ impl NetworkSender {
                 &self.validators,
             )
             .map_err(|e| {
-                security_log(SecurityEvent::InvalidRetrievedBlock)
-                    .error(&e)
-                    .data(&response)
-                    .log();
+                send_struct_log!(security_log(security_events::INVALID_RETRIEVED_BLOCK)
+                    .data("request_block_reponse", &response)
+                    .data_display("error", &e));
                 e
             })?;
 
@@ -265,6 +265,13 @@ impl NetworkTask {
                 Event::RpcRequest((peer_id, msg, callback)) => match msg {
                     ConsensusMsg::BlockRetrievalRequest(request) => {
                         debug!("Received block retrieval request {}", request);
+                        if request.num_blocks() > MAX_BLOCKS_PER_REQUEST {
+                            warn!(
+                                "Ignore block retrieval with too many blocks: {}",
+                                request.num_blocks()
+                            );
+                            continue;
+                        }
                         let req_with_callback = IncomingBlockRetrievalRequest {
                             req: *request,
                             response_sender: callback,
@@ -278,10 +285,10 @@ impl NetworkTask {
                         continue;
                     }
                 },
-                Event::NewPeer(peer_id) => {
+                Event::NewPeer(peer_id, _origin) => {
                     debug!("Peer {} connected", peer_id);
                 }
-                Event::LostPeer(peer_id) => {
+                Event::LostPeer(peer_id, _origin) => {
                     debug!("Peer {} disconnected", peer_id);
                 }
             }

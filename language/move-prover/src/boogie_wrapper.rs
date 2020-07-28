@@ -63,13 +63,19 @@ pub struct BoogieOutput {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum BoogieErrorKind {
     Compilation,
+    Precondition,
     Postcondition,
     Assertion,
+    Inconclusive,
 }
 
 impl BoogieErrorKind {
     fn is_from_verification(self) -> bool {
-        self == BoogieErrorKind::Assertion || self == BoogieErrorKind::Postcondition
+        use BoogieErrorKind::*;
+        matches!(
+            self,
+            Assertion | Precondition | Postcondition | Inconclusive
+        )
     }
 }
 
@@ -77,6 +83,7 @@ impl BoogieErrorKind {
 pub struct BoogieError {
     pub kind: BoogieErrorKind,
     pub position: Location,
+    pub context_position: Option<Location>,
     pub message: String,
     pub execution_trace: Vec<(Location, TraceKind, String)>,
     pub model: Option<Model>,
@@ -115,6 +122,7 @@ impl<'env> BoogieWrapper<'env> {
                 debug!("analyzing boogie output");
                 let out = String::from_utf8_lossy(&output.stdout).to_string();
                 let mut errors = self.extract_verification_errors(&out);
+                errors.extend(self.extract_inconclusive_errors(&out));
                 errors.extend(self.extract_compilation_errors(&out));
                 return Ok(BoogieOutput {
                     errors,
@@ -135,6 +143,7 @@ impl<'env> BoogieWrapper<'env> {
     ) -> anyhow::Result<()> {
         let BoogieOutput { errors, all_output } = self.call_boogie(bench_repeat, boogie_file)?;
         let boogie_log_file = self.options.get_boogie_log_file(boogie_file);
+        let log_file_existed = std::path::Path::new(&boogie_log_file).exists();
         debug!("writing boogie log to {}", boogie_log_file);
         fs::write(&boogie_log_file, &all_output)?;
 
@@ -153,6 +162,10 @@ impl<'env> BoogieWrapper<'env> {
 
         // Add errors for functions with smoke tests
         self.add_negative_errors(negative_cond_errors);
+
+        if !log_file_existed && !self.options.backend.keep_artifacts {
+            std::fs::remove_file(boogie_log_file).unwrap_or_default();
+        }
 
         Ok(())
     }
@@ -214,20 +227,24 @@ impl<'env> BoogieWrapper<'env> {
         };
 
         // Create the error
-        let (show_trace, message) = loc_opt
+        let (show_trace, message, call_loc) = loc_opt
             .as_ref()
             .and_then(|loc| self.env.get_condition_info(loc))
             .map(|info| {
                 if let Some(msg) = info.message_if_requires.as_ref() {
                     // Check whether the Boogie error indicates a precondition, or if this is
                     // the only message we have.
-                    if error.message.contains("Precondition") || info.message.is_empty() {
-                        return (!info.omit_trace, msg.clone());
+                    if error.kind == BoogieErrorKind::Precondition || info.message.is_empty() {
+                        // Extract the location of the call site.
+                        let call_loc = error
+                            .context_position
+                            .and_then(|p| self.to_proper_source_location(self.get_locations(p).1));
+                        return (!info.omit_trace, msg.clone(), call_loc);
                     }
                 }
-                (!info.omit_trace, info.message)
+                (!info.omit_trace, info.message, None)
             })
-            .unwrap_or_else(|| (true, error.message.clone()));
+            .unwrap_or_else(|| (true, error.message.clone(), None));
         let mut diag = Diagnostic::new(
             if on_source {
                 Severity::Error
@@ -238,6 +255,10 @@ impl<'env> BoogieWrapper<'env> {
             message,
             label,
         );
+        if let Some(loc) = call_loc {
+            let label = Label::new(loc.file_id(), loc.span(), "called function");
+            diag.secondary_labels.push(label);
+        }
 
         // Now add trace diagnostics.
         if error.kind.is_from_verification()
@@ -539,17 +560,22 @@ impl<'env> BoogieWrapper<'env> {
                 at += cap.get(0).unwrap().end();
                 // Check whether there is a `Related` message which points to the pre/post condition.
                 // If so, this has the real position.
-                let (line, col) = if let Some(cap1) = verification_diag_related.captures(&out[at..])
-                {
-                    at += cap1.get(0).unwrap().end();
-                    let line = cap1.name("line").unwrap().as_str();
-                    let col = cap1.name("col").unwrap().as_str();
-                    (line, col)
-                } else {
-                    let line = cap.name("line").unwrap().as_str();
-                    let col = cap.name("col").unwrap().as_str();
-                    (line, col)
-                };
+                let (pos, context_pos) =
+                    if let Some(cap1) = verification_diag_related.captures(&out[at..]) {
+                        let call_line = cap.name("line").unwrap().as_str();
+                        let call_col = cap.name("col").unwrap().as_str();
+                        at += cap1.get(0).unwrap().end();
+                        let line = cap1.name("line").unwrap().as_str();
+                        let col = cap1.name("col").unwrap().as_str();
+                        (
+                            make_position(line, col),
+                            Some(make_position(call_line, call_col)),
+                        )
+                    } else {
+                        let line = cap.name("line").unwrap().as_str();
+                        let col = cap.name("col").unwrap().as_str();
+                        (make_position(line, col), None)
+                    };
                 let mut trace = vec![];
                 if let Some(m) = verification_diag_trace.find(&out[at..]) {
                     at += m.end();
@@ -581,10 +607,13 @@ impl<'env> BoogieWrapper<'env> {
                 errors.push(BoogieError {
                     kind: if msg.contains("assertion might not hold") {
                         BoogieErrorKind::Assertion
+                    } else if msg.contains("precondition") {
+                        BoogieErrorKind::Precondition
                     } else {
                         BoogieErrorKind::Postcondition
                     },
-                    position: make_position(line, col),
+                    position: pos,
+                    context_position: context_pos,
                     message: msg.to_string(),
                     execution_trace: trace,
                     model,
@@ -594,6 +623,36 @@ impl<'env> BoogieWrapper<'env> {
             }
         }
         errors
+    }
+
+    /// Extracts inconclusive (timeout) errors.
+    fn extract_inconclusive_errors(&self, out: &str) -> Vec<BoogieError> {
+        let diag_re =
+            Regex::new(r"(?m)^.*\((?P<line>\d+),(?P<col>\d+)\).*Verification (inconclusive|out of resource).*$")
+                .unwrap();
+        diag_re
+            .captures_iter(&out)
+            .map(|cap| {
+                let line = cap.name("line").unwrap().as_str();
+                let col = cap.name("col").unwrap().as_str();
+                let msg = cap.get(0).unwrap().as_str();
+                BoogieError {
+                    kind: BoogieErrorKind::Inconclusive,
+                    position: make_position(line, col),
+                    context_position: None,
+                    message: if msg.contains("out of resource") {
+                        format!(
+                            "verification out of resources/timeout (timeout set to {}s)",
+                            self.options.backend.vc_timeout
+                        )
+                    } else {
+                        "verification inconclusive".to_string()
+                    },
+                    execution_trace: vec![],
+                    model: None,
+                }
+            })
+            .collect_vec()
     }
 
     /// Extracts compilation errors. This captures any kind of errors different than the
@@ -610,6 +669,7 @@ impl<'env> BoogieWrapper<'env> {
                 BoogieError {
                     kind: BoogieErrorKind::Compilation,
                     position: make_position(line, col),
+                    context_position: None,
                     message: msg.to_string(),
                     execution_trace: vec![],
                     model: None,
@@ -1131,7 +1191,7 @@ impl ModelValue {
             Type::Primitive(PrimitiveType::Bool) => Some(PrettyDoc::text(
                 self.extract_primitive("$Boolean")?.to_string(),
             )),
-            Type::Primitive(PrimitiveType::Address) => {
+            Type::Primitive(PrimitiveType::Address) | Type::Primitive(PrimitiveType::Signer) => {
                 let addr = BigInt::parse_bytes(
                     &self.extract_primitive("$Address")?.clone().into_bytes(),
                     10,

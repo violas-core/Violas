@@ -11,11 +11,11 @@ edition = "2018"
 
 [dependencies]
 anyhow = "1.0.31"
-chrono = "0.4.11"
+chrono = "0.4.13"
 hex = "0.4.2"
 proptest = { version = "0.10.0", optional = true }
 rustyline = "6.2.0"
-rust_decimal = "1.6.0"
+rust_decimal = "1.7.0"
 num-traits = "0.2.12"
 reqwest = { version = "0.10.6", features = ["blocking", "json", "rustls-tls"], default-features = false }
 serde = { version = "1.0.114", features = ["derive"] }
@@ -41,6 +41,8 @@ transaction-builder = { path = "../../language/transaction-builder", version = "
 
 [dev-dependencies]
 proptest = "0.10.0"
+
+libra-types = { path = "../../types", version = "0.1.0", features = ["fuzzing"] }
 
 [features]
 default = []

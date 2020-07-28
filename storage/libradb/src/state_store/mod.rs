@@ -14,11 +14,11 @@ use crate::{
     },
 };
 use anyhow::Result;
-use jellyfish_merkle::{
+use libra_crypto::{hash::CryptoHash, HashValue};
+use libra_jellyfish_merkle::{
     node_type::{LeafNode, Node, NodeKey},
     JellyfishMerkleTree, NodeBatch, TreeReader, TreeWriter, ROOT_NIBBLE_HEIGHT,
 };
-use libra_crypto::{hash::CryptoHash, HashValue};
 use libra_types::{
     account_address::AccountAddress,
     account_state_blob::AccountStateBlob,
@@ -28,6 +28,7 @@ use libra_types::{
 use schemadb::{SchemaBatch, DB};
 use std::{collections::HashMap, sync::Arc};
 
+#[derive(Debug)]
 pub(crate) struct StateStore {
     db: Arc<DB>,
 }
@@ -103,7 +104,6 @@ impl StateStore {
         Ok(new_root_hash_vec)
     }
 
-    #[cfg(test)]
     pub fn get_root_hash(&self, version: Version) -> Result<HashValue> {
         JellyfishMerkleTree::new(self).get_root_hash(version)
     }

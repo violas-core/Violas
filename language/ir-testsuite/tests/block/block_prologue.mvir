@@ -4,7 +4,7 @@
 //! proposer: vivian
 //! block-time: 1000000
 
-// check: EventKey([19, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10, 85, 12, 24])
+// check: EventKey([20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10, 85, 12, 24])
 // check: NewBlockEvent
 // check: 1000000
 
@@ -39,7 +39,7 @@ main(account: &signer) {
     return;
 }
 // check: ABORTED
-// check: 33
+// check: code: 2
 
 //! new-transaction
 //! sender: vivian
@@ -50,5 +50,9 @@ main(account: &signer) {
 
     return;
 }
+
+// TODO(status_migration) remove duplicate check
 // check: ABORTED
-// check: 33
+// check: code: 2
+// check: ABORTED
+// check: code: 2

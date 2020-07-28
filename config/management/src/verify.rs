@@ -1,7 +1,7 @@
 // Copyright (c) The Libra Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::{error::Error, secure_backend::StorageLocation::LocalStorage, SingleBackend};
+use crate::{constants::VALIDATOR_CONFIG, error::Error, secure_backend::ValidatorBackend};
 use executor::db_bootstrapper;
 use libra_crypto::{ed25519::Ed25519PublicKey, x25519};
 use libra_global_constants::{
@@ -11,8 +11,13 @@ use libra_global_constants::{
 use libra_secure_storage::{CryptoStorage, KVStorage, Storage};
 use libra_temppath::TempPath;
 use libra_types::{
-    account_address::AccountAddress, account_config, account_state::AccountState,
-    on_chain_config::ValidatorSet, validator_config::ValidatorConfig, waypoint::Waypoint,
+    account_address::AccountAddress,
+    account_config,
+    account_state::AccountState,
+    on_chain_config::ValidatorSet,
+    transaction::{TransactionArgument, TransactionPayload::Script},
+    validator_config::ValidatorConfig,
+    waypoint::Waypoint,
 };
 use libra_vm::LibraVM;
 use libradb::LibraDB;
@@ -32,7 +37,7 @@ use structopt::StructOpt;
 #[derive(Debug, StructOpt)]
 pub struct Verify {
     #[structopt(flatten)]
-    backend: SingleBackend,
+    backend: ValidatorBackend,
     /// If specified, compares the internal state to that of a
     /// provided genesis. Note, that a waypont might diverge from
     /// the provided genesis after execution has begun.
@@ -42,7 +47,10 @@ pub struct Verify {
 
 impl Verify {
     pub fn execute(self) -> Result<String, Error> {
-        let local_storage = self.backend.backend.create_storage(LocalStorage)?;
+        let validator_storage = self
+            .backend
+            .validator_backend
+            .create_storage(self.backend.name())?;
         let mut buffer = String::new();
 
         writeln!(buffer, "Data stored in SecureStorage:").unwrap();
@@ -50,27 +58,32 @@ impl Verify {
         writeln!(buffer, "Keys").unwrap();
         write_break(&mut buffer);
 
-        write_ed25519_key(&local_storage, &mut buffer, CONSENSUS_KEY);
-        write_x25519_key(&local_storage, &mut buffer, FULLNODE_NETWORK_KEY);
-        write_ed25519_key(&local_storage, &mut buffer, OWNER_KEY);
-        write_ed25519_key(&local_storage, &mut buffer, OPERATOR_KEY);
-        write_ed25519_key(&local_storage, &mut buffer, VALIDATOR_NETWORK_KEY);
+        write_ed25519_key(&validator_storage, &mut buffer, CONSENSUS_KEY);
+        write_x25519_key(&validator_storage, &mut buffer, FULLNODE_NETWORK_KEY);
+        write_ed25519_key(&validator_storage, &mut buffer, OWNER_KEY);
+        write_ed25519_key(&validator_storage, &mut buffer, OPERATOR_KEY);
+        write_ed25519_key(&validator_storage, &mut buffer, VALIDATOR_NETWORK_KEY);
 
         write_break(&mut buffer);
         writeln!(buffer, "Data").unwrap();
         write_break(&mut buffer);
 
-        write_string(&local_storage, &mut buffer, OPERATOR_ACCOUNT);
-        write_string(&local_storage, &mut buffer, OWNER_ACCOUNT);
-        write_u64(&local_storage, &mut buffer, EPOCH);
-        write_u64(&local_storage, &mut buffer, LAST_VOTED_ROUND);
-        write_u64(&local_storage, &mut buffer, PREFERRED_ROUND);
-        write_waypoint(&local_storage, &mut buffer, WAYPOINT);
+        write_string(&validator_storage, &mut buffer, OPERATOR_ACCOUNT);
+        write_string(&validator_storage, &mut buffer, OWNER_ACCOUNT);
+        write_u64(&validator_storage, &mut buffer, EPOCH);
+        write_u64(&validator_storage, &mut buffer, LAST_VOTED_ROUND);
+        write_u64(&validator_storage, &mut buffer, PREFERRED_ROUND);
+        write_waypoint(&validator_storage, &mut buffer, WAYPOINT);
 
         write_break(&mut buffer);
 
         if let Some(genesis_path) = self.genesis_path.as_ref() {
-            compare_genesis(&local_storage, &mut buffer, genesis_path)?;
+            compare_genesis(
+                &validator_storage,
+                &mut buffer,
+                genesis_path,
+                self.backend.name(),
+            )?;
         }
 
         Ok(buffer)
@@ -139,24 +152,27 @@ fn compare_genesis(
     storage: &Storage,
     buffer: &mut String,
     genesis_path: &PathBuf,
+    storage_name: &'static str,
 ) -> Result<(), Error> {
+    // Compute genesis and waypoint and compare to given waypoint
     let db_path = TempPath::new();
     let (db_rw, expected_waypoint) = compute_genesis(genesis_path, db_path.path())?;
 
     let actual_waypoint = storage
         .get(WAYPOINT)
         .and_then(|c| c.value.string())
-        .map_err(|e| Error::LocalStorageReadError(WAYPOINT, e.to_string()))?;
+        .map_err(|e| Error::StorageReadError(storage_name, WAYPOINT, e.to_string()))?;
     let actual_waypoint = Waypoint::from_str(&actual_waypoint).map_err(|e| {
         Error::UnexpectedError(format!("Unable to parse waypoint: {}", e.to_string()))
     })?;
     write_assert(buffer, WAYPOINT, actual_waypoint == expected_waypoint);
 
-    let validator_account = validator_account(storage)?;
+    // Fetch on-chain validator config and compare on-chain keys to local keys
+    let validator_account = validator_account(storage, storage_name)?;
     let validator_config = validator_config(validator_account, db_rw.reader.clone())?;
 
     let actual_consensus_key = ed25519_from_storage(CONSENSUS_KEY, storage)
-        .map_err(|e| Error::LocalStorageReadError(CONSENSUS_KEY, e))?;
+        .map_err(|e| Error::StorageReadError(storage_name, CONSENSUS_KEY, e))?;
     let expected_consensus_key = validator_config.consensus_public_key;
     write_assert(
         buffer,
@@ -165,7 +181,7 @@ fn compare_genesis(
     );
 
     let actual_validator_key = x25519_from_storage(VALIDATOR_NETWORK_KEY, storage)
-        .map_err(|e| Error::LocalStorageReadError(VALIDATOR_NETWORK_KEY, e))?;
+        .map_err(|e| Error::StorageReadError(storage_name, VALIDATOR_NETWORK_KEY, e))?;
     let expected_validator_key = validator_config.validator_network_identity_public_key;
     write_assert(
         buffer,
@@ -174,7 +190,7 @@ fn compare_genesis(
     );
 
     let actual_fullnode_key = x25519_from_storage(FULLNODE_NETWORK_KEY, storage)
-        .map_err(|e| Error::LocalStorageReadError(FULLNODE_NETWORK_KEY, e))?;
+        .map_err(|e| Error::StorageReadError(storage_name, FULLNODE_NETWORK_KEY, e))?;
     let expected_fullnode_key = validator_config.full_node_network_identity_public_key;
     write_assert(
         buffer,
@@ -231,28 +247,57 @@ fn validator_config(
         .payload()
         .iter()
         .find(|vi| vi.account_address() == &validator_account)
-        .ok_or_else(|| Error::UnexpectedError("Unable to find Validator account".into()))?;
+        .ok_or_else(|| {
+            Error::UnexpectedError(format!(
+                "Unable to find Validator account {:?}",
+                &validator_account
+            ))
+        })?;
     Ok(info.config().clone())
 }
 
-fn validator_account(storage: &Storage) -> Result<AccountAddress, Error> {
-    let account = storage
-        .get(OPERATOR_ACCOUNT)
-        .map_err(|e| Error::LocalStorageReadError(OPERATOR_ACCOUNT, e.to_string()))?
+fn validator_account(
+    storage: &Storage,
+    storage_name: &'static str,
+) -> Result<AccountAddress, Error> {
+    let validator_config = storage
+        .get(VALIDATOR_CONFIG)
+        .map_err(|e| Error::StorageReadError(storage_name, VALIDATOR_CONFIG, e.to_string()))?
         .value
-        .string()
+        .transaction()
         .map_err(|e| {
             Error::UnexpectedError(format!(
-                "Unable to parse operator account: {}",
+                "Unable to parse validator config: {}",
                 e.to_string()
             ))
         })?;
-    AccountAddress::try_from(account).map_err(|e| {
-        Error::UnexpectedError(format!(
-            "Unable to parse operator account: {}",
-            e.to_string()
-        ))
-    })
+
+    let validator_config = validator_config
+        .as_signed_user_txn()
+        .expect("Invalid validator config transaction found!");
+
+    let transaction_payload = validator_config
+        .clone()
+        .into_raw_transaction()
+        .into_payload();
+    let script = match transaction_payload {
+        Script(script) => script,
+        _ => {
+            return Err(Error::UnexpectedError(format!(
+                "Invalid transaction payload found for validator config: {:?}",
+                transaction_payload
+            )))
+        }
+    };
+
+    let account_arg = script.args()[0].clone();
+    match account_arg {
+        TransactionArgument::Address(account) => Ok(account),
+        _ => Err(Error::UnexpectedError(format!(
+            "Unable to parse operator account: Invalid account address script argument found: {:?}",
+            account_arg
+        ))),
+    }
 }
 
 fn ed25519_from_storage(

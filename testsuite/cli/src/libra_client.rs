@@ -22,7 +22,7 @@ use libra_types::{
     ledger_info::LedgerInfoWithSignatures,
     transaction::{SignedTransaction, Version},
     trusted_state::{TrustedState, TrustedStateChange},
-    vm_error::StatusCode,
+    vm_status::StatusCode,
     waypoint::Waypoint,
 };
 use reqwest::Url;
@@ -90,8 +90,8 @@ impl LibraClient {
             Err(e) => {
                 if let Some(error) = e.downcast_ref::<JsonRpcError>() {
                     // check VM status
-                    if let Some(vm_error) = error.get_vm_error() {
-                        if vm_error.major_status == StatusCode::SEQUENCE_NUMBER_TOO_OLD {
+                    if let Some(status_code) = error.as_status_code() {
+                        if status_code == StatusCode::SEQUENCE_NUMBER_TOO_OLD {
                             if let Some(sender_account) = sender_account_opt {
                                 // update sender's sequence number if too old
                                 sender_account.sequence_number =
@@ -105,16 +105,16 @@ impl LibraClient {
         }
     }
 
-    /// Retrieves account state
+    /// Retrieves account information
     /// - If `with_state_proof`, will also retrieve state proof from node and update trusted_state accordingly
-    pub fn get_account_state(
+    pub fn get_account(
         &mut self,
         account: AccountAddress,
         with_state_proof: bool,
     ) -> Result<(Option<AccountView>, Version)> {
         let client_version = self.trusted_state.latest_version();
         let mut batch = JsonRpcBatch::new();
-        batch.add_get_account_state_request(account);
+        batch.add_get_account_request(account);
         if with_state_proof {
             batch.add_get_state_proof_request(client_version);
         }
@@ -131,7 +131,7 @@ impl LibraClient {
                 Ok((account_view, self.trusted_state.latest_version()))
             }
             Err(e) => bail!(
-                "Failed to get account state for account address {} with error: {:?}",
+                "Failed to get account for account address {} with error: {:?}",
                 account,
                 e
             ),
@@ -279,6 +279,11 @@ impl LibraClient {
         self.latest_epoch_change_li.as_ref()
     }
 
+    /// Latest trusted state
+    pub(crate) fn trusted_state(&self) -> TrustedState {
+        self.trusted_state.clone()
+    }
+
     /// Get transaction from validator by account and sequence number.
     pub fn get_txn_by_acc_seq(
         &mut self,
@@ -322,7 +327,7 @@ impl LibraClient {
     }
 
     fn get_sequence_number(&mut self, account: AccountAddress) -> Result<u64> {
-        match self.get_account_state(account, true)?.0 {
+        match self.get_account(account, true)?.0 {
             None => bail!("No account found for address {:?}", account),
             Some(account_view) => Ok(account_view.sequence_number),
         }
@@ -335,7 +340,7 @@ impl LibraClient {
         limit: u64,
     ) -> Result<(Vec<EventView>, AccountView)> {
         // get event key from access_path
-        match self.get_account_state(access_path.address, false)?.0 {
+        match self.get_account(access_path.address, false)?.0 {
             None => bail!("No account found for address {:?}", access_path.address),
             Some(account_view) => {
                 let path = access_path.path;

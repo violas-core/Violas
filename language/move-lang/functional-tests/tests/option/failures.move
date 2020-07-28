@@ -8,7 +8,9 @@ fun main() {
 }
 }
 
-// check: NATIVE_FUNCTION_ERROR
+// TODO(status_migration) remove duplicate check
+// check: ABORTED
+// check: ABORTED 1
 
 
 //! new-transaction
@@ -20,8 +22,9 @@ fun main() {
 }
 }
 
-// check: NATIVE_FUNCTION_ERROR
-
+// TODO(status_migration) remove duplicate check
+// check: ABORTED
+// check: ABORTED 1
 
 //! new-transaction
 script {
@@ -32,7 +35,9 @@ fun main() {
 }
 }
 
-// check: NATIVE_FUNCTION_ERROR
+// TODO(status_migration) remove duplicate check
+// check: ABORTED
+// check: ABORTED 1
 
 
 //! new-transaction
@@ -44,7 +49,9 @@ fun main() {
 }
 }
 
-// check: NATIVE_FUNCTION_ERROR
+// TODO(status_migration) remove duplicate check
+// check: ABORTED
+// check: ABORTED 1
 
 
 //! new-transaction
@@ -56,5 +63,7 @@ fun main() {
 }
 }
 
+// TODO(status_migration) remove duplicate check
 // check: ABORTED
-// check: 99
+// check: ABORTED
+// check: 0

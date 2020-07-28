@@ -7,7 +7,7 @@ use crate::{
     shared_mempool::{
         coordinator::{coordinator, gc_coordinator},
         peer_manager::PeerManager,
-        types::{SharedMempool, SharedMempoolNotification, DEFAULT_MIN_BROADCAST_RECIPIENT_COUNT},
+        types::{SharedMempool, SharedMempoolNotification},
     },
     CommitNotification, ConsensusRequest, SubmissionStatus,
 };
@@ -17,8 +17,8 @@ use futures::channel::{
     mpsc::{self, Receiver, UnboundedSender},
     oneshot,
 };
-use libra_config::config::NodeConfig;
-use libra_types::{on_chain_config::OnChainConfigPayload, transaction::SignedTransaction, PeerId};
+use libra_config::{config::NodeConfig, network_id::NodeNetworkId};
+use libra_types::{on_chain_config::OnChainConfigPayload, transaction::SignedTransaction};
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex, RwLock},
@@ -38,7 +38,7 @@ pub(crate) fn start_shared_mempool<V>(
     mempool: Arc<Mutex<CoreMempool>>,
     // First element in tuple is the network ID
     // See `NodeConfig::is_upstream_peer` for the definition of network ID
-    mempool_network_handles: Vec<(PeerId, MempoolNetworkSender, MempoolNetworkEvents)>,
+    mempool_network_handles: Vec<(NodeNetworkId, MempoolNetworkSender, MempoolNetworkEvents)>,
     client_events: mpsc::Receiver<(SignedTransaction, oneshot::Sender<Result<SubmissionStatus>>)>,
     consensus_requests: mpsc::Receiver<ConsensusRequest>,
     state_sync_requests: mpsc::Receiver<CommitNotification>,
@@ -50,18 +50,12 @@ pub(crate) fn start_shared_mempool<V>(
     V: TransactionValidation + 'static,
 {
     let upstream_config = config.upstream.clone();
-    let peer_manager = Arc::new(PeerManager::new(
-        upstream_config,
-        config
-            .mempool
-            .shared_mempool_min_broadcast_recipient_count
-            .unwrap_or(DEFAULT_MIN_BROADCAST_RECIPIENT_COUNT),
-    ));
+    let peer_manager = Arc::new(PeerManager::new(upstream_config));
 
     let mut all_network_events = vec![];
     let mut network_senders = HashMap::new();
     for (network_id, network_sender, network_events) in mempool_network_handles.into_iter() {
-        all_network_events.push((network_id, network_events));
+        all_network_events.push((network_id.clone(), network_events));
         network_senders.insert(network_id, network_sender);
     }
 
@@ -97,7 +91,7 @@ pub fn bootstrap(
     db: Arc<dyn DbReader>,
     // The first element in the tuple is the ID of the network that this network is a handle to
     // See `NodeConfig::is_upstream_peer` for the definition of network ID
-    mempool_network_handles: Vec<(PeerId, MempoolNetworkSender, MempoolNetworkEvents)>,
+    mempool_network_handles: Vec<(NodeNetworkId, MempoolNetworkSender, MempoolNetworkEvents)>,
     client_events: Receiver<(SignedTransaction, oneshot::Sender<Result<SubmissionStatus>>)>,
     consensus_requests: Receiver<ConsensusRequest>,
     state_sync_requests: Receiver<CommitNotification>,

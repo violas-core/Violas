@@ -28,22 +28,18 @@ executors:
     docker:
       - image: hashicorp/terraform
     resource_class: small
-
+  docker-executor:
+    machine:
+      docker_layer_caching: true
+      image: ubuntu-1604:202004-01
+    resource_class: 2xlarge
 commands:
-  rust_setup:
-    description: Set rustc version
-    steps:
-      - run:
-          name: Set rustc version
-          command: |
-            rustup default stable
-            rustup update stable
   print_versions:
     description: Version Info
     steps:
       - run:
           name: Version Info
-          command: rustc --version; cargo --version; rustup --version
+          command: rustup --version ; rustc --version
   env_setup:
     description: Environment Setup
     steps:
@@ -55,6 +51,9 @@ commands:
             echo 'export LIBRA_DUMP_LOGS=1' >> $BASH_ENV
             echo 'export CARGO_INCREMENTAL=0' >> $BASH_ENV
             echo 'export CI_TIMEOUT="timeout 40m"' >> $BASH_ENV
+            export RUST_NIGHTLY=$(cat cargo-toolchain)
+            echo 'export RUST_NIGHTLY='${RUST_NIGHTLY} >> $BASH_ENV
+
   install_deps:
     steps:
       - run:
@@ -62,7 +61,18 @@ commands:
           command: |
             sudo apt-get update
             sudo apt-get install -y cmake curl clang llvm gcc-powerpc-linux-gnu
+            rustup default `cat rust-toolchain`
             rustup component add clippy rustfmt
+            rustup toolchain install $RUST_NIGHTLY
+      - run:
+          name: Set cargo Environment
+          command: |
+            # https://doc.rust-lang.org/nightly/cargo/reference/unstable.html#features
+            export CARGOFLAGS=$(cat cargo-flags)
+            echo 'export CARGOFLAGS='${CARGOFLAGS} >> $BASH_ENV
+            # Use nightly version of cargo to access the new feature resolver
+            echo 'export CARGO=$(rustup which cargo --toolchain $RUST_NIGHTLY)' >> $BASH_ENV
+            # Turn on the experimental feature resolver in cargo. See:
   install_code_coverage_deps:
     steps:
       - run:
@@ -70,7 +80,7 @@ commands:
           command: |
             sudo apt-get update
             sudo apt-get install lcov
-            cargo install --force grcov
+            $CARGO $CARGOFLAGS install --force grcov
   install_docker_linter:
     steps:
       - run:
@@ -84,6 +94,59 @@ commands:
       - run:
           name: Install nightly toolchain for features not in beta/stable
           command: rustup install nightly
+  install_sccache:
+    steps:
+      - restore_cache:
+          name: Restore sccache binary
+          key: sccache-0.2.13
+      - run:
+          name: Install scccache
+          command: |
+            if ! [ -e /usr/local/cargo/bin/sccache ]; then
+              $CARGO $CARGOFLAGS install sccache --version=0.2.13
+            else
+              echo 'sccache binary is found. Skipping install.'
+            fi
+            echo 'export SCCACHE_CACHE_SIZE=4G' >> $BASH_ENV
+            echo 'export RUSTC_WRAPPER=sccache' >> $BASH_ENV
+            echo 'export CC="sccache cc"' >> $BASH_ENV
+            echo 'export CXX="sccache c++"' >> $BASH_ENV
+      - save_cache:
+          name: Save sccache binary
+          key: sccache-0.2.13
+          paths:
+            - "/usr/local/cargo/bin/sccache"
+  save_sccache:
+    description: Save shared compilation cache for future jobs
+    steps:
+      - run:
+          name: Show sccache
+          command: sccache -s
+      - run:
+          name: Generate date code for cache key
+          # NOTE circle's built-in key does not support date
+          command: |
+            cat rust-toolchain > /tmp/cache-key
+            date +%Y%m%d >> /tmp/cache-key
+      - save_cache:
+          name: Save sccache
+          key: sccache-{{ .Environment.CIRCLE_JOB }}-{{ checksum "/tmp/cache-key" }}
+          paths:
+            - "/home/circleci/.cache/sccache"
+  restore_sccache:
+    description: Restore shared compilation cache from prior jobs
+    steps:
+      - run:
+          name: Generate date code for cache key
+          command: |
+            cat rust-toolchain > /tmp/cache-key
+            date +%Y%m%d >> /tmp/cache-key
+      - restore_cache:
+          name: Restore sccache
+          key: sccache-{{ .Environment.CIRCLE_JOB }}-{{ checksum "/tmp/cache-key" }}
+      - run:
+          name: Show sccache
+          command: sccache -s
   find_dockerfile_changes:
     steps:
       - run:
@@ -102,9 +165,9 @@ commands:
           key: cargo-package-cache-{{ checksum "Cargo.lock" }}
           # paths are relative to /home/circleci/project/
           paths:
-            - ../../../usr/local/cargo/git
-            - ../../../usr/local/cargo/registry
-            - ../../../usr/local/cargo/.package-cache
+            - "/usr/local/cargo/git"
+            - "/usr/local/cargo/registry"
+            - "/usr/local/cargo/.package-cache"
   restore_cargo_package_cache:
     description: Restore Cargo package cache from prev job
     steps:
@@ -184,7 +247,6 @@ commands:
   build_setup:
     steps:
       - checkout
-      - rust_setup
       - print_versions
       - env_setup
       - install_deps
@@ -204,50 +266,54 @@ jobs:
           name: Git Hooks and Checks
           command: ./scripts/git-checks.sh
       - restore_cargo_package_cache
+      - install_sccache
       - run:
           name: Fetch workspace dependencies over network
-          command: cargo fetch
+          command: $CARGO $CARGOFLAGS fetch
       - save_cargo_package_cache
   lint:
     executor: test-executor
     description: Run Rust linting tools.
     steps:
       - build_setup
-      - run:
-          name: Git Hooks and Checks
-          command: ./scripts/git-checks.sh
       - restore_cargo_package_cache
+      - install_sccache
+      - restore_sccache
       - run:
           name: cargo lint
-          command: cargo x lint
+          command: $CARGO $CARGOFLAGS x lint
       - run:
           name: cargo clippy
-          command: cargo xclippy --workspace --all-targets
+          command: $CARGO $CARGOFLAGS xclippy --workspace --all-targets
       - run:
           name: cargo fmt
-          command: cargo xfmt --check
+          command: $CARGO $CARGOFLAGS xfmt --check
+      - save_sccache
   build-dev:
     executor: build-executor
     description: Development Build
     steps:
       - build_setup
       - restore_cargo_package_cache
+      - install_sccache
+      - restore_sccache
       - run:
-          command: RUST_BACKTRACE=1 cargo build -j 16
+          command: RUST_BACKTRACE=1 $CARGO $CARGOFLAGS build -j 16
       - run:
-          command: RUST_BACKTRACE=1 cargo build -j 16 -p libra-swarm
+          command: RUST_BACKTRACE=1 $CARGO $CARGOFLAGS build -j 16 -p libra-swarm
       - run:
-          command: RUST_BACKTRACE=1 cargo build -j 16 -p cluster-test
+          command: RUST_BACKTRACE=1 $CARGO $CARGOFLAGS build -j 16 -p cluster-test
       - run:
-          command: RUST_BACKTRACE=1 cargo build -j 16 -p libra-fuzzer
+          command: RUST_BACKTRACE=1 $CARGO $CARGOFLAGS build -j 16 -p libra-fuzzer
       - run:
-          command: RUST_BACKTRACE=1 cargo build -j 16 -p language-benchmarks
+          command: RUST_BACKTRACE=1 $CARGO $CARGOFLAGS build -j 16 -p language-benchmarks
       - run:
-          command: RUST_BACKTRACE=1 cargo build -j 16 -p test-generation
+          command: RUST_BACKTRACE=1 $CARGO $CARGOFLAGS build -j 16 -p test-generation
       - run:
           command: |
             rustup target add powerpc-unknown-linux-gnu
-            RUST_BACKTRACE=1 cargo build -j 16 -p transaction-builder -p move-vm-types --target powerpc-unknown-linux-gnu
+            RUST_BACKTRACE=1 $CARGO $CARGOFLAGS build -j 16 -p transaction-builder -p move-vm-types --target powerpc-unknown-linux-gnu
+      - save_sccache
       - build_teardown
   build-release:
     executor: test-executor
@@ -255,9 +321,12 @@ jobs:
     steps:
       - build_setup
       - restore_cargo_package_cache
+      - install_sccache
+      - restore_sccache
       - run:
           name: Build release
-          command: RUST_BACKTRACE=1 cargo build -j 8 --release
+          command: RUST_BACKTRACE=1 $CARGO $CARGOFLAGS  build -j 12 --release
+      - save_sccache
       - build_teardown
   run-e2e-test:
     executor: build-executor
@@ -271,13 +340,15 @@ jobs:
     steps:
       - build_setup
       - restore_cargo_package_cache
+      - install_sccache
+      - restore_sccache
       - run:
           name: Determine test targets for this container.
           # NOTE Currently the tests are distributed by name order. Once test
           # metadata is enabled, the tests can be distributed by run time to
           # speed up this job.
           command: |
-            RUST_BACKTRACE=1 cargo x test --package testsuite -- --list | \
+            RUST_BACKTRACE=1 $CARGO $CARGOFLAGS x test --package testsuite -- --list | \
               grep "::" | sed 's/: .*$//' > e2e_tests
             cat e2e_tests
             echo -e "Found $(wc -l e2e_tests) tests."
@@ -290,20 +361,24 @@ jobs:
           command: |
             set +e
             num_fails=0
+            failed_tests=
             for target in $(cat /tmp/tests_to_run) ; do
               retry=0
               status=1
-              failed_tests=
               while [[ $status != 0 && $retry < ${E2E_RETRIES} ]]; do
                 RUST_BACKTRACE=full timeout --kill-after=370 --preserve-status 360 \
-                  cargo x test --package testsuite -- $target --test-threads 1 --exact --nocapture
+                  $CARGO $CARGOFLAGS x test --package testsuite -- $target --test-threads 1 --exact --nocapture
                 status=$?
                 retry=$((retry + 1))
+                if [[ $status != 0 ]] ; then
+                   echo Failed to execute $target, $retry times
+                fi
                 sleep 10
               done
               if [[ $status != 0 ]] ; then
                 num_fails=$((num_fails + 1))
-                failed_tests="$target\n$failed_tests"
+                echo failed to execute $target
+                failed_tests="${target}\n${failed_tests}"
               elif [[ $retry > 1 ]]; then
                 echo "$target passed after $retry tries" >> ${FLAKY_TESTS_FILE}
               fi
@@ -314,9 +389,10 @@ jobs:
               echo -e $msg > ${MESSAGE_PAYLOAD_FILE}
             fi
             if [[ $num_fails != 0 ]]; then
-              echo -e "$num_fails test(s) failed:\n$failed_tests"
+              echo -e "$num_fails test(s) failed:\n${failed_tests}"
             fi
             exit $num_fails
+      - save_sccache
       - send_message:
           payload_file: "${MESSAGE_PAYLOAD_FILE}"
           build_url: "${CIRCLE_BUILD_URL}#tests/containers/${CIRCLE_NODE_INDEX}"
@@ -328,10 +404,13 @@ jobs:
     steps:
       - build_setup
       - restore_cargo_package_cache
+      - install_sccache
+      - restore_sccache
       - run:
           name: Run all unit tests
           command: |
-            RUST_BACKTRACE=1 $CI_TIMEOUT cargo x test --jobs 8 --unit
+            RUST_BACKTRACE=1 $CI_TIMEOUT $CARGO $CARGOFLAGS x test --jobs 12 --unit
+      - save_sccache
   run-crypto-unit-test:
     executor: audit-executor
     description: Run crypto unit tests without formally verified crypto, to insulate against a curve25519 "default" backend regression
@@ -342,8 +421,8 @@ jobs:
           name: Run crypto unit tests
           command: |
             cd crypto/crypto && \
-            RUST_BACKTRACE=1 cargo test \
-              --features='std u64_backend batch' \
+            RUST_BACKTRACE=1 $CARGO $CARGOFLAGS test \
+              --features='vanilla' \
               --no-default-features
   run-flaky-unit-test:
     executor: test-executor
@@ -356,16 +435,6 @@ jobs:
           command: |
             RUST_BACKTRACE=1 $CI_TIMEOUT \
             ./scripts/run_quarantined.sh -c <your package here> -r 3 -f
-  validate-cluster-test-dockerfile:
-    description: Validate that committed docker files for cluster test are up to date
-    executor: audit-executor
-    steps:
-      - build_setup
-      - run:
-          # generate dockerfile; diff config to existing one
-          name: Validate cluster-test dockerfiles
-          command: ./docker/cluster-test/generate.sh
-      - build_teardown
   audit:
     executor: audit-executor
     steps:
@@ -374,20 +443,21 @@ jobs:
       - run:
           name: Install Cargo Audit
           command: |
-            cargo install --force cargo-audit
+            $CARGO $CARGOFLAGS install --force cargo-audit
       - run:
           # NOTE ignored advisory rules
           # RUSTSEC-2018-0015 - term
           # RUSTSEC-2019-0031 - spin
           name: Audit crates
           command: |
-            cargo audit --deny-warnings \
+            $CARGO $CARGOFLAGS audit --deny-warnings \
               --ignore RUSTSEC-2018-0015 \
-              --ignore RUSTSEC-2019-0031
+              --ignore RUSTSEC-2019-0031 \
+              --ignore RUSTSEC-2020-0016
       - build_teardown
   code-coverage:
     description: Run code coverage
-    executor: build-executor
+    executor: unittest-executor
     environment:
       MESSAGE_PAYLOAD_FILE: "/tmp/message_payload"
     steps:
@@ -421,9 +491,8 @@ jobs:
           command: terraform validate
           working_directory: terraform/
   lint-docker:
-    machine:
-      image: ubuntu-1604:201903-01
-    resource_class: large
+    executor: audit-executor
+    description: Lint changed Dockerfiles
     steps:
       - checkout
       - run:
@@ -508,15 +577,19 @@ jobs:
     description: Documentation Build
     steps:
       - build_setup
+      - restore_cargo_package_cache
+      - install_sccache
+      - restore_sccache
       - run:
           name: Generate documentation
           command: |
             # Use `RUSTC_BOOTSTRAP` in order to use the `--enable-index-page` flag of rustdoc
             # This is needed in order to generate a landing page `index.html` for workspaces
-            RUSTC_BOOTSTRAP=1 RUSTDOCFLAGS="-Z unstable-options --enable-index-page" cargo doc --no-deps --workspace --lib
+            RUSTC_BOOTSTRAP=1 RUSTDOCFLAGS="-Z unstable-options --enable-index-page" $CARGO $CARGOFLAGS doc --no-deps --workspace --lib
       - persist_to_workspace:
           root: target
           paths: doc
+      - save_sccache
   deploy-docs:
     docker:
       - image: node:8.10.0
@@ -540,34 +613,165 @@ jobs:
           name: Deploy to gh-pages branch
           command: |
             gh-pages --dotfiles --message "[skip ci] documentation update" --dist target/doc
+
+  ######################################################################################################
+  # Publish docker artifacts for prs targeting release branches built in "auto" by bors                #
+  ######################################################################################################
+  docker-pre-publish:
+    executor: docker-executor
+    description: publish docker images
+    steps:
+      - checkout
+      - run:
+          name: should pre build docker images (targeting a release branch)?
+          command: |
+            export commit_message=$( git log -1 --pretty=%B )
+            export pr_num=`echo "$commit_message" | tail -2 | head -1 | sed 's/Closes: #//'`
+            if [ -z $pr_num ]; then
+              echo "Did not find pull request num in commit message. -\\_(O_o)_/-";
+              exit 1
+            fi
+            curl -o /tmp/pr https://api.github.com/repos/libra/libra/pulls/${pr_num}
+            export BRANCH=$( cat /tmp/pr | jq ".base .ref" | sed 's/"//g' )
+
+            export IS_RELEASE=$( if [[ "$BRANCH" =~ "^v[0-9|.]+-release$" ]]; then echo true; else echo false; fi )
+            export IS_TEST=$( if [[ "$BRANCH" =~ "^testflow[0-9|.]+$" ]]; then echo true; else echo false; fi )
+            export IS_PRE_RELEASE=$( if [[ "$BRANCH" =~ "^premainnet-[0-9|.]+$" ]]; then echo true; else echo false; fi )
+
+            if [[ $IS_RELEASE  == true ]] || [[ $IS_TEST == true ]] || [[ $IS_PRE_RELEASE == true ]] ; then
+              echo "$DOCKERHUB_PASSWORD" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
+              docker/update_or_build.sh -u -p -b ${BRANCH} -n client
+              docker/update_or_build.sh -u -p -b ${BRANCH} -n init
+              docker/update_or_build.sh -u -p -b ${BRANCH} -n mint
+              docker/update_or_build.sh -u -p -b ${BRANCH} -n safety-rules
+              docker/update_or_build.sh -u -p -b ${BRANCH} -n tools
+              docker/update_or_build.sh -u -p -b ${BRANCH} -n validator-dynamic
+              docker/update_or_build.sh -u -p -b ${BRANCH} -n cluster-test
+              #build but don't publish
+              docker/update_or_build.sh -p -b ${BRANCH} -n validator
+            else
+              echo Targeting branch $TARGET_BRANCH will not publish docker images.
+            fi
+
+  ######################################################################################################
+  # Docker Builds:                                                                                     #
+  ######################################################################################################
+  docker-publish:
+    executor: docker-executor
+    description: publish docker images
+    steps:
+      - checkout
+      - run:
+          name: pull pre images (or build if not pullable) and push release docker images
+          command: |
+            set -x
+            export BRANCH=${CIRCLE_BRANCH}
+            echo "$DOCKERHUB_PASSWORD" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
+            docker/update_or_build.sh -u -b ${BRANCH} -n client
+            docker/update_or_build.sh -u -b ${BRANCH} -n init
+            docker/update_or_build.sh -u -b ${BRANCH} -n mint
+            docker/update_or_build.sh -u -b ${BRANCH} -n safety-rules
+            docker/update_or_build.sh -u -b ${BRANCH} -n tools
+            docker/update_or_build.sh -u -b ${BRANCH} -n validator-dynamic
+            docker/update_or_build.sh -u -b ${BRANCH} -n cluster-test
+
 workflows:
   commit-workflow:
     jobs:
-      - lint-docker
-      - validate-cluster-test-dockerfile
-      - terraform
+      - lint-docker:
+          filters:
+            branches:
+              ignore:
+                - gh-pages
+                - master
+                - /^testflow[\d|.]+$/
+                - /^premainnet-[\d|.]+$/
+                - /^v[\d|.]+-release$/
+      - terraform:
+          filters:
+            branches:
+              ignore:
+                - gh-pages
+                - master
+                - /^testflow[\d|.]+$/
+                - /^premainnet-[\d|.]+$/
+                - /^v[\d|.]+-release$/
       - prefetch-crates
       - lint:
           requires:
             - prefetch-crates
+          filters:
+            branches:
+              ignore:
+                - gh-pages
+                - /^testflow[\d|.]+$/
+                - /^premainnet-0.[\d|.]+$/
+                - /^v[\d|.]+-release$/
       - build-dev:
           requires:
             - prefetch-crates
+          filters:
+            branches:
+              ignore:
+                - gh-pages
+                - master
+                - /^testflow[\d|.]+$/
+                - /^premainnet-[\d|.]+$/
+                - /^v[\d|.]+-release$/
       - build-release:
           requires:
             - prefetch-crates
+          filters:
+            branches:
+              ignore:
+                - gh-pages
+                - master
+                - /^testflow[\d|.]+$/
+                - /^premainnet-[\d|.]+$/
+                - /^v[\d|.]+-release$/
       - run-e2e-test:
           requires:
             - prefetch-crates
+          filters:
+            branches:
+              ignore:
+                - gh-pages
+                - master
+                - /^testflow[\d|.]+$/
+                - /^premainnet-[\d|.]+$/
+                - /^v[\d|.]+-release$/
       - run-unit-test:
           requires:
             - prefetch-crates
+          filters:
+            branches:
+              ignore:
+                - gh-pages
+                - master
+                - /^testflow[\d|.]+$/
+                - /^premainnet-[\d|.]+$/
+                - /^v[\d|.]+-release$/
       - run-crypto-unit-test:
           requires:
             - prefetch-crates
+          filters:
+            branches:
+              ignore:
+                - gh-pages
+                - master
+                - /^testflow[\d|.]+$/
+                - /^premainnet-[\d|.]+$/
+                - /^v[\d|.]+-release$/
       - build-docs:
           requires:
             - lint
+          filters:
+            branches:
+              ignore:
+                - gh-pages
+                - /^testflow[\d|.]+$/
+                - /^premainnet-[\d|.]+$/
+                - /^v[\d|.]+-release$/
       - deploy-docs:
           requires:
             - build-docs
@@ -578,8 +782,20 @@ workflows:
           requires:
             - prefetch-crates
           filters:
-           branches:
-             only: master
+            branches:
+              only: master
+      - docker-pre-publish:
+          filters:
+            branches:
+              only:
+                - auto
+      - docker-publish:
+          filters:
+            branches:
+              only:
+                - /^testflow[\d|.]+$/
+                - /^premainnet-[\d|.]+$/
+                - /^v[\d|.]+-release$/
 
   scheduled-workflow:
     triggers:

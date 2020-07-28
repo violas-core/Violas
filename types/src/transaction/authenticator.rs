@@ -5,6 +5,7 @@ use crate::account_address::AccountAddress;
 use anyhow::{Error, Result};
 use libra_crypto::{
     ed25519::{Ed25519PublicKey, Ed25519Signature},
+    hash::CryptoHash,
     multi_ed25519::{MultiEd25519PublicKey, MultiEd25519Signature},
     traits::Signature,
     CryptoMaterialError, HashValue, ValidCryptoMaterial, ValidCryptoMaterialStringExt,
@@ -91,7 +92,7 @@ impl TransactionAuthenticator {
     }
 
     /// Return Ok if the authenticator's public key matches its signature, Err otherwise
-    pub fn verify_signature(&self, message: &HashValue) -> Result<()> {
+    pub fn verify<T: Serialize + CryptoHash>(&self, message: &T) -> Result<()> {
         match self {
             Self::Ed25519 {
                 public_key,

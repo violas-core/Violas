@@ -8,7 +8,6 @@
 
 pub use interface::NetworkProvider;
 
-pub mod common;
 pub mod connectivity_manager;
 pub mod constants;
 pub mod error;
@@ -26,6 +25,8 @@ pub mod transport;
 mod noise;
 #[cfg(any(feature = "testing", feature = "fuzzing"))]
 pub mod noise;
+#[cfg(any(test, feature = "testing", feature = "fuzzing"))]
+pub mod testutils;
 
 pub type DisconnectReason = peer::DisconnectReason;
 pub type ConnectivityRequest = connectivity_manager::ConnectivityRequest;

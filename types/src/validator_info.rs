@@ -6,15 +6,18 @@ use crate::{account_address::AccountAddress, validator_config::ValidatorConfig};
 use libra_crypto::Uniform;
 use libra_crypto::{ed25519::Ed25519PublicKey, x25519};
 #[cfg(any(test, feature = "fuzzing"))]
-use libra_network_address::NetworkAddress;
-#[cfg(any(test, feature = "fuzzing"))]
-use libra_network_address::RawNetworkAddress;
+use libra_network_address::{
+    encrypted::{
+        RawEncNetworkAddress, TEST_SHARED_VAL_NETADDR_KEY, TEST_SHARED_VAL_NETADDR_KEY_VERSION,
+    },
+    NetworkAddress, RawNetworkAddress,
+};
 #[cfg(any(test, feature = "fuzzing"))]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
-use std::fmt;
 #[cfg(any(test, feature = "fuzzing"))]
-use std::{convert::TryFrom, str::FromStr};
+use std::convert::TryFrom;
+use std::fmt;
 
 /// After executing a special transaction indicates a change to the next epoch, consensus
 /// and networking get the new list of validators, their keys, and their voting power.  Consensus
@@ -61,12 +64,21 @@ impl ValidatorInfo {
     ) -> Self {
         let private_key = x25519::PrivateKey::generate_for_testing();
         let validator_network_identity_public_key = private_key.public_key();
-        let network_address = NetworkAddress::from_str("/ip4/127.0.0.1/tcp/1234").unwrap();
-        let validator_network_address = RawNetworkAddress::try_from(&network_address).unwrap();
+
+        let addr = NetworkAddress::mock();
+        let raw_addr = RawNetworkAddress::try_from(&addr).unwrap();
+        let enc_addr = raw_addr.encrypt(
+            &TEST_SHARED_VAL_NETADDR_KEY,
+            TEST_SHARED_VAL_NETADDR_KEY_VERSION,
+            &account_address,
+            0,
+            0,
+        );
+        let validator_network_address = RawEncNetworkAddress::try_from(&enc_addr).unwrap();
 
         let private_key = x25519::PrivateKey::generate_for_testing();
         let full_node_network_identity_public_key = private_key.public_key();
-        let full_node_network_address = RawNetworkAddress::try_from(&network_address).unwrap();
+        let full_node_network_address = RawNetworkAddress::try_from(&addr).unwrap();
         let config = ValidatorConfig::new(
             consensus_public_key,
             validator_network_identity_public_key,
@@ -106,5 +118,10 @@ impl ValidatorInfo {
     /// Returns the validator's config
     pub fn config(&self) -> &ValidatorConfig {
         &self.config
+    }
+
+    /// Returns the validator's config, consuming self
+    pub fn into_config(self) -> ValidatorConfig {
+        self.config
     }
 }

@@ -4,15 +4,28 @@
 // For some reason deriving `Arbitrary` results in clippy firing a `unit_arg` violation
 #![allow(clippy::unit_arg)]
 
-use libra_canonical_serialization::{
-    from_bytes, serialized_size, to_bytes, Error, MAX_SEQUENCE_LENGTH,
-};
-use proptest::prelude::*;
-use proptest_derive::Arbitrary;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
+    convert::TryFrom,
     fmt,
+};
+
+use proptest::prelude::*;
+use proptest_derive::Arbitrary;
+use rand::{rngs::StdRng, SeedableRng};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+
+use libra_canonical_serialization::{
+    from_bytes, serialized_size, to_bytes, Error, MAX_CONTAINER_DEPTH, MAX_SEQUENCE_LENGTH,
+};
+use libra_crypto::{
+    ed25519::{
+        Ed25519PrivateKey, Ed25519PublicKey, Ed25519Signature, ED25519_PRIVATE_KEY_LENGTH,
+        ED25519_PUBLIC_KEY_LENGTH, ED25519_SIGNATURE_LENGTH,
+    },
+    multi_ed25519::{MultiEd25519PrivateKey, MultiEd25519PublicKey, MultiEd25519Signature},
+    test_utils::{TestLibraCrypto, TEST_SEED},
+    Signature, SigningKey, Uniform,
 };
 
 fn is_same<T>(t: T)
@@ -567,4 +580,170 @@ fn serde_known_vector() {
     // make sure we can deserialize the test vector into expected struct
     let deserialized_foo: Foo = from_bytes(&test_vector).unwrap();
     assert_eq!(f, deserialized_foo);
+}
+
+#[derive(Debug, Deserialize, Serialize, PartialEq, Eq, Clone)]
+struct List {
+    next: Option<(usize, Box<List>)>,
+}
+
+impl List {
+    fn empty() -> Self {
+        Self { next: None }
+    }
+
+    fn cons(value: usize, tail: List) -> Self {
+        Self {
+            next: Some((value, Box::new(tail))),
+        }
+    }
+
+    fn integers(len: usize) -> Self {
+        if len == 0 {
+            Self::empty()
+        } else {
+            Self::cons(len - 1, Self::integers(len - 1))
+        }
+    }
+}
+
+#[test]
+fn test_recursion_limit() {
+    let l1 = List::integers(4);
+    let b1 = to_bytes(&l1).unwrap();
+    assert_eq!(
+        b1,
+        vec![
+            1, 3, 0, 0, 0, 0, 0, 0, 0, 1, 2, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0,
+            0, 0, 0, 0, 0, 0, 0, 0
+        ]
+    );
+    assert_eq!(from_bytes::<List>(&b1).unwrap(), l1);
+
+    let l2 = List::integers(MAX_CONTAINER_DEPTH - 1);
+    let b2 = to_bytes(&l2).unwrap();
+    assert_eq!(from_bytes::<List>(&b2).unwrap(), l2);
+
+    let l3 = List::integers(MAX_CONTAINER_DEPTH);
+    assert_eq!(
+        to_bytes(&l3),
+        Err(Error::ExceededContainerDepthLimit("List"))
+    );
+    let mut b3 = vec![1, 243, 1, 0, 0, 0, 0, 0, 0];
+    b3.extend(b2);
+    assert_eq!(
+        from_bytes::<List>(&b3),
+        Err(Error::ExceededContainerDepthLimit("List"))
+    );
+
+    let b2_pair = to_bytes(&(&l2, &l2)).unwrap();
+    assert_eq!(
+        from_bytes::<(List, List)>(&b2_pair).unwrap(),
+        (l2.clone(), l2.clone())
+    );
+    assert_eq!(
+        to_bytes(&(&l2, &l3)),
+        Err(Error::ExceededContainerDepthLimit("List"))
+    );
+    assert_eq!(
+        to_bytes(&(&l3, &l2)),
+        Err(Error::ExceededContainerDepthLimit("List"))
+    );
+    assert_eq!(
+        to_bytes(&(&l3, &l3)),
+        Err(Error::ExceededContainerDepthLimit("List"))
+    );
+}
+
+#[test]
+fn ed25519_material() {
+    use std::borrow::Cow;
+
+    let private_key =
+        Ed25519PrivateKey::try_from([1u8; ED25519_PRIVATE_KEY_LENGTH].as_ref()).unwrap();
+    let public_key = Ed25519PublicKey::from(&private_key);
+
+    let serialized_public_key = to_bytes(&Cow::Borrowed(&public_key)).unwrap();
+    // Expected size should be 1 byte due to LCS length prefix + 32 bytes for the raw key bytes
+    assert_eq!(serialized_public_key.len(), 1 + ED25519_PUBLIC_KEY_LENGTH);
+
+    // Ensure public key serialization - deserialization is stable and deterministic
+    let deserialized_public_key: Ed25519PublicKey = from_bytes(&serialized_public_key).unwrap();
+    assert_eq!(deserialized_public_key, public_key);
+
+    let message = TestLibraCrypto("Hello, World".to_string());
+    let signature: Ed25519Signature = private_key.sign(&message);
+
+    let serialized_signature = to_bytes(&Cow::Borrowed(&signature)).unwrap();
+    // Expected size should be 1 byte due to LCS length prefix + 64 bytes for the raw signature bytes
+    assert_eq!(serialized_signature.len(), 1 + ED25519_SIGNATURE_LENGTH);
+
+    // Ensure signature serialization - deserialization is stable and deterministic
+    let deserialized_signature: Ed25519Signature = from_bytes(&serialized_signature).unwrap();
+    assert_eq!(deserialized_signature, signature);
+
+    // Verify signature
+    let verified_signature = signature.verify(&message, &public_key);
+    assert!(verified_signature.is_ok())
+}
+
+#[test]
+fn multi_ed25519_material() {
+    use std::borrow::Cow;
+
+    // Helper function to generate N ed25519 private keys.
+    fn generate_keys(n: usize) -> Vec<Ed25519PrivateKey> {
+        let mut rng = StdRng::from_seed(TEST_SEED);
+        (0..n)
+            .map(|_| Ed25519PrivateKey::generate(&mut rng))
+            .collect()
+    }
+
+    let num_of_keys = 10;
+    let threshold = 7;
+    let private_keys_10 = generate_keys(num_of_keys);
+    let multi_private_key_7of10 = MultiEd25519PrivateKey::new(private_keys_10, threshold).unwrap();
+    let multi_public_key_7of10 = MultiEd25519PublicKey::from(&multi_private_key_7of10);
+
+    let serialized_multi_public_key = to_bytes(&Cow::Borrowed(&multi_public_key_7of10)).unwrap();
+
+    // Expected size due to specialization is
+    // 2 bytes for LCS length prefix (due to ULEB128)
+    // + 10 * single_pub_key_size bytes (each key is the compressed Edwards Y coordinate)
+    // + 1 byte for the threshold
+    assert_eq!(
+        serialized_multi_public_key.len(),
+        2 + num_of_keys * ED25519_PUBLIC_KEY_LENGTH + 1
+    );
+
+    let deserialized_multi_public_key: MultiEd25519PublicKey =
+        from_bytes(&serialized_multi_public_key).unwrap();
+    assert_eq!(deserialized_multi_public_key, multi_public_key_7of10);
+
+    let message = TestLibraCrypto("Hello, World".to_string());
+
+    // Verifying a 7-of-10 signature against a public key with the same threshold should pass.
+    let multi_signature_7of10: MultiEd25519Signature = multi_private_key_7of10.sign(&message);
+
+    let serialized_multi_signature = to_bytes(&Cow::Borrowed(&multi_signature_7of10)).unwrap();
+    // Expected size due to specialization is
+    // 2 bytes for LCS length prefix (due to ULEB128)
+    // + 7 * single_signature_size bytes (each sig is of the form (R,s),
+    // a 32B compressed Edwards Y coordinate concatenated with a 32B scalar)
+    // + 4 bytes for the bitmap (the bitmap can hold up to 32 bits)
+    assert_eq!(
+        serialized_multi_signature.len(),
+        2 + threshold as usize * ED25519_SIGNATURE_LENGTH + 4
+    );
+
+    // Verify bitmap
+    assert_eq!(
+        multi_signature_7of10.bitmap(),
+        &[0b1111_1110, 0u8, 0u8, 0u8]
+    );
+
+    // Verify signature
+    assert!(multi_signature_7of10
+        .verify(&message, &multi_public_key_7of10)
+        .is_ok());
 }

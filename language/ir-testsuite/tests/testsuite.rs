@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::Result;
-use bytecode_verifier::verifier::VerifiedModule;
 use compiled_stdlib::{stdlib_modules, StdLibOptions};
 use functional_tests::{
     compiler::{Compiler, ScriptOrModule},
@@ -15,13 +14,14 @@ use ir_to_bytecode::{
 use libra_types::account_address::AccountAddress;
 use move_ir_types::ast;
 use std::path::Path;
+use vm::CompiledModule;
 
 struct IRCompiler {
-    deps: Vec<VerifiedModule>,
+    deps: Vec<CompiledModule>,
 }
 
 impl IRCompiler {
-    fn new(stdlib_modules: Vec<VerifiedModule>) -> Self {
+    fn new(stdlib_modules: Vec<CompiledModule>) -> Self {
         IRCompiler {
             deps: stdlib_modules,
         }
@@ -30,7 +30,7 @@ impl IRCompiler {
 
 impl Compiler for IRCompiler {
     /// Compile a transaction script or module.
-    fn compile<Logger: FnMut(String) -> ()>(
+    fn compile<Logger: FnMut(String)>(
         &mut self,
         mut log: Logger,
         address: AccountAddress,
@@ -44,9 +44,7 @@ impl Compiler for IRCompiler {
             ast::ScriptOrModule::Module(parsed_module) => {
                 log(format!("{}", &parsed_module));
                 let module = compile_module(address, parsed_module, &self.deps)?.0;
-                let verified =
-                    VerifiedModule::bypass_verifier_DANGEROUS_FOR_TESTING_ONLY(module.clone());
-                self.deps.push(verified);
+                self.deps.push(module.clone());
                 ScriptOrModule::Module(module)
             }
         })

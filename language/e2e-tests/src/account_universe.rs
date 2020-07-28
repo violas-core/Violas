@@ -30,7 +30,7 @@ use crate::{
 use libra_crypto::ed25519::{Ed25519PrivateKey, Ed25519PublicKey};
 use libra_types::{
     transaction::{SignedTransaction, TransactionStatus},
-    vm_error::{StatusCode, VMStatus},
+    vm_status::{known_locations, KeptVMStatus, StatusCode},
 };
 use once_cell::sync::Lazy;
 use proptest::{prelude::*, strategy::Union};
@@ -259,10 +259,7 @@ pub fn txn_one_account_result(
             sender.sequence_number += 1;
             sender.sent_events_count += 1;
             sender.balance -= to_deduct;
-            (
-                TransactionStatus::Keep(VMStatus::new(StatusCode::EXECUTED)),
-                true,
-            )
+            (TransactionStatus::Keep(KeptVMStatus::Executed), true)
         }
         (true, true, false) => {
             // Enough gas to pass validation and to do the transfer, but not enough to succeed
@@ -271,7 +268,10 @@ pub fn txn_one_account_result(
             sender.sequence_number += 1;
             sender.balance -= gas_used * gas_price;
             (
-                TransactionStatus::Keep(VMStatus::new(StatusCode::ABORTED).with_sub_status(6)),
+                TransactionStatus::Keep(KeptVMStatus::MoveAbort(
+                    known_locations::account_module_abort(),
+                    6,
+                )),
                 false,
             )
         }
@@ -282,16 +282,17 @@ pub fn txn_one_account_result(
             sender.sequence_number += 1;
             sender.balance -= low_gas_used * gas_price;
             (
-                TransactionStatus::Keep(VMStatus::new(StatusCode::ABORTED).with_sub_status(10)),
+                TransactionStatus::Keep(KeptVMStatus::MoveAbort(
+                    known_locations::account_module_abort(),
+                    10,
+                )),
                 false,
             )
         }
         (false, _, _) => {
             // Not enough gas to pass validation. Nothing will happen.
             (
-                TransactionStatus::Discard(VMStatus::new(
-                    StatusCode::INSUFFICIENT_BALANCE_FOR_TRANSACTION_FEE,
-                )),
+                TransactionStatus::Discard(StatusCode::INSUFFICIENT_BALANCE_FOR_TRANSACTION_FEE),
                 false,
             )
         }
@@ -328,7 +329,8 @@ pub fn all_transactions_strategy(
     prop_oneof![
         // Most transactions should be p2p payments.
         8 => p2p_strategy(min, max),
-        1 => create_account_strategy(min, max),
+        // TODO: resurrecte once we have unhosted wallets
+        //1 => create_account_strategy(min, max),
         1 => any::<RotateKeyGen>().prop_map(RotateKeyGen::arced),
         1 => bad_txn_strategy(),
     ]

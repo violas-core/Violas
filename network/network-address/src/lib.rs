@@ -1,10 +1,12 @@
 // Copyright (c) The Libra Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::encrypted::{EncNetworkAddress, Key, KeyVersion};
 use libra_crypto::{
     traits::{CryptoMaterialError, ValidCryptoMaterialStringExt},
     x25519,
 };
+use move_core_types::account_address::AccountAddress;
 #[cfg(any(test, feature = "fuzzing"))]
 use proptest::{collection::vec, prelude::*};
 #[cfg(any(test, feature = "fuzzing"))]
@@ -14,12 +16,14 @@ use std::{
     convert::{Into, TryFrom},
     fmt,
     iter::IntoIterator,
-    net::{self, IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+    net::{self, IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs},
     num,
     str::FromStr,
     string::ToString,
 };
 use thiserror::Error;
+
+pub mod encrypted;
 
 const MAX_DNS_NAME_SIZE: usize = 255;
 
@@ -208,6 +212,24 @@ impl RawNetworkAddress {
     pub fn new(bytes: Vec<u8>) -> Self {
         Self(bytes)
     }
+
+    pub fn encrypt(
+        self,
+        shared_val_netaddr_key: &Key,
+        key_version: KeyVersion,
+        account: &AccountAddress,
+        seq_num: u64,
+        addr_idx: u32,
+    ) -> EncNetworkAddress {
+        EncNetworkAddress::encrypt(
+            self,
+            shared_val_netaddr_key,
+            key_version,
+            account,
+            seq_num,
+            addr_idx,
+        )
+    }
 }
 
 impl Into<Vec<u8>> for RawNetworkAddress {
@@ -335,6 +357,22 @@ impl NetworkAddress {
         })
     }
 
+    /// A function to rotate public keys for `NoiseIK` protocols
+    pub fn rotate_noise_public_key(
+        &mut self,
+        to_replace: &x25519::PublicKey,
+        new_public_key: &x25519::PublicKey,
+    ) {
+        for protocol in self.0.iter_mut() {
+            // Replace the public key in any Noise protocols that match the key
+            if let Protocol::NoiseIK(public_key) = protocol {
+                if public_key == to_replace {
+                    *protocol = Protocol::NoiseIK(*new_public_key);
+                }
+            }
+        }
+    }
+
     #[cfg(any(test, feature = "fuzzing"))]
     pub fn mock() -> Self {
         NetworkAddress::new(vec![Protocol::Memory(1234)])
@@ -372,6 +410,24 @@ impl FromStr for NetworkAddress {
         }
 
         Ok(NetworkAddress::new(protocols))
+    }
+}
+
+impl ToSocketAddrs for NetworkAddress {
+    type Iter = std::vec::IntoIter<SocketAddr>;
+
+    fn to_socket_addrs(&self) -> Result<Self::Iter, std::io::Error> {
+        if let Some(((ipaddr, port), _)) = parse_ip_tcp(self.as_slice()) {
+            Ok(vec![SocketAddr::new(ipaddr, port)].into_iter())
+        } else if let Some(((ip_filter, dns_name, port), _)) = parse_dns_tcp(self.as_slice()) {
+            format!("{}:{}", dns_name, port).to_socket_addrs().map(|v| {
+                v.filter(|addr| ip_filter.matches(addr.ip()))
+                    .collect::<Vec<_>>()
+                    .into_iter()
+            })
+        } else {
+            Ok(vec![].into_iter())
+        }
     }
 }
 

@@ -6,35 +6,33 @@
 //! Verifies bytecode sanity.
 
 // Bounds checks are implemented in the `vm` crate.
-pub mod absint;
-pub mod acquires_list_verifier;
 pub mod check_duplication;
 pub mod code_unit_verifier;
 pub mod constants;
 pub mod control_flow;
 pub mod control_flow_graph;
+pub mod dependencies;
 pub mod instantiation_loops;
 pub mod instruction_consistency;
-pub mod locals_safety;
-pub mod reference_safety;
-pub mod resolver;
 pub mod resources;
 pub mod signature;
-pub mod stack_usage_verifier;
 pub mod struct_defs;
-pub mod type_safety;
 pub mod unused_entries;
-
 pub mod verifier;
 
 pub use check_duplication::DuplicationChecker;
 pub use code_unit_verifier::CodeUnitVerifier;
+pub use dependencies::DependencyChecker;
 pub use instruction_consistency::InstructionConsistency;
 pub use resources::ResourceTransitiveChecker;
 pub use signature::SignatureChecker;
-pub use stack_usage_verifier::StackUsageVerifier;
 pub use struct_defs::RecursiveStructDefChecker;
-pub use verifier::{
-    batch_verify_modules, verify_main_signature, verify_module_dependencies,
-    verify_script_dependencies, VerifiedModule, VerifiedScript,
-};
+pub use verifier::{verify_main_signature, verify_module, verify_script};
+
+mod absint;
+mod acquires_list_verifier;
+mod binary_views;
+mod locals_safety;
+mod reference_safety;
+mod stack_usage_verifier;
+mod type_safety;

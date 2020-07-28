@@ -102,6 +102,7 @@
 
 #[macro_use]
 extern crate mirai_annotations;
+mod access_path_cache;
 #[macro_use]
 mod counters;
 pub mod data_cache;
@@ -112,17 +113,24 @@ pub mod foreign_contracts;
 mod libra_vm;
 pub mod transaction_metadata;
 
-#[cfg(test)]
-mod unit_tests;
-
+pub mod libra_transaction_executor;
+pub mod libra_transaction_validator;
 pub mod system_module_names;
 
-pub use crate::libra_vm::LibraVM;
+pub use crate::{
+    libra_transaction_executor::LibraVM, libra_transaction_validator::LibraVMValidator,
+    libra_vm::txn_effects_to_writeset_and_events,
+};
 
 use libra_state_view::StateView;
 use libra_types::{
+    access_path::AccessPath,
     transaction::{SignedTransaction, Transaction, TransactionOutput, VMValidatorResult},
-    vm_error::VMStatus,
+    vm_status::VMStatus,
+};
+use move_core_types::{
+    account_address::AccountAddress,
+    language_storage::{ResourceKey, StructTag},
 };
 
 /// This trait describes the VM's validation interfaces.
@@ -149,4 +157,10 @@ pub trait VMExecutor: Send {
         transactions: Vec<Transaction>,
         state_view: &dyn StateView,
     ) -> Result<Vec<TransactionOutput>, VMStatus>;
+}
+
+/// Get the AccessPath to a resource stored under `address` with type name `tag`
+fn create_access_path(address: AccountAddress, tag: StructTag) -> AccessPath {
+    let resource_tag = ResourceKey::new(address, tag);
+    AccessPath::resource_access_path(&resource_tag)
 }

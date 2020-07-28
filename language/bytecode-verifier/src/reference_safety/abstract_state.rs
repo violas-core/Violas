@@ -2,16 +2,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! This module defines the abstract state for the type and memory safety analysis.
-use crate::absint::{AbstractDomain, JoinResult};
+use crate::{
+    absint::{AbstractDomain, JoinResult},
+    binary_views::FunctionView,
+};
 use borrow_graph::references::RefID;
-use libra_types::vm_error::StatusCode;
+use libra_types::vm_status::StatusCode;
 use mirai_annotations::{checked_postcondition, checked_precondition, checked_verify};
 use std::collections::{BTreeMap, BTreeSet};
 use vm::{
-    access::ModuleAccess,
-    errors::{err_at_offset, VMResult},
+    errors::{PartialVMError, PartialVMResult},
     file_format::{
-        CompiledModule, FieldHandleIndex, FunctionDefinition, LocalIndex, Signature,
+        CodeOffset, FieldHandleIndex, FunctionDefinitionIndex, LocalIndex, Signature,
         SignatureToken, StructDefinitionIndex,
     },
 };
@@ -21,7 +23,7 @@ type BorrowGraph = borrow_graph::graph::BorrowGraph<(), Label>;
 /// AbstractValue represents a reference or a non reference value, both on the stack and stored
 /// in a local
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum AbstractValue {
+pub(crate) enum AbstractValue {
     Reference(RefID),
     NonReference,
 }
@@ -51,7 +53,7 @@ impl AbstractValue {
 
 /// Label is an element of a label on an edge in the borrow graph.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub enum Label {
+enum Label {
     Local(LocalIndex),
     Global(StructDefinitionIndex),
     Field(FieldHandleIndex),
@@ -70,7 +72,8 @@ impl std::fmt::Display for Label {
 
 /// AbstractState is the analysis state over which abstract interpretation is performed.
 #[derive(Clone, Debug, PartialEq)]
-pub struct AbstractState {
+pub(crate) struct AbstractState {
+    current_function: Option<FunctionDefinitionIndex>,
     locals: BTreeMap<LocalIndex, AbstractValue>,
     borrow_graph: BorrowGraph,
     num_locals: usize,
@@ -79,32 +82,21 @@ pub struct AbstractState {
 
 impl AbstractState {
     /// create a new abstract state
-    pub fn new(module: &CompiledModule, function_definition: &FunctionDefinition) -> Self {
-        let func_handle = module.function_handle_at(function_definition.function);
-        let parameter_types = &module.signature_at(func_handle.parameters).0;
-        let additional_local_types = &module
-            .signature_at(
-                function_definition
-                    .code
-                    .as_ref()
-                    .expect("Abstract interpreter should only run on non-native functions")
-                    .locals,
-            )
-            .0;
-
-        let num_locals = parameter_types.len() + additional_local_types.len();
+    pub fn new(function_view: &FunctionView) -> Self {
+        let num_locals = function_view.parameters().len() + function_view.locals().len();
 
         // ids in [0, num_locals) are reserved for constructing canonical state
         // id at num_locals is reserved for the frame root
         let next_id = num_locals + 1;
         let mut state = AbstractState {
+            current_function: function_view.index(),
             locals: BTreeMap::new(),
             borrow_graph: BorrowGraph::new(),
             num_locals,
             next_id,
         };
 
-        for (param_idx, param_ty) in parameter_types.iter().enumerate() {
+        for (param_idx, param_ty) in function_view.parameters().0.iter().enumerate() {
             let value = if param_ty.is_reference() {
                 let id = state.new_ref(param_ty.is_mutable_reference());
                 AbstractValue::Reference(id)
@@ -120,6 +112,13 @@ impl AbstractState {
     /// returns the frame root id
     fn frame_root(&self) -> RefID {
         RefID::new(self.num_locals)
+    }
+
+    fn error(&self, status: StatusCode, offset: CodeOffset) -> PartialVMError {
+        PartialVMError::new(status).at_code_offset(
+            self.current_function.unwrap_or(FunctionDefinitionIndex(0)),
+            offset,
+        )
     }
 
     //**********************************************************************************************
@@ -278,7 +277,11 @@ impl AbstractState {
         }
     }
 
-    pub fn copy_loc(&mut self, offset: usize, local: LocalIndex) -> VMResult<AbstractValue> {
+    pub fn copy_loc(
+        &mut self,
+        offset: CodeOffset,
+        local: LocalIndex,
+    ) -> PartialVMResult<AbstractValue> {
         match self.locals.get(&local).unwrap() {
             AbstractValue::Reference(id) => {
                 let id = *id;
@@ -286,30 +289,33 @@ impl AbstractState {
                 self.add_copy(id, new_id);
                 Ok(AbstractValue::Reference(new_id))
             }
-            AbstractValue::NonReference if self.is_local_mutably_borrowed(local) => Err(
-                err_at_offset(StatusCode::COPYLOC_EXISTS_BORROW_ERROR, offset),
-            ),
+            AbstractValue::NonReference if self.is_local_mutably_borrowed(local) => {
+                Err(self.error(StatusCode::COPYLOC_EXISTS_BORROW_ERROR, offset))
+            }
             AbstractValue::NonReference => Ok(AbstractValue::NonReference),
         }
     }
 
-    pub fn move_loc(&mut self, offset: usize, local: LocalIndex) -> VMResult<AbstractValue> {
+    pub fn move_loc(
+        &mut self,
+        offset: CodeOffset,
+        local: LocalIndex,
+    ) -> PartialVMResult<AbstractValue> {
         match self.locals.remove(&local).unwrap() {
             AbstractValue::Reference(id) => Ok(AbstractValue::Reference(id)),
-            AbstractValue::NonReference if self.is_local_borrowed(local) => Err(err_at_offset(
-                StatusCode::MOVELOC_EXISTS_BORROW_ERROR,
-                offset,
-            )),
+            AbstractValue::NonReference if self.is_local_borrowed(local) => {
+                Err(self.error(StatusCode::MOVELOC_EXISTS_BORROW_ERROR, offset))
+            }
             AbstractValue::NonReference => Ok(AbstractValue::NonReference),
         }
     }
 
     pub fn st_loc(
         &mut self,
-        offset: usize,
+        offset: CodeOffset,
         local: LocalIndex,
         new_value: AbstractValue,
-    ) -> VMResult<()> {
+    ) -> PartialVMResult<()> {
         let old_value = self.locals.insert(local, new_value);
         match old_value {
             None => Ok(()),
@@ -317,19 +323,16 @@ impl AbstractState {
                 self.release(id);
                 Ok(())
             }
-            Some(AbstractValue::NonReference) if self.is_local_borrowed(local) => Err(
-                err_at_offset(StatusCode::STLOC_UNSAFE_TO_DESTROY_ERROR, offset),
-            ),
+            Some(AbstractValue::NonReference) if self.is_local_borrowed(local) => {
+                Err(self.error(StatusCode::STLOC_UNSAFE_TO_DESTROY_ERROR, offset))
+            }
             Some(AbstractValue::NonReference) => Ok(()),
         }
     }
 
-    pub fn freeze_ref(&mut self, offset: usize, id: RefID) -> VMResult<AbstractValue> {
+    pub fn freeze_ref(&mut self, offset: CodeOffset, id: RefID) -> PartialVMResult<AbstractValue> {
         if !self.is_freezable(id, None) {
-            return Err(err_at_offset(
-                StatusCode::FREEZEREF_EXISTS_MUTABLE_BORROW_ERROR,
-                offset,
-            ));
+            return Err(self.error(StatusCode::FREEZEREF_EXISTS_MUTABLE_BORROW_ERROR, offset));
         }
 
         let frozen_id = self.new_ref(false);
@@ -340,19 +343,16 @@ impl AbstractState {
 
     pub fn comparison(
         &mut self,
-        offset: usize,
+        offset: CodeOffset,
         v1: AbstractValue,
         v2: AbstractValue,
-    ) -> VMResult<AbstractValue> {
+    ) -> PartialVMResult<AbstractValue> {
         match (v1, v2) {
             (AbstractValue::Reference(id1), AbstractValue::Reference(id2))
                 if !self.is_readable(id1, None) || !self.is_readable(id2, None) =>
             {
                 // TODO better error code
-                return Err(err_at_offset(
-                    StatusCode::READREF_EXISTS_MUTABLE_BORROW_ERROR,
-                    offset,
-                ));
+                return Err(self.error(StatusCode::READREF_EXISTS_MUTABLE_BORROW_ERROR, offset));
             }
             (AbstractValue::Reference(id1), AbstractValue::Reference(id2)) => {
                 self.release(id1);
@@ -366,24 +366,18 @@ impl AbstractState {
         Ok(AbstractValue::NonReference)
     }
 
-    pub fn read_ref(&mut self, offset: usize, id: RefID) -> VMResult<AbstractValue> {
+    pub fn read_ref(&mut self, offset: CodeOffset, id: RefID) -> PartialVMResult<AbstractValue> {
         if !self.is_readable(id, None) {
-            return Err(err_at_offset(
-                StatusCode::READREF_EXISTS_MUTABLE_BORROW_ERROR,
-                offset,
-            ));
+            return Err(self.error(StatusCode::READREF_EXISTS_MUTABLE_BORROW_ERROR, offset));
         }
 
         self.release(id);
         Ok(AbstractValue::NonReference)
     }
 
-    pub fn write_ref(&mut self, offset: usize, id: RefID) -> VMResult<()> {
+    pub fn write_ref(&mut self, offset: CodeOffset, id: RefID) -> PartialVMResult<()> {
         if !self.is_writable(id) {
-            return Err(err_at_offset(
-                StatusCode::WRITEREF_EXISTS_BORROW_ERROR,
-                offset,
-            ));
+            return Err(self.error(StatusCode::WRITEREF_EXISTS_BORROW_ERROR, offset));
         }
 
         self.release(id);
@@ -392,17 +386,14 @@ impl AbstractState {
 
     pub fn borrow_loc(
         &mut self,
-        offset: usize,
+        offset: CodeOffset,
         mut_: bool,
         local: LocalIndex,
-    ) -> VMResult<AbstractValue> {
+    ) -> PartialVMResult<AbstractValue> {
         // nothing to check in case borrow is mutable since the frame cannot have an full borrow/
         // epsilon outgoing edge
         if !mut_ && self.is_local_mutably_borrowed(local) {
-            return Err(err_at_offset(
-                StatusCode::BORROWLOC_EXISTS_BORROW_ERROR,
-                offset,
-            ));
+            return Err(self.error(StatusCode::BORROWLOC_EXISTS_BORROW_ERROR, offset));
         }
 
         let new_id = self.new_ref(mut_);
@@ -412,11 +403,11 @@ impl AbstractState {
 
     pub fn borrow_field(
         &mut self,
-        offset: usize,
+        offset: CodeOffset,
         mut_: bool,
         id: RefID,
         field: FieldHandleIndex,
-    ) -> VMResult<AbstractValue> {
+    ) -> PartialVMResult<AbstractValue> {
         // Any field borrows will be factored out, so don't check in the mutable case
         let is_mut_borrow_with_full_borrows = || mut_ && self.has_full_borrows(id);
         // For new immutable borrow, the reference must be readable at that field
@@ -425,10 +416,7 @@ impl AbstractState {
 
         if is_mut_borrow_with_full_borrows() || is_imm_borrow_with_mut_borrows() {
             // TODO improve error for mutable case
-            return Err(err_at_offset(
-                StatusCode::BORROWFIELD_EXISTS_MUTABLE_BORROW_ERROR,
-                offset,
-            ));
+            return Err(self.error(StatusCode::BORROWFIELD_EXISTS_MUTABLE_BORROW_ERROR, offset));
         }
 
         let field_borrow_id = self.new_ref(mut_);
@@ -439,13 +427,13 @@ impl AbstractState {
 
     pub fn borrow_global(
         &mut self,
-        offset: usize,
+        offset: CodeOffset,
         mut_: bool,
         resource: StructDefinitionIndex,
-    ) -> VMResult<AbstractValue> {
+    ) -> PartialVMResult<AbstractValue> {
         if (mut_ && self.is_global_borrowed(resource)) || self.is_global_mutably_borrowed(resource)
         {
-            return Err(err_at_offset(StatusCode::GLOBAL_REFERENCE_ERROR, offset));
+            return Err(self.error(StatusCode::GLOBAL_REFERENCE_ERROR, offset));
         }
 
         let new_id = self.new_ref(mut_);
@@ -455,11 +443,11 @@ impl AbstractState {
 
     pub fn move_from(
         &mut self,
-        offset: usize,
+        offset: CodeOffset,
         resource: StructDefinitionIndex,
-    ) -> VMResult<AbstractValue> {
+    ) -> PartialVMResult<AbstractValue> {
         if self.is_global_borrowed(resource) {
-            Err(err_at_offset(StatusCode::GLOBAL_REFERENCE_ERROR, offset))
+            Err(self.error(StatusCode::GLOBAL_REFERENCE_ERROR, offset))
         } else {
             Ok(AbstractValue::NonReference)
         }
@@ -467,15 +455,15 @@ impl AbstractState {
 
     pub fn call(
         &mut self,
-        offset: usize,
+        offset: CodeOffset,
         arguments: Vec<AbstractValue>,
         acquired_resources: &BTreeSet<StructDefinitionIndex>,
         return_: &Signature,
-    ) -> VMResult<Vec<AbstractValue>> {
+    ) -> PartialVMResult<Vec<AbstractValue>> {
         // Check acquires
         for acquired_resource in acquired_resources {
             if self.is_global_borrowed(*acquired_resource) {
-                return Err(err_at_offset(StatusCode::GLOBAL_REFERENCE_ERROR, offset));
+                return Err(self.error(StatusCode::GLOBAL_REFERENCE_ERROR, offset));
             }
         }
 
@@ -485,10 +473,9 @@ impl AbstractState {
         for id in arguments.iter().filter_map(|v| v.ref_id()) {
             if self.borrow_graph.is_mutable(id) {
                 if !self.is_writable(id) {
-                    return Err(err_at_offset(
-                        StatusCode::CALL_BORROWED_MUTABLE_REFERENCE_ERROR,
-                        offset,
-                    ));
+                    return Err(
+                        self.error(StatusCode::CALL_BORROWED_MUTABLE_REFERENCE_ERROR, offset)
+                    );
                 }
                 mutable_references_to_borrow_from.insert(id);
             }
@@ -525,7 +512,7 @@ impl AbstractState {
         Ok(return_values)
     }
 
-    pub fn ret(&mut self, offset: usize, values: Vec<AbstractValue>) -> VMResult<()> {
+    pub fn ret(&mut self, offset: CodeOffset, values: Vec<AbstractValue>) -> PartialVMResult<()> {
         // release all local variables
         let mut released = BTreeSet::new();
         for (_local, stored_value) in self.locals.iter() {
@@ -537,7 +524,7 @@ impl AbstractState {
 
         // Check that no local or global is borrowed
         if !self.is_frame_safe_to_destroy() {
-            return Err(err_at_offset(
+            return Err(self.error(
                 StatusCode::UNSAFE_RET_LOCAL_OR_RESOURCE_STILL_BORROWED,
                 offset,
             ));
@@ -546,10 +533,7 @@ impl AbstractState {
         // Check mutable references can be transfered
         for id in values.into_iter().filter_map(|v| v.ref_id()) {
             if self.borrow_graph.is_mutable(id) && !self.is_writable(id) {
-                return Err(err_at_offset(
-                    StatusCode::RET_BORROWED_MUTABLE_REFERENCE_ERROR,
-                    offset,
-                ));
+                return Err(self.error(StatusCode::RET_BORROWED_MUTABLE_REFERENCE_ERROR, offset));
             }
         }
         Ok(())
@@ -584,6 +568,7 @@ impl AbstractState {
         let canonical_state = AbstractState {
             locals,
             borrow_graph,
+            current_function: self.current_function,
             num_locals: self.num_locals,
             next_id: self.num_locals + 1,
         };
@@ -610,6 +595,7 @@ impl AbstractState {
     }
 
     pub fn join_(&self, other: &Self) -> Self {
+        checked_precondition!(self.current_function == other.current_function);
         checked_precondition!(self.is_canonical() && other.is_canonical());
         checked_precondition!(self.next_id == other.next_id);
         checked_precondition!(self.num_locals == other.num_locals);
@@ -646,10 +632,12 @@ impl AbstractState {
         }
 
         let borrow_graph = self_graph.join(&other_graph);
+        let current_function = self.current_function;
         let next_id = self.next_id;
         let num_locals = self.num_locals;
 
         Self {
+            current_function,
             locals,
             borrow_graph,
             next_id,

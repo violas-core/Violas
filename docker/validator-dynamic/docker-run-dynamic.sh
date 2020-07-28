@@ -5,8 +5,11 @@ set -ex
 
 declare -a params
 if [ -n "${CFG_BASE_CONFIG}" ]; then # Path to base config
-	    echo "${CFG_BASE_CONFIG}" > /opt/libra/etc/base.config.toml
-	    params+="-t /opt/libra/etc/base.config.toml "
+	    echo "${CFG_BASE_CONFIG}" > /opt/libra/etc/base.yaml
+	    params+="-t /opt/libra/etc/base.yaml "
+fi
+if [ -n "${CFG_CHAIN_ID}" ]; then
+        params+="--chain-id ${CFG_CHAIN_ID} "
 fi
 if [ -n "${CFG_LISTEN_ADDR}" ]; then # Advertised listen address for network config
 	    params+="-a /ip4/${CFG_LISTEN_ADDR}/tcp/6180 "
@@ -49,7 +52,6 @@ if [ -n "${CFG_FULLNODE_SEED}" ]; then # We have a full node seed, add fullnode 
 	    fullnode_params+="-f ${CFG_NUM_FULLNODES} "
 	    fullnode_params+="-c ${CFG_FULLNODE_SEED} "
 
-
 	/opt/libra/bin/config-builder full-node extend \
 	    --data-dir /opt/libra/data/common \
 	    --output-dir /opt/libra/etc/ \
@@ -69,9 +71,9 @@ if [ -n "${CFG_OVERRIDES}" ]; then
       KEY="${KEY_VAL[0]}"
       VAL="${KEY_VAL[1]}"
       echo "Overriding ${KEY} = ${VAL} in node config"
-      sed "s/^  ${KEY}:.*/  ${KEY}: ${VAL}/g" /opt/libra/etc/node.config.toml > /tmp/node.config.toml
-      mv /tmp/node.config.toml /opt/libra/etc/node.config.toml
+      sed "s/^  ${KEY}:.*/  ${KEY}: ${VAL}/g" /opt/libra/etc/node.yaml > /tmp/node.yaml
+      mv /tmp/node.yaml /opt/libra/etc/node.yaml
   done
 fi
 
-exec /opt/libra/bin/libra-node -f /opt/libra/etc/node.config.toml
+exec /opt/libra/bin/libra-node -f /opt/libra/etc/node.yaml

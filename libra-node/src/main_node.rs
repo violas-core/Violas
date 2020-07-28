@@ -9,6 +9,7 @@ use executor_types::ChunkExecutor;
 use futures::{channel::mpsc::channel, executor::block_on};
 use libra_config::{
     config::{NetworkConfig, NodeConfig, RoleType},
+    network_id::NodeNetworkId,
     utils::get_genesis_txn,
 };
 use libra_json_rpc::bootstrap_from_config as bootstrap_rpc;
@@ -17,16 +18,12 @@ use libra_mempool::gen_mempool_reconfig_subscription;
 use libra_metrics::metric_server;
 use libra_vm::LibraVM;
 use libradb::LibraDB;
-use network_simple_onchain_discovery::{
-    gen_simple_discovery_reconfig_subscription, ConfigurationChangeListener,
-};
+use network_builder::builder::NetworkBuilder;
 use state_synchronizer::StateSynchronizer;
 use std::{boxed::Box, net::ToSocketAddrs, sync::Arc, thread, time::Instant};
 use storage_interface::DbReaderWriter;
 use storage_service::start_storage_service_with_db;
-use tokio::runtime::Runtime;
-
-use debug_interface::libra_trace;
+use tokio::runtime::{Builder, Runtime};
 
 const AC_SMP_CHANNEL_BUFFER_SIZE: usize = 1_024;
 const INTRA_NODE_CHANNEL_BUFFER_SIZE: usize = 1;
@@ -61,7 +58,7 @@ fn setup_debug_interface(config: &NodeConfig) -> NodeDebugService {
     NodeDebugService::new(addr)
 }
 
-pub fn setup_environment(node_config: &mut NodeConfig) -> LibraHandle {
+pub fn setup_environment(node_config: &NodeConfig) -> LibraHandle {
     // Some of our code uses the rayon global thread pool. Name the rayon threads so it doesn't
     // cause confusion, otherwise the threads would have their parent's name.
     rayon::ThreadPoolBuilder::new()
@@ -117,39 +114,44 @@ pub fn setup_environment(node_config: &mut NodeConfig) -> LibraHandle {
 
     // Gather all network configs into a single vector.
     // TODO:  consider explicitly encoding the role in the NetworkConfig
-    let mut network_configs: Vec<(RoleType, &mut NetworkConfig)> = node_config
+    let mut network_configs: Vec<(RoleType, &NetworkConfig)> = node_config
         .full_node_networks
-        .iter_mut()
+        .iter()
         .map(|network_config| (RoleType::FullNode, network_config))
         .collect();
-    if let Some(network_config) = node_config.validator_network.as_mut() {
+    if let Some(network_config) = node_config.validator_network.as_ref() {
         network_configs.push((RoleType::Validator, network_config));
     }
 
+    let mut network_builders = Vec::new();
+
     // Instantiate every network and collect the requisite endpoints for state_sync, mempool, and consensus.
-    for (role, network_config) in network_configs {
+    for (idx, (role, network_config)) in network_configs.into_iter().enumerate() {
         // Perform common instantiation steps
-        let (runtime, mut network_builder) = network_builder::builder::setup_network(
-            &node_config.base.chain_id,
-            role,
-            network_config,
-            Arc::clone(&db_rw.reader),
-            waypoint,
-        );
-        let peer_id = network_builder.peer_id();
+        let mut network_builder =
+            NetworkBuilder::create(node_config.base.chain_id, role, network_config);
+        let network_id = network_config.network_id.clone();
 
         // Create the endpoints to connect the Network to StateSynchronizer.
         let (state_sync_sender, state_sync_events) = network_builder
             .add_protocol_handler(state_synchronizer::network::network_endpoint_config());
-        state_sync_network_handles.push((peer_id, state_sync_sender, state_sync_events));
+        state_sync_network_handles.push((
+            NodeNetworkId::new(network_id.clone(), idx),
+            state_sync_sender,
+            state_sync_events,
+        ));
 
-        // Create the endpoints t connect the Network to MemPool.
+        // Create the endpoints to connect the Network to mempool.
         let (mempool_sender, mempool_events) =
             network_builder.add_protocol_handler(libra_mempool::network::network_endpoint_config(
                 // TODO:  Make this configuration option more clear.
                 node_config.mempool.max_broadcasts_per_peer,
             ));
-        mempool_network_handles.push((peer_id, mempool_sender, mempool_events));
+        mempool_network_handles.push((
+            NodeNetworkId::new(network_id, idx),
+            mempool_sender,
+            mempool_events,
+        ));
 
         match role {
             // Perform steps relevant specifically to Validator networks.
@@ -160,19 +162,6 @@ pub fn setup_environment(node_config: &mut NodeConfig) -> LibraHandle {
                     panic!("There can be at most one validator network!");
                 }
 
-                // Set up to listen for network configuration changes from StateSync.
-                // TODO:  move this inside network_builder.
-                if let Some(conn_mgr_reqs_tx) = network_builder.conn_mgr_reqs_tx() {
-                    let (simple_discovery_reconfig_subscription, simple_discovery_reconfig_rx) =
-                        gen_simple_discovery_reconfig_subscription();
-                    reconfig_subscriptions.push(simple_discovery_reconfig_subscription);
-                    let network_config_listener =
-                        ConfigurationChangeListener::new(conn_mgr_reqs_tx, RoleType::Validator);
-                    runtime
-                        .handle()
-                        .spawn(network_config_listener.start(simple_discovery_reconfig_rx));
-                };
-
                 consensus_network_handles =
                     Some(network_builder.add_protocol_handler(
                         consensus::network_interface::network_endpoint_config(),
@@ -182,11 +171,32 @@ pub fn setup_environment(node_config: &mut NodeConfig) -> LibraHandle {
             RoleType::FullNode => (),
         }
 
-        // Start the network and cache the runtime so it does not go out of scope.
-        // TODO:  move all 'start' commands to a second phase at the end of setup_environment.  Target is to have one pass to wire the pieces together and a second pass to start processing in an appropriate order.
-        let _listen_addr = network_builder.build();
+        reconfig_subscriptions.append(network_builder.reconfig_subscriptions());
+
+        network_builders.push(network_builder);
+    }
+
+    // Build the configured networks.
+    for network_builder in &mut network_builders {
+        debug!("Creating runtime for {}", network_builder.network_context());
+        let runtime = Builder::new()
+            .thread_name("network-")
+            .threaded_scheduler()
+            .enable_all()
+            .build()
+            .expect("Failed to start runtime. Won't be able to start networking.");
+        network_builder.build(runtime.handle().clone());
         network_runtimes.push(runtime);
-        debug!("Network started for peer_id: {}", peer_id);
+        debug!(
+            "Network Built for network_context: {:?}",
+            network_builder.network_context()
+        );
+    }
+
+    // Start the configured networks.
+    // TODO:  Collect all component starts at the end of this function
+    for network_builder in &mut network_builders {
+        network_builder.start();
     }
 
     // TODO set up on-chain discovery network based on UpstreamConfig.fallback_network

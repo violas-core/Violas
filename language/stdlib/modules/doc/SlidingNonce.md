@@ -5,9 +5,7 @@
 
 ### Table of Contents
 
--  [Struct `CreateSlidingNonce`](#0x1_SlidingNonce_CreateSlidingNonce)
--  [Struct `SlidingNonce`](#0x1_SlidingNonce_SlidingNonce)
--  [Function `grant_privileges`](#0x1_SlidingNonce_grant_privileges)
+-  [Resource `SlidingNonce`](#0x1_SlidingNonce_SlidingNonce)
 -  [Function `record_nonce_or_abort`](#0x1_SlidingNonce_record_nonce_or_abort)
 -  [Function `try_record_nonce`](#0x1_SlidingNonce_try_record_nonce)
 -  [Function `publish`](#0x1_SlidingNonce_publish)
@@ -15,37 +13,9 @@
 
 
 
-<a name="0x1_SlidingNonce_CreateSlidingNonce"></a>
-
-## Struct `CreateSlidingNonce`
-
-
-
-<pre><code><b>resource</b> <b>struct</b> <a href="#0x1_SlidingNonce_CreateSlidingNonce">CreateSlidingNonce</a>
-</code></pre>
-
-
-
-<details>
-<summary>Fields</summary>
-
-
-<dl>
-<dt>
-
-<code>dummy_field: bool</code>
-</dt>
-<dd>
-
-</dd>
-</dl>
-
-
-</details>
-
 <a name="0x1_SlidingNonce_SlidingNonce"></a>
 
-## Struct `SlidingNonce`
+## Resource `SlidingNonce`
 
 This struct keep last 128 nonce values in a bit map nonce_mask
 We assume that nonce are generated incrementally, but certain permutation is allowed when nonce are recorded
@@ -84,34 +54,6 @@ And nonce_mask contains a bitmap for nonce in range [min_nonce; min_nonce+127]
 
 </details>
 
-<a name="0x1_SlidingNonce_grant_privileges"></a>
-
-## Function `grant_privileges`
-
-Grants the
-<code><a href="#0x1_SlidingNonce_CreateSlidingNonce">CreateSlidingNonce</a></code> privilege to the calling
-<code>account</code>.
-Aborts if the calling account does not have the association root role.
-
-
-<pre><code><b>public</b> <b>fun</b> <a href="#0x1_SlidingNonce_grant_privileges">grant_privileges</a>(account: &signer)
-</code></pre>
-
-
-
-<details>
-<summary>Implementation</summary>
-
-
-<pre><code><b>public</b> <b>fun</b> <a href="#0x1_SlidingNonce_grant_privileges">grant_privileges</a>(account: &signer) {
-    <a href="Roles.md#0x1_Roles_add_privilege_to_account_association_root_role">Roles::add_privilege_to_account_association_root_role</a>(account, <a href="#0x1_SlidingNonce_CreateSlidingNonce">CreateSlidingNonce</a>{});
-}
-</code></pre>
-
-
-
-</details>
-
 <a name="0x1_SlidingNonce_record_nonce_or_abort"></a>
 
 ## Function `record_nonce_or_abort`
@@ -144,10 +86,6 @@ Calls try_record_nonce and aborts transaction if returned code is non-0
 
 Tries to record this nonce in the account.
 Returns 0 if a nonce was recorded and non-0 otherwise
-Reasons for nonce to be rejected:
-* code 10001: This nonce is too old and impossible to ensure whether it's duplicated or not
-* code 10002: This nonce is too far in the future - this is not allowed to protect against nonce exhaustion
-* code 10003: This nonce was already recorded previously
 
 
 <pre><code><b>public</b> <b>fun</b> <a href="#0x1_SlidingNonce_try_record_nonce">try_record_nonce</a>(account: &signer, seq_nonce: u64): u64
@@ -165,19 +103,18 @@ Reasons for nonce to be rejected:
     };
     <b>let</b> t = borrow_global_mut&lt;<a href="#0x1_SlidingNonce">SlidingNonce</a>&gt;(<a href="Signer.md#0x1_Signer_address_of">Signer::address_of</a>(account));
     <b>if</b> (t.min_nonce &gt; seq_nonce) {
-        <b>return</b> 10001
+        <b>return</b> ENONCE_TOO_OLD
     };
     <b>let</b> jump_limit = 10000; // Don't allow giant leaps in nonce <b>to</b> protect against nonce exhaustion
     <b>if</b> (t.min_nonce + jump_limit &lt;= seq_nonce) {
-        <b>return</b> 10002
+        <b>return</b> ENONCE_TOO_NEW
     };
     <b>let</b> bit_pos = seq_nonce - t.min_nonce;
-    <b>let</b> nonce_mask_size = 128; // size of SlidingNonce::nonce_mask in bits. no constants in <b>move</b>?
-    <b>if</b> (bit_pos &gt;= nonce_mask_size) {
-        <b>let</b> shift = (bit_pos - nonce_mask_size + 1);
-        <b>if</b>(shift &gt;= nonce_mask_size) {
+    <b>if</b> (bit_pos &gt;= NONCE_MASK_SIZE) {
+        <b>let</b> shift = (bit_pos - NONCE_MASK_SIZE + 1);
+        <b>if</b>(shift &gt;= NONCE_MASK_SIZE) {
             t.nonce_mask = 0;
-            t.min_nonce = seq_nonce + 1 - nonce_mask_size;
+            t.min_nonce = seq_nonce + 1 - NONCE_MASK_SIZE;
         } <b>else</b> {
             t.nonce_mask = t.nonce_mask &gt;&gt; (shift <b>as</b> u8);
             t.min_nonce = t.min_nonce + shift;
@@ -186,7 +123,7 @@ Reasons for nonce to be rejected:
     <b>let</b> bit_pos = seq_nonce - t.min_nonce;
     <b>let</b> set = 1u128 &lt;&lt; (bit_pos <b>as</b> u8);
     <b>if</b> (t.nonce_mask & set != 0) {
-        <b>return</b> 10003
+        <b>return</b> ENONCE_ALREADY_RECORDED
     };
     t.nonce_mask = t.nonce_mask | set;
     0
@@ -229,11 +166,10 @@ This is required before other functions in this module can be called for `accoun
 ## Function `publish_nonce_resource`
 
 Publishes nonce resource into specific account
-Only association can create this resource for different account
-Alternative is publish_nonce_resource_for_user that publishes resource into current account
+Only the libra root account can create this resource for different accounts
 
 
-<pre><code><b>public</b> <b>fun</b> <a href="#0x1_SlidingNonce_publish_nonce_resource">publish_nonce_resource</a>(_: &<a href="Roles.md#0x1_Roles_Capability">Roles::Capability</a>&lt;<a href="#0x1_SlidingNonce_CreateSlidingNonce">SlidingNonce::CreateSlidingNonce</a>&gt;, account: &signer)
+<pre><code><b>public</b> <b>fun</b> <a href="#0x1_SlidingNonce_publish_nonce_resource">publish_nonce_resource</a>(lr_account: &signer, account: &signer)
 </code></pre>
 
 
@@ -242,7 +178,11 @@ Alternative is publish_nonce_resource_for_user that publishes resource into curr
 <summary>Implementation</summary>
 
 
-<pre><code><b>public</b> <b>fun</b> <a href="#0x1_SlidingNonce_publish_nonce_resource">publish_nonce_resource</a>(_: &Capability&lt;<a href="#0x1_SlidingNonce_CreateSlidingNonce">CreateSlidingNonce</a>&gt;, account: &signer) {
+<pre><code><b>public</b> <b>fun</b> <a href="#0x1_SlidingNonce_publish_nonce_resource">publish_nonce_resource</a>(
+    lr_account: &signer,
+    account: &signer
+) {
+    <b>assert</b>(<a href="Roles.md#0x1_Roles_has_libra_root_role">Roles::has_libra_root_role</a>(lr_account), ENOT_LIBRA_ROOT);
     <b>let</b> new_resource = <a href="#0x1_SlidingNonce">SlidingNonce</a> {
         min_nonce: 0,
         nonce_mask: 0,

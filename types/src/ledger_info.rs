@@ -9,10 +9,7 @@ use crate::{
     transaction::Version,
     validator_verifier::{ValidatorVerifier, VerifyError},
 };
-use libra_crypto::{
-    ed25519::Ed25519Signature,
-    hash::{CryptoHash, HashValue},
-};
+use libra_crypto::{ed25519::Ed25519Signature, hash::HashValue};
 use libra_crypto_derive::{CryptoHasher, LCSCryptoHash};
 #[cfg(any(test, feature = "fuzzing"))]
 use proptest_derive::Arbitrary;
@@ -116,6 +113,10 @@ impl LedgerInfo {
 
     pub fn next_epoch_state(&self) -> Option<&EpochState> {
         self.commit_info.next_epoch_state()
+    }
+
+    pub fn ends_epoch(&self) -> bool {
+        self.next_epoch_state().is_some()
     }
 
     /// Returns hash of consensus voting data in this `LedgerInfo`.
@@ -243,8 +244,7 @@ impl LedgerInfoWithV0 {
         &self,
         validator: &ValidatorVerifier,
     ) -> ::std::result::Result<(), VerifyError> {
-        let ledger_hash = self.ledger_info().hash();
-        validator.batch_verify_aggregated_signature(ledger_hash, self.signatures())
+        validator.batch_verify_aggregated_signatures(self.ledger_info(), self.signatures())
     }
 }
 
@@ -255,9 +255,8 @@ mod tests {
 
     #[test]
     fn test_signatures_hash() {
-        let ledger_info = LedgerInfo::new(BlockInfo::empty(), HashValue::zero());
+        let ledger_info = LedgerInfo::new(BlockInfo::empty(), HashValue::random());
 
-        let random_hash = HashValue::random();
         const NUM_SIGNERS: u8 = 7;
         // Generate NUM_SIGNERS random signers.
         let validator_signers: Vec<ValidatorSigner> = (0..NUM_SIGNERS)
@@ -265,7 +264,7 @@ mod tests {
             .collect();
         let mut author_to_signature_map = BTreeMap::new();
         for validator in validator_signers.iter() {
-            author_to_signature_map.insert(validator.author(), validator.sign_message(random_hash));
+            author_to_signature_map.insert(validator.author(), validator.sign(&ledger_info));
         }
 
         let ledger_info_with_signatures =
@@ -274,7 +273,7 @@ mod tests {
         // Add the signatures in reverse order and ensure the serialization matches
         let mut author_to_signature_map = BTreeMap::new();
         for validator in validator_signers.iter().rev() {
-            author_to_signature_map.insert(validator.author(), validator.sign_message(random_hash));
+            author_to_signature_map.insert(validator.author(), validator.sign(&ledger_info));
         }
 
         let ledger_info_with_signatures_reversed =

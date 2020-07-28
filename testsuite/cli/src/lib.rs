@@ -23,6 +23,7 @@ pub mod client_proxy;
 /// Command struct to interact with client.
 pub mod commands;
 mod dev_commands;
+mod info_commands;
 /// Client wrapper to connect to validator.
 mod libra_client;
 mod query_commands;
@@ -60,7 +61,7 @@ pub enum AccountStatus {
 impl AccountData {
     /// Serialize account keypair if exists.
     pub fn keypair_as_string(&self) -> Option<(String, String)> {
-        self.key_pair.as_ref().and_then(|key_pair| {
+        self.key_pair.as_ref().map(|key_pair| {
             let private_key_string = key_pair
                 .private_key
                 .to_encoded_string()
@@ -69,7 +70,7 @@ impl AccountData {
                 .public_key
                 .to_encoded_string()
                 .expect("Account public Key not convertible to string!");
-            Some((private_key_string, public_key_string))
+            (private_key_string, public_key_string)
         })
     }
 }

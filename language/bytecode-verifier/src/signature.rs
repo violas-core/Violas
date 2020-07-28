@@ -4,160 +4,173 @@
 //! This module implements a checker for verifying signature tokens used in types of function
 //! parameters, locals, and fields of structs are well-formed. References can only occur at the
 //! top-level in all tokens.  Additionally, references cannot occur at all in field types.
-use libra_types::vm_error::{StatusCode, VMStatus};
+use crate::binary_views::BinaryIndexedView;
+use libra_types::vm_status::StatusCode;
 use vm::{
-    access::ModuleAccess,
-    errors::{append_err_info, VMResult},
+    access::{ModuleAccess, ScriptAccess},
+    errors::{Location, PartialVMError, PartialVMResult, VMResult},
     file_format::{
-        Bytecode, CompiledModule, Kind, SignatureIndex, SignatureToken, StructFieldInformation,
+        Bytecode, CodeUnit, CompiledModule, CompiledScript, FunctionDefinition, FunctionHandle,
+        Kind, Signature, SignatureIndex, SignatureToken, StructDefinition, StructFieldInformation,
         TableIndex,
     },
     IndexKind,
 };
 
 pub struct SignatureChecker<'a> {
-    module: &'a CompiledModule,
-    // The kinds of the type paramters of the current module member being checked.
-    // The kinds are then used to validate constraints of instantiated types.
-    // See`check_generic_instance`
-    // For the specific use cases:
-    // - When checking the signature pools directly, there are no type paramters.
-    // - When checking function signatures, the type paramters belong to that function
-    // - When checking fields, the type parameters belong to the containing struct
-    // - When checking code bodies, the type parameters belong to the containing function definition
-    signature_context: Option<Vec<Kind>>,
-    // TODO can cache results of signatures checked
+    resolver: BinaryIndexedView<'a>,
 }
 
 impl<'a> SignatureChecker<'a> {
-    pub fn new(module: &'a CompiledModule) -> Self {
-        Self {
-            module,
-            signature_context: None,
-        }
+    pub fn verify_module(module: &'a CompiledModule) -> VMResult<()> {
+        Self::verify_module_impl(module).map_err(|e| e.finish(Location::Module(module.self_id())))
     }
 
-    pub fn verify(mut self) -> VMResult<()> {
-        self.verify_signature_pool()?;
-        self.verify_function_signatures()?;
-        self.verify_fields()?;
-        self.verify_code_units()
+    fn verify_module_impl(module: &'a CompiledModule) -> PartialVMResult<()> {
+        let sig_check = Self {
+            resolver: BinaryIndexedView::Module(module),
+        };
+        sig_check.verify_signature_pool(module.signatures())?;
+        sig_check.verify_function_signatures(module.function_handles())?;
+        sig_check.verify_fields(module.struct_defs())?;
+        sig_check.verify_code_units(module.function_defs())
     }
 
-    fn verify_signature_pool(&mut self) -> VMResult<()> {
-        // The signature pool does not have type parameters
-        self.signature_context = None;
-        for i in 0..self.module.signatures().len() {
+    pub fn verify_script(module: &'a CompiledScript) -> VMResult<()> {
+        Self::verify_script_impl(module).map_err(|e| e.finish(Location::Script))
+    }
+
+    fn verify_script_impl(script: &'a CompiledScript) -> PartialVMResult<()> {
+        let sig_check = Self {
+            resolver: BinaryIndexedView::Script(script),
+        };
+        sig_check.verify_signature_pool(script.signatures())?;
+        sig_check.verify_function_signatures(script.function_handles())?;
+        sig_check.verify_code(script.code(), &script.as_inner().type_parameters)
+    }
+
+    fn verify_signature_pool(&self, signatures: &[Signature]) -> PartialVMResult<()> {
+        for i in 0..signatures.len() {
             self.check_signature(SignatureIndex::new(i as TableIndex))?
         }
         Ok(())
     }
 
-    fn verify_function_signatures(&mut self) -> VMResult<()> {
-        for (idx, fh) in self.module.function_handles().iter().enumerate() {
+    fn verify_function_signatures(
+        &self,
+        function_handles: &[FunctionHandle],
+    ) -> PartialVMResult<()> {
+        let err_handler = |err: PartialVMError, idx| {
+            err.at_index(IndexKind::Signature, idx as TableIndex)
+                .at_index(IndexKind::FunctionHandle, idx as TableIndex)
+        };
+
+        for (idx, fh) in function_handles.iter().enumerate() {
             // Update the type parameter kinds to the function being checked
-            self.signature_context = Some(fh.type_parameters.clone());
-            self.check_signature(fh.return_).map_err(|err| {
-                let err = append_err_info(err, IndexKind::Signature, fh.return_.0 as usize);
-                append_err_info(err, IndexKind::FunctionDefinition, idx)
-            })?;
-            self.check_signature(fh.parameters).map_err(|err| {
-                let err = append_err_info(err, IndexKind::Signature, fh.parameters.0 as usize);
-                append_err_info(err, IndexKind::FunctionDefinition, idx)
-            })?;
+            self.check_signature(fh.return_)
+                .map_err(|err| err_handler(err, idx))?;
+            self.check_instantiation(fh.return_, &fh.type_parameters)
+                .map_err(|err| err_handler(err, idx))?;
+            self.check_signature(fh.parameters)
+                .map_err(|err| err_handler(err, idx))?;
+            self.check_instantiation(fh.parameters, &fh.type_parameters)
+                .map_err(|err| err_handler(err, idx))?;
+            if !fh.type_parameters.is_empty() {}
         }
         Ok(())
     }
 
-    fn verify_fields(&mut self) -> VMResult<()> {
-        for (struct_def_idx, struct_def) in self.module.struct_defs().iter().enumerate() {
+    fn verify_fields(&self, struct_defs: &[StructDefinition]) -> PartialVMResult<()> {
+        for (struct_def_idx, struct_def) in struct_defs.iter().enumerate() {
             let fields = match &struct_def.field_information {
                 StructFieldInformation::Native => continue,
                 StructFieldInformation::Declared(fields) => fields,
             };
-            let struct_handle = self.module.struct_handle_at(struct_def.struct_handle);
+            let struct_handle = self.resolver.struct_handle_at(struct_def.struct_handle);
             // Update the type parameter kinds to the struct being checked
-            self.signature_context = Some(struct_handle.type_parameters.clone());
+            let err_handler = |err: PartialVMError, idx| {
+                err.at_index(IndexKind::FieldDefinition, idx as TableIndex)
+                    .at_index(IndexKind::StructDefinition, struct_def_idx as TableIndex)
+            };
             for (field_offset, field_def) in fields.iter().enumerate() {
                 self.check_signature_token(&field_def.signature.0)
-                    .map_err(|err| {
-                        let err = VMStatus::new(StatusCode::INVALID_FIELD_DEF).append(err);
-                        let err = append_err_info(err, IndexKind::FieldDefinition, field_offset);
-                        append_err_info(err, IndexKind::StructDefinition, struct_def_idx)
-                    })?
+                    .map_err(|err| err_handler(err, field_offset))?;
+                self.check_type_instantiation(
+                    &field_def.signature.0,
+                    &struct_handle.type_parameters,
+                )
+                .map_err(|err| err_handler(err, field_offset))?;
             }
         }
         Ok(())
     }
 
-    fn verify_code_units(&mut self) -> VMResult<()> {
-        use Bytecode::*;
-        for (func_def_idx, func_def) in self.module.function_defs().iter().enumerate() {
+    fn verify_code_units(&self, function_defs: &[FunctionDefinition]) -> PartialVMResult<()> {
+        for (func_def_idx, func_def) in function_defs.iter().enumerate() {
+            // skip native functions
             let code = match &func_def.code {
                 Some(code) => code,
                 None => continue,
             };
-
-            // Check if the types of the locals are well defined.
-            let func_handle = self.module.function_handle_at(func_def.function);
-            let type_parameters = &func_handle.type_parameters;
-            // Update the type parameter kinds to the function being checked
-            self.signature_context = Some(type_parameters.clone());
-
-            self.check_signature(code.locals).map_err(|err| {
-                let err = append_err_info(err, IndexKind::Signature, code.locals.0 as usize);
-                append_err_info(err, IndexKind::FunctionDefinition, func_def_idx)
-            })?;
-
-            // Check if the type actuals in certain bytecode instructions are well defined.
-            for (offset, instr) in code.code.iter().enumerate() {
-                let result = match instr {
-                    CallGeneric(idx) => {
-                        let func_inst = self.module.function_instantiation_at(*idx);
-                        let func_handle = self.module.function_handle_at(func_inst.handle);
-                        let type_arguments = &self.module.signature_at(func_inst.type_parameters).0;
-                        self.check_signature_tokens(type_arguments)?;
-                        self.check_generic_instance(
-                            type_arguments,
-                            &func_handle.type_parameters,
-                            type_parameters,
-                        )
-                    }
-                    PackGeneric(idx)
-                    | UnpackGeneric(idx)
-                    | ExistsGeneric(idx)
-                    | MoveFromGeneric(idx)
-                    | MoveToSenderGeneric(idx)
-                    | ImmBorrowGlobalGeneric(idx)
-                    | MutBorrowGlobalGeneric(idx) => {
-                        let struct_inst = self.module.struct_instantiation_at(*idx);
-                        let struct_def = self.module.struct_def_at(struct_inst.def);
-                        let struct_handle = self.module.struct_handle_at(struct_def.struct_handle);
-                        let type_arguments =
-                            &self.module.signature_at(struct_inst.type_parameters).0;
-                        self.check_signature_tokens(type_arguments)?;
-                        self.check_generic_instance(
-                            type_arguments,
-                            &struct_handle.type_parameters,
-                            type_parameters,
-                        )
-                    }
-                    _ => Ok(()),
-                };
-                result.map_err(|err| {
-                    let err =
-                        err.append_message_with_separator(' ', format!("at offset {} ", offset));
-                    append_err_info(err, IndexKind::FunctionDefinition, func_def_idx)
+            let func_handle = self.resolver.function_handle_at(func_def.function);
+            self.verify_code(code, &func_handle.type_parameters)
+                .map_err(|err| {
+                    err.at_index(IndexKind::Signature, code.locals.0)
+                        .at_index(IndexKind::FunctionDefinition, func_def_idx as TableIndex)
                 })?
-            }
+        }
+        Ok(())
+    }
+
+    fn verify_code(&self, code: &CodeUnit, type_parameters: &[Kind]) -> PartialVMResult<()> {
+        self.check_signature(code.locals)?;
+        self.check_instantiation(code.locals, type_parameters)?;
+
+        // Check if the type actuals in certain bytecode instructions are well defined.
+        use Bytecode::*;
+        for (offset, instr) in code.code.iter().enumerate() {
+            let result = match instr {
+                CallGeneric(idx) => {
+                    let func_inst = self.resolver.function_instantiation_at(*idx);
+                    let func_handle = self.resolver.function_handle_at(func_inst.handle);
+                    let type_arguments = &self.resolver.signature_at(func_inst.type_parameters).0;
+                    self.check_signature_tokens(type_arguments)?;
+                    self.check_generic_instance(
+                        type_arguments,
+                        &func_handle.type_parameters,
+                        type_parameters,
+                    )
+                }
+                PackGeneric(idx)
+                | UnpackGeneric(idx)
+                | ExistsGeneric(idx)
+                | MoveFromGeneric(idx)
+                | ImmBorrowGlobalGeneric(idx)
+                | MutBorrowGlobalGeneric(idx) => {
+                    let struct_inst = self.resolver.struct_instantiation_at(*idx)?;
+                    let struct_def = self.resolver.struct_def_at(struct_inst.def)?;
+                    let struct_handle = self.resolver.struct_handle_at(struct_def.struct_handle);
+                    let type_arguments = &self.resolver.signature_at(struct_inst.type_parameters).0;
+                    self.check_signature_tokens(type_arguments)?;
+                    self.check_generic_instance(
+                        type_arguments,
+                        &struct_handle.type_parameters,
+                        type_parameters,
+                    )
+                }
+                _ => Ok(()),
+            };
+            result.map_err(|err| {
+                err.append_message_with_separator(' ', format!("at offset {} ", offset))
+            })?
         }
         Ok(())
     }
 
     /// Checks if the given type is well defined in the given context.
     /// References are only permitted at the top level.
-    fn check_signature(&mut self, idx: SignatureIndex) -> VMResult<()> {
-        for token in &self.module.signature_at(idx).0 {
+    fn check_signature(&self, idx: SignatureIndex) -> PartialVMResult<()> {
+        for token in &self.resolver.signature_at(idx).0 {
             match token {
                 SignatureToken::Reference(inner) | SignatureToken::MutableReference(inner) => {
                     self.check_signature_token(inner)?
@@ -170,7 +183,7 @@ impl<'a> SignatureChecker<'a> {
 
     /// Checks if the given types are well defined in the given context.
     /// No references are permitted.
-    fn check_signature_tokens(&self, tys: &[SignatureToken]) -> VMResult<()> {
+    fn check_signature_tokens(&self, tys: &[SignatureToken]) -> PartialVMResult<()> {
         for ty in tys {
             self.check_signature_token(ty)?
         }
@@ -179,29 +192,39 @@ impl<'a> SignatureChecker<'a> {
 
     /// Checks if the given type is well defined in the given context.
     /// No references are permitted.
-    fn check_signature_token(&self, ty: &SignatureToken) -> VMResult<()> {
+    fn check_signature_token(&self, ty: &SignatureToken) -> PartialVMResult<()> {
         use SignatureToken::*;
         match ty {
             U8 | U64 | U128 | Bool | Address | Signer | Struct(_) | TypeParameter(_) => Ok(()),
             Reference(_) | MutableReference(_) => {
                 // TODO: Prop tests expect us to NOT check the inner types.
                 // Revisit this once we rework prop tests.
-                Err(VMStatus::new(StatusCode::INVALID_SIGNATURE_TOKEN)
+                Err(PartialVMError::new(StatusCode::INVALID_SIGNATURE_TOKEN)
                     .with_message("reference not allowed".to_string()))
             }
             Vector(ty) => self.check_signature_token(ty),
-            StructInstantiation(idx, type_arguments) => {
-                self.check_signature_tokens(type_arguments)?;
-                let sh = self.module.struct_handle_at(*idx);
-                // Check that the instantiation satifies the `idx` struct's constraints
+            StructInstantiation(_, type_arguments) => self.check_signature_tokens(type_arguments),
+        }
+    }
+
+    fn check_instantiation(&self, idx: SignatureIndex, kinds: &[Kind]) -> PartialVMResult<()> {
+        for ty in &self.resolver.signature_at(idx).0 {
+            self.check_type_instantiation(ty, kinds)?
+        }
+        Ok(())
+    }
+
+    fn check_type_instantiation(&self, ty: &SignatureToken, kinds: &[Kind]) -> PartialVMResult<()> {
+        match ty {
+            SignatureToken::StructInstantiation(idx, type_arguments) => {
+                // Check that the instantiation satisfies the `idx` struct's constraints
                 // Cannot be checked completely if we do not know the constraints of type parameters
                 // i.e. it cannot be checked unless we are inside some module member. The only case
                 // where that happens is when checking the signature pool itself
-                if let Some(kinds) = &self.signature_context {
-                    self.check_generic_instance(type_arguments, &sh.type_parameters, kinds)?
-                }
-                Ok(())
+                let sh = self.resolver.struct_handle_at(*idx);
+                self.check_generic_instance(type_arguments, &sh.type_parameters, kinds)
             }
+            _ => Ok(()),
         }
     }
 
@@ -212,64 +235,19 @@ impl<'a> SignatureChecker<'a> {
         type_arguments: &[SignatureToken],
         scope_kinds: &[Kind],
         global_kinds: &[Kind],
-    ) -> VMResult<()> {
+    ) -> PartialVMResult<()> {
         let kinds = type_arguments
             .iter()
-            .map(|ty| kind(self.module, ty, global_kinds));
+            .map(|ty| self.resolver.kind(ty, global_kinds));
         for ((c, k), ty) in scope_kinds.iter().zip(kinds).zip(type_arguments) {
             if !k.is_sub_kind_of(*c) {
-                return Err(
-                    VMStatus::new(StatusCode::CONTRAINT_KIND_MISMATCH).with_message(format!(
+                return Err(PartialVMError::new(StatusCode::CONSTRAINT_KIND_MISMATCH)
+                    .with_message(format!(
                         "expected kind {:?} got type actual {:?} with incompatible kind {:?}",
                         c, ty, k
-                    )),
-                );
+                    )));
             }
         }
         Ok(())
-    }
-}
-
-//
-// Helpers functions for signatures
-//
-
-pub(crate) fn kind(module: &CompiledModule, ty: &SignatureToken, constraints: &[Kind]) -> Kind {
-    use SignatureToken::*;
-
-    match ty {
-        // The primitive types & references have kind unrestricted.
-        Bool | U8 | U64 | U128 | Address | Reference(_) | MutableReference(_) => Kind::Copyable,
-        Signer => Kind::Resource,
-        TypeParameter(idx) => constraints[*idx as usize],
-        Vector(ty) => kind(module, ty, constraints),
-        Struct(idx) => {
-            let sh = module.struct_handle_at(*idx);
-            if sh.is_nominal_resource {
-                Kind::Resource
-            } else {
-                Kind::Copyable
-            }
-        }
-        StructInstantiation(idx, type_args) => {
-            let sh = module.struct_handle_at(*idx);
-            if sh.is_nominal_resource {
-                return Kind::Resource;
-            }
-            // Gather the kinds of the type actuals.
-            let kinds = type_args
-                .iter()
-                .map(|ty| kind(module, ty, constraints))
-                .collect::<Vec<_>>();
-            // Derive the kind of the struct.
-            //   - If any of the type actuals is `all`, then the struct is `all`.
-            //     - `all` means some part of the type can be either `resource` or
-            //       `unrestricted`.
-            //     - Therefore it is also impossible to determine the kind of the type as a
-            //       whole, and thus `all`.
-            //   - If none of the type actuals is `all`, then the struct is a resource if
-            //     and only if one of the type actuals is `resource`.
-            kinds.iter().cloned().fold(Kind::Copyable, Kind::join)
-        }
     }
 }

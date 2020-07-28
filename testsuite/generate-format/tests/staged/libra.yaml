@@ -3,8 +3,7 @@ AccessPath:
   STRUCT:
     - address:
         TYPENAME: AccountAddress
-    - path:
-        SEQ: U8
+    - path: BYTES
 AccountAddress:
   NEWTYPESTRUCT:
     TUPLEARRAY:
@@ -21,6 +20,8 @@ BlockMetadata:
           TYPENAME: AccountAddress
     - proposer:
         TYPENAME: AccountAddress
+ChainId:
+  NEWTYPESTRUCT: U8
 ChangeSet:
   STRUCT:
     - write_set:
@@ -41,22 +42,50 @@ ContractEventV0:
     - sequence_number: U64
     - type_tag:
         TYPENAME: TypeTag
-    - event_data:
-        SEQ: U8
+    - event_data: BYTES
 Ed25519PublicKey:
   NEWTYPESTRUCT: BYTES
 Ed25519Signature:
   NEWTYPESTRUCT: BYTES
 EventKey:
   NEWTYPESTRUCT: BYTES
+GeneralMetadata:
+  ENUM:
+    0:
+      GeneralMetadataVersion0:
+        NEWTYPE:
+          TYPENAME: GeneralMetadataV0
+GeneralMetadataV0:
+  STRUCT:
+    - to_subaddress:
+        OPTION: BYTES
+    - from_subaddress:
+        OPTION: BYTES
+    - referenced_event:
+        OPTION: U64
 HashValue:
   NEWTYPESTRUCT: BYTES
 Identifier:
   NEWTYPESTRUCT: STR
+Metadata:
+  ENUM:
+    0:
+      Undefined: UNIT
+    1:
+      GeneralMetadata:
+        NEWTYPE:
+          TYPENAME: GeneralMetadata
+    2:
+      TravelRuleMetadata:
+        NEWTYPE:
+          TYPENAME: TravelRuleMetadata
+    3:
+      UnstructuredBytesMetadata:
+        NEWTYPE:
+          TYPENAME: UnstructuredBytesMetadata
 Module:
   STRUCT:
-    - code:
-        SEQ: U8
+    - code: BYTES
 MultiEd25519PublicKey:
   NEWTYPESTRUCT: BYTES
 MultiEd25519Signature:
@@ -71,11 +100,12 @@ RawTransaction:
     - max_gas_amount: U64
     - gas_unit_price: U64
     - gas_currency_code: STR
-    - expiration_time: U64
+    - expiration_timestamp_secs: U64
+    - chain_id:
+        TYPENAME: ChainId
 Script:
   STRUCT:
-    - code:
-        SEQ: U8
+    - code: BYTES
     - ty_args:
         SEQ:
           TYPENAME: TypeTag
@@ -130,8 +160,7 @@ TransactionArgument:
           TYPENAME: AccountAddress
     4:
       U8Vector:
-        NEWTYPE:
-          SEQ: U8
+        NEWTYPE: BYTES
     5:
       Bool:
         NEWTYPE: BOOL
@@ -156,7 +185,7 @@ TransactionPayload:
     0:
       WriteSet:
         NEWTYPE:
-          TYPENAME: ChangeSet
+          TYPENAME: WriteSetPayload
     1:
       Script:
         NEWTYPE:
@@ -165,6 +194,16 @@ TransactionPayload:
       Module:
         NEWTYPE:
           TYPENAME: Module
+TravelRuleMetadata:
+  ENUM:
+    0:
+      TravelRuleMetadataVersion0:
+        NEWTYPE:
+          TYPENAME: TravelRuleMetadataV0
+TravelRuleMetadataV0:
+  STRUCT:
+    - off_chain_reference_id:
+        OPTION: STR
 TypeTag:
   ENUM:
     0:
@@ -187,14 +226,17 @@ TypeTag:
       Struct:
         NEWTYPE:
           TYPENAME: StructTag
+UnstructuredBytesMetadata:
+  STRUCT:
+    - metadata:
+        OPTION: BYTES
 WriteOp:
   ENUM:
     0:
       Deletion: UNIT
     1:
       Value:
-        NEWTYPE:
-          SEQ: U8
+        NEWTYPE: BYTES
 WriteSet:
   NEWTYPESTRUCT:
     TYPENAME: WriteSetMut
@@ -205,3 +247,16 @@ WriteSetMut:
           TUPLE:
             - TYPENAME: AccessPath
             - TYPENAME: WriteOp
+WriteSetPayload:
+  ENUM:
+    0:
+      Direct:
+        NEWTYPE:
+          TYPENAME: ChangeSet
+    1:
+      Script:
+        STRUCT:
+          - execute_as:
+              TYPENAME: AccountAddress
+          - script:
+              TYPENAME: Script

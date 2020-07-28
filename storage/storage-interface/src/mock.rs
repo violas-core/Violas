@@ -54,6 +54,10 @@ impl DbReader for MockDbReader {
         unimplemented!()
     }
 
+    fn get_block_timestamp(&self, _version: u64) -> Result<u64> {
+        unimplemented!()
+    }
+
     fn get_latest_account_state(
         &self,
         _address: AccountAddress,
@@ -140,7 +144,6 @@ fn get_mock_account_state_blob() -> AccountStateBlob {
         None,
         EventHandle::random_handle(0),
         EventHandle::random_handle(0),
-        false,
     );
 
     let mut account_state = AccountState::default();

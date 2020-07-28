@@ -4,35 +4,35 @@
 use crate::{
     error::Error,
     secure_backend::{
-        StorageLocation,
-        StorageLocation::{LocalStorage, RemoteStorage},
+        OptionalSharedBackend, OptionalValidatorBackend, SharedBackend, ValidatorBackend,
     },
-    SecureBackends, SingleBackend,
+    storage::StorageWrapper,
 };
 use executor::db_bootstrapper;
 use libra_global_constants::WAYPOINT;
-use libra_secure_storage::{KVStorage, Storage, Value};
+use libra_secure_storage::Value;
 use libra_temppath::TempPath;
 use libra_types::waypoint::Waypoint;
 use libra_vm::LibraVM;
 use libradb::LibraDB;
-use std::{convert::TryInto, str::FromStr};
+use std::str::FromStr;
 use storage_interface::DbReaderWriter;
 use structopt::StructOpt;
 
-/// Produces a waypoint from Genesis by either building it from a remote share or a local file. It
-/// then computes the Waypoint and optionally inserts it into another storage.
+/// Produces a waypoint from Genesis from the shared storage. It then computes the Waypoint and
+/// optionally inserts it into another storage, typically the validator storage.
 #[derive(Debug, StructOpt)]
 pub struct CreateWaypoint {
     #[structopt(flatten)]
-    secure_backends: SecureBackends,
+    shared_backend: SharedBackend,
+    #[structopt(flatten)]
+    validator_backend: OptionalValidatorBackend,
 }
 
 impl CreateWaypoint {
     pub fn execute(self) -> Result<Waypoint, Error> {
-        let backend = self.secure_backends.local;
         let genesis_helper = crate::genesis::Genesis {
-            backend: SingleBackend { backend },
+            backend: self.shared_backend,
             path: None,
         };
 
@@ -47,13 +47,11 @@ impl CreateWaypoint {
             .map_err(|e| Error::UnexpectedError(e.to_string()))?
             .ok_or_else(|| Error::UnexpectedError("Unable to generate a waypoint".to_string()))?;
 
-        if let Some(remote) = self.secure_backends.remote {
-            let mut remote_storage: Storage = remote.try_into()?;
-            InsertWaypoint::insert_waypoint_to_backend(
-                &waypoint,
-                &mut remote_storage,
-                StorageLocation::RemoteStorage,
-            )?;
+        if let Some(validator_backend_config) = &self.validator_backend.validator_backend {
+            let storage_name = self.validator_backend.name();
+            let mut validator_storage =
+                StorageWrapper::new(storage_name, &validator_backend_config)?;
+            validator_storage.set(WAYPOINT, Value::String(waypoint.to_string()))?;
         }
         Ok(waypoint)
     }
@@ -62,28 +60,28 @@ impl CreateWaypoint {
 #[derive(Debug, StructOpt)]
 pub struct InsertWaypoint {
     #[structopt(flatten)]
-    secure_backends: SecureBackends,
-
+    validator_backend: ValidatorBackend,
+    #[structopt(flatten)]
+    shared_backend: OptionalSharedBackend,
     #[structopt(long)]
     waypoint: Option<String>,
 }
 
 impl InsertWaypoint {
     pub fn execute(self) -> Result<Waypoint, Error> {
-        if self.waypoint.is_some() && self.secure_backends.remote.is_some() {
+        if self.waypoint.is_some() && self.shared_backend.shared_backend.is_some() {
             return Err(Error::CommandArgumentError(
                 "only one of --waypoint and --remote can be provided".to_string(),
             ));
         }
 
+        // Retrieve waypoint from args or storage
         let waypoint_string = if let Some(waypoint_string) = self.waypoint {
             waypoint_string
-        } else if let Some(remote_backend) = self.secure_backends.remote {
-            let remote_storage = remote_backend.create_storage(RemoteStorage)?;
-            remote_storage
-                .get(WAYPOINT)
-                .and_then(|v| v.value.string())
-                .map_err(|e| Error::RemoteStorageReadError(WAYPOINT, e.to_string()))?
+        } else if let Some(shared_backend_config) = &self.shared_backend.shared_backend {
+            let storage_name = self.shared_backend.name();
+            let shared_storage = StorageWrapper::new(storage_name, shared_backend_config)?;
+            shared_storage.string(WAYPOINT)?
         } else {
             return Err(Error::CommandArgumentError(
                 "please provide either --waypoint or --remote".to_string(),
@@ -93,29 +91,12 @@ impl InsertWaypoint {
         let waypoint = Waypoint::from_str(&waypoint_string)
             .map_err(|e| Error::UnexpectedError(e.to_string()))?;
 
-        let mut local_storage = self.secure_backends.local.create_storage(LocalStorage)?;
-        Self::insert_waypoint_to_backend(&waypoint, &mut local_storage, LocalStorage)?;
+        // Insert waypoint to backend
+        let mut validator_storage = StorageWrapper::new(
+            self.validator_backend.name(),
+            &self.validator_backend.validator_backend,
+        )?;
+        validator_storage.set(WAYPOINT, Value::String(waypoint.to_string()))?;
         Ok(waypoint)
-    }
-
-    fn insert_waypoint_to_backend(
-        waypoint: &Waypoint,
-        backend_storage: &mut Storage,
-        backend_location: StorageLocation,
-    ) -> Result<(), Error> {
-        backend_storage
-            .set(
-                libra_global_constants::WAYPOINT,
-                Value::String(waypoint.to_string()),
-            )
-            .map_err(|e| match backend_location {
-                LocalStorage => {
-                    Error::LocalStorageWriteError(libra_global_constants::WAYPOINT, e.to_string())
-                }
-                RemoteStorage => {
-                    Error::RemoteStorageWriteError(libra_global_constants::WAYPOINT, e.to_string())
-                }
-            })?;
-        Ok(())
     }
 }

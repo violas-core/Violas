@@ -2,13 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{account::AccountData, compile::compile_script_with_address, executor::FakeExecutor};
-use bytecode_verifier::VerifiedModule;
+use bytecode_verifier::verify_module;
 use compiler::Compiler;
 use libra_types::{
-    account_config::LBR_NAME,
-    transaction::{Module, SignedTransaction, Transaction, TransactionPayload, TransactionStatus},
-    vm_error::{StatusCode, VMStatus},
+    transaction::{Module, SignedTransaction, Transaction, TransactionStatus},
+    vm_status::KeptVMStatus,
 };
+use vm::CompiledModule;
 
 #[test]
 fn move_from_across_blocks() {
@@ -23,10 +23,11 @@ fn move_from_across_blocks() {
     // remove resource fails given no resource were published
     let rem_txn = remove_resource_txn(&sender, 11, vec![module.clone()]);
     let output = executor.execute_transaction(rem_txn);
-    assert_eq!(
-        output.status().vm_status().major_status,
-        StatusCode::MISSING_DATA,
-    );
+    assert!(matches!(
+        output.status().status(),
+        // StatusCode::MISSING_DATA
+        Ok(KeptVMStatus::ExecutionFailure { .. })
+    ));
     executor.apply_write_set(output.write_set());
 
     // publish resource
@@ -44,19 +45,21 @@ fn move_from_across_blocks() {
     // remove resource fails given it was removed already
     let rem_txn = remove_resource_txn(&sender, 15, vec![module.clone()]);
     let output = executor.execute_transaction(rem_txn);
-    assert_eq!(
-        output.status().vm_status().major_status,
-        StatusCode::MISSING_DATA,
-    );
+    assert!(matches!(
+        output.status().status(),
+        // StatusCode::MISSING_DATA
+        Ok(KeptVMStatus::ExecutionFailure { .. })
+    ));
     executor.apply_write_set(output.write_set());
 
     // borrow resource fail given it was removed
     let borrow_txn = borrow_resource_txn(&sender, 16, vec![module.clone()]);
     let output = executor.execute_transaction(borrow_txn);
-    assert_eq!(
-        output.status().vm_status().major_status,
-        StatusCode::MISSING_DATA,
-    );
+    assert!(matches!(
+        output.status().status(),
+        // StatusCode::MISSING_DATA
+        Ok(KeptVMStatus::ExecutionFailure { .. })
+    ));
     executor.apply_write_set(output.write_set());
 
     // publish resource again
@@ -73,12 +76,13 @@ fn move_from_across_blocks() {
         .expect("Must execute transactions");
     assert_eq!(
         output[0].status(),
-        &TransactionStatus::Keep(VMStatus::new(StatusCode::EXECUTED))
+        &TransactionStatus::Keep(KeptVMStatus::Executed)
     );
-    assert_eq!(
-        output[1].status().vm_status().major_status,
-        StatusCode::MISSING_DATA,
-    );
+    assert!(matches!(
+        output[1].status().status(),
+        // StatusCode::MISSING_DATA
+        Ok(KeptVMStatus::ExecutionFailure { .. })
+    ));
     for out in output {
         executor.apply_write_set(out.write_set());
     }
@@ -97,10 +101,11 @@ fn borrow_after_move() {
     // remove resource fails given no resource were published
     let rem_txn = remove_resource_txn(&sender, 11, vec![module.clone()]);
     let output = executor.execute_transaction(rem_txn);
-    assert_eq!(
-        output.status().vm_status().major_status,
-        StatusCode::MISSING_DATA,
-    );
+    assert!(matches!(
+        output.status().status(),
+        // StatusCode::MISSING_DATA
+        Ok(KeptVMStatus::ExecutionFailure { .. })
+    ));
     executor.apply_write_set(output.write_set());
 
     // publish resource
@@ -121,12 +126,13 @@ fn borrow_after_move() {
         .expect("Must execute transactions");
     assert_eq!(
         output[0].status(),
-        &TransactionStatus::Keep(VMStatus::new(StatusCode::EXECUTED))
+        &TransactionStatus::Keep(KeptVMStatus::Executed)
     );
-    assert_eq!(
-        output[1].status().vm_status().major_status,
-        StatusCode::MISSING_DATA,
-    );
+    assert!(matches!(
+        output[1].status().status(),
+        // StatusCode::MISSING_DATA
+        Ok(KeptVMStatus::ExecutionFailure { .. })
+    ));
     for out in output {
         executor.apply_write_set(out.write_set());
     }
@@ -145,10 +151,11 @@ fn change_after_move() {
     // remove resource fails given no resource were published
     let rem_txn = remove_resource_txn(&sender, 11, vec![module.clone()]);
     let output = executor.execute_transaction(rem_txn);
-    assert_eq!(
-        output.status().vm_status().major_status,
-        StatusCode::MISSING_DATA,
-    );
+    assert!(matches!(
+        output.status().status(),
+        // StatusCode::MISSING_DATA
+        Ok(KeptVMStatus::ExecutionFailure { .. })
+    ));
     executor.apply_write_set(output.write_set());
 
     // publish resource
@@ -169,12 +176,13 @@ fn change_after_move() {
         .expect("Must execute transactions");
     assert_eq!(
         output[0].status(),
-        &TransactionStatus::Keep(VMStatus::new(StatusCode::EXECUTED))
+        &TransactionStatus::Keep(KeptVMStatus::Executed)
     );
-    assert_eq!(
-        output[1].status().vm_status().major_status,
-        StatusCode::MISSING_DATA,
-    );
+    assert!(matches!(
+        output[1].status().status(),
+        // StatusCode::MISSING_DATA
+        Ok(KeptVMStatus::ExecutionFailure { .. })
+    ));
     for out in output {
         executor.apply_write_set(out.write_set());
     }
@@ -182,14 +190,15 @@ fn change_after_move() {
     // borrow resource
     let borrow_txn = borrow_resource_txn(&sender, 16, vec![module]);
     let output = executor.execute_transaction(borrow_txn);
-    assert_eq!(
-        output.status().vm_status().major_status,
-        StatusCode::MISSING_DATA,
-    );
+    assert!(matches!(
+        output.status().status(),
+        // StatusCode::MISSING_DATA
+        Ok(KeptVMStatus::ExecutionFailure { .. })
+    ));
     executor.apply_write_set(output.write_set());
 }
 
-fn add_module_txn(sender: &AccountData, seq_num: u64) -> (VerifiedModule, SignedTransaction) {
+fn add_module_txn(sender: &AccountData, seq_num: u64) -> (CompiledModule, SignedTransaction) {
     let module_code = String::from(
         "
         module M {
@@ -234,24 +243,22 @@ fn add_module_txn(sender: &AccountData, seq_num: u64) -> (VerifiedModule, Signed
     module
         .serialize(&mut module_blob)
         .expect("Module must serialize");
-    let verified_module = VerifiedModule::new(module).expect("Module must verify");
+    verify_module(&module).expect("Module must verify");
     (
-        verified_module,
-        sender.account().create_signed_txn_impl(
-            *sender.address(),
-            TransactionPayload::Module(Module::new(module_blob)),
-            seq_num,
-            100_000,
-            0,
-            LBR_NAME.to_owned(),
-        ),
+        module,
+        sender
+            .account()
+            .transaction()
+            .module(Module::new(module_blob))
+            .sequence_number(seq_num)
+            .sign(),
     )
 }
 
 fn add_resource_txn(
     sender: &AccountData,
     seq_num: u64,
-    extra_deps: Vec<VerifiedModule>,
+    extra_deps: Vec<CompiledModule>,
 ) -> SignedTransaction {
     let program = format!(
         "
@@ -266,20 +273,18 @@ fn add_resource_txn(
     );
 
     let module = compile_script_with_address(sender.address(), "file_name", &program, extra_deps);
-    sender.account().create_signed_txn_impl(
-        *sender.address(),
-        module,
-        seq_num,
-        100_000,
-        0,
-        LBR_NAME.to_owned(),
-    )
+    sender
+        .account()
+        .transaction()
+        .script(module)
+        .sequence_number(seq_num)
+        .sign()
 }
 
 fn remove_resource_txn(
     sender: &AccountData,
     seq_num: u64,
-    extra_deps: Vec<VerifiedModule>,
+    extra_deps: Vec<CompiledModule>,
 ) -> SignedTransaction {
     let program = format!(
         "
@@ -294,20 +299,18 @@ fn remove_resource_txn(
     );
 
     let module = compile_script_with_address(sender.address(), "file_name", &program, extra_deps);
-    sender.account().create_signed_txn_impl(
-        *sender.address(),
-        module,
-        seq_num,
-        100_000,
-        0,
-        LBR_NAME.to_owned(),
-    )
+    sender
+        .account()
+        .transaction()
+        .script(module)
+        .sequence_number(seq_num)
+        .sign()
 }
 
 fn borrow_resource_txn(
     sender: &AccountData,
     seq_num: u64,
-    extra_deps: Vec<VerifiedModule>,
+    extra_deps: Vec<CompiledModule>,
 ) -> SignedTransaction {
     let program = format!(
         "
@@ -322,20 +325,18 @@ fn borrow_resource_txn(
     );
 
     let module = compile_script_with_address(sender.address(), "file_name", &program, extra_deps);
-    sender.account().create_signed_txn_impl(
-        *sender.address(),
-        module,
-        seq_num,
-        100_000,
-        0,
-        LBR_NAME.to_owned(),
-    )
+    sender
+        .account()
+        .transaction()
+        .script(module)
+        .sequence_number(seq_num)
+        .sign()
 }
 
 fn change_resource_txn(
     sender: &AccountData,
     seq_num: u64,
-    extra_deps: Vec<VerifiedModule>,
+    extra_deps: Vec<CompiledModule>,
 ) -> SignedTransaction {
     let program = format!(
         "
@@ -350,12 +351,10 @@ fn change_resource_txn(
     );
 
     let module = compile_script_with_address(sender.address(), "file_name", &program, extra_deps);
-    sender.account().create_signed_txn_impl(
-        *sender.address(),
-        module,
-        seq_num,
-        100_000,
-        0,
-        LBR_NAME.to_owned(),
-    )
+    sender
+        .account()
+        .transaction()
+        .script(module)
+        .sequence_number(seq_num)
+        .sign()
 }

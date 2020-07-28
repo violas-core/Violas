@@ -279,7 +279,7 @@ mod test {
             SignedTransaction, TransactionInfo, TransactionListWithProof, TransactionWithProof,
             Version,
         },
-        vm_error::StatusCode,
+        vm_status::KeptVMStatus,
     };
     use libradb::errors::LibraDbError::NotFound;
     use std::{collections::BTreeMap, convert::TryFrom, sync::Arc};
@@ -429,7 +429,7 @@ mod test {
             HashValue::zero(),
             HashValue::zero(),
             0,
-            StatusCode::UNKNOWN_STATUS,
+            KeptVMStatus::VerificationError,
         );
 
         AccountStateProof::new(
@@ -467,7 +467,6 @@ mod test {
             None,
             EventHandle::random_handle(100),
             EventHandle::random_handle(100),
-            false,
         )
     }
 
@@ -614,6 +613,10 @@ mod test {
         }
 
         fn get_epoch_ending_ledger_info(&self, _: u64) -> Result<LedgerInfoWithSignatures> {
+            unimplemented!()
+        }
+
+        fn get_block_timestamp(&self, _: u64) -> Result<u64> {
             unimplemented!()
         }
     }

@@ -20,16 +20,16 @@ use libra_types::{
     account_config::{
         from_currency_code_string, lbr_type_tag, type_tag_for_currency_code, LBR_NAME,
     },
+    chain_id::ChainId,
     transaction::{
         authenticator::AuthenticationKey, helpers::TransactionSigner, RawTransaction, Script,
         SignedTransaction, TransactionArgument, TransactionPayload,
     },
 };
-use std::{convert::TryFrom, ffi::CStr, slice, time::Duration};
+use std::{convert::TryFrom, ffi::CStr, slice};
 use transaction_builder::{
-    encode_add_currency_to_account_script, encode_rotate_base_url_script,
-    encode_rotate_compliance_public_key_script, encode_transfer_with_metadata_script,
-    get_transaction_name,
+    encode_add_currency_to_account_script, encode_peer_to_peer_with_metadata_script,
+    encode_rotate_dual_attestation_info_script, get_transaction_name,
 };
 
 #[no_mangle]
@@ -39,7 +39,8 @@ pub unsafe extern "C" fn libra_SignedTransactionBytes_from(
     max_gas_amount: u64,
     gas_unit_price: u64,
     gas_identifier: *const i8,
-    expiration_time_secs: u64,
+    expiration_timestamp_secs: u64,
+    chain_id: u8,
     script_bytes: *const u8,
     script_len: usize,
     ptr_buf: *mut *mut u8,
@@ -77,7 +78,6 @@ pub unsafe extern "C" fn libra_SignedTransactionBytes_from(
 
     let public_key = private_key.public_key();
     let sender_address = account_address::from_public_key(&public_key);
-    let expiration_time = Duration::from_secs(expiration_time_secs);
 
     let payload = TransactionPayload::Script(script);
     let raw_txn = RawTransaction::new(
@@ -89,7 +89,8 @@ pub unsafe extern "C" fn libra_SignedTransactionBytes_from(
         CStr::from_ptr(gas_identifier)
             .to_string_lossy()
             .into_owned(),
-        expiration_time,
+        expiration_timestamp_secs,
+        ChainId::new(chain_id),
     );
 
     let keypair = KeyPair::from(private_key);
@@ -175,7 +176,7 @@ pub unsafe extern "C" fn libra_TransactionP2PScript_from(
         }
     };
 
-    let script = encode_transfer_with_metadata_script(
+    let script = encode_peer_to_peer_with_metadata_script(
         coin_type_tag,
         receiver_address,
         num_coins,
@@ -244,12 +245,20 @@ pub unsafe extern "C" fn libra_TransactionAddCurrencyScript_from(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn libra_TransactionRotateCompliancePublicKeyScript_from(
+pub unsafe extern "C" fn libra_TransactionRotateDualAttestationInfoScript_from(
+    new_url_bytes: *const u8,
+    new_url_len: usize,
     new_key_bytes: *const u8,
     ptr_buf: *mut *mut u8,
     ptr_len: *mut usize,
 ) -> LibraStatus {
     clear_error();
+
+    let new_url = if new_url_bytes.is_null() {
+        vec![]
+    } else {
+        slice::from_raw_parts(new_url_bytes, new_url_len).to_vec()
+    };
 
     if new_key_bytes.is_null() {
         update_last_error("new_key_bytes parameter must not be null.".to_string());
@@ -267,51 +276,16 @@ pub unsafe extern "C" fn libra_TransactionRotateCompliancePublicKeyScript_from(
         }
     };
 
-    let script =
-        encode_rotate_compliance_public_key_script(new_compliance_public_key.to_bytes().to_vec());
+    let script = encode_rotate_dual_attestation_info_script(
+        new_url,
+        new_compliance_public_key.to_bytes().to_vec(),
+    );
 
     let script_bytes = match to_bytes(&script) {
         Ok(result) => result,
         Err(e) => {
             update_last_error(format!(
                 "Error serializing rotate compliance public key Script: {}",
-                e.to_string()
-            ));
-            return LibraStatus::InternalError;
-        }
-    };
-
-    let script_buf: *mut u8 = libc::malloc(script_bytes.len()).cast();
-    script_buf.copy_from(script_bytes.as_ptr(), script_bytes.len());
-
-    *ptr_buf = script_buf;
-    *ptr_len = script_bytes.len();
-
-    LibraStatus::Ok
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn libra_TransactionRotateBaseURLScript_from(
-    new_url_bytes: *const u8,
-    new_url_len: usize,
-    ptr_buf: *mut *mut u8,
-    ptr_len: *mut usize,
-) -> LibraStatus {
-    clear_error();
-
-    let new_url = if new_url_bytes.is_null() {
-        vec![]
-    } else {
-        slice::from_raw_parts(new_url_bytes, new_url_len).to_vec()
-    };
-
-    let script = encode_rotate_base_url_script(new_url);
-
-    let script_bytes = match to_bytes(&script) {
-        Ok(result) => result,
-        Err(e) => {
-            update_last_error(format!(
-                "Error serializing rotate base URL Script: {}",
                 e.to_string()
             ));
             return LibraStatus::InternalError;
@@ -341,7 +315,8 @@ pub unsafe extern "C" fn libra_RawTransactionBytes_from(
     num_coins: u64,
     max_gas_amount: u64,
     gas_unit_price: u64,
-    expiration_time_secs: u64,
+    expiration_timestamp_secs: u64,
+    chain_id: u8,
     metadata_bytes: *const u8,
     metadata_len: usize,
     metadata_signature_bytes: *const u8,
@@ -376,7 +351,6 @@ pub unsafe extern "C" fn libra_RawTransactionBytes_from(
             return LibraStatus::InvalidArgument;
         }
     };
-    let expiration_time = Duration::from_secs(expiration_time_secs);
 
     let metadata = if metadata_bytes.is_null() {
         vec![]
@@ -389,7 +363,7 @@ pub unsafe extern "C" fn libra_RawTransactionBytes_from(
         slice::from_raw_parts(metadata_signature_bytes, metadata_signature_len).to_vec()
     };
 
-    let program = encode_transfer_with_metadata_script(
+    let program = encode_peer_to_peer_with_metadata_script(
         lbr_type_tag(),
         receiver_address,
         num_coins,
@@ -404,7 +378,8 @@ pub unsafe extern "C" fn libra_RawTransactionBytes_from(
         max_gas_amount,
         gas_unit_price,
         LBR_NAME.to_owned(),
-        expiration_time,
+        expiration_timestamp_secs,
+        ChainId::new(chain_id),
     );
 
     let raw_txn_bytes = match to_bytes(&raw_txn) {
@@ -527,7 +502,8 @@ pub unsafe extern "C" fn libra_LibraSignedTransaction_from(
     let payload = signed_txn.payload();
     let max_gas_amount = signed_txn.max_gas_amount();
     let gas_unit_price = signed_txn.gas_unit_price();
-    let expiration_time_secs = signed_txn.expiration_time().as_secs();
+    let expiration_timestamp_secs = signed_txn.expiration_timestamp_secs();
+    let chain_id = signed_txn.chain_id().id();
     // TODO: this will not work with multisig transactions, where both the pubkey and signature
     // have different sizes than the ones expected here. We will either need LibraSignedTransaction
     // types for single and multisig authenticators or adapt the type to work  with both
@@ -610,7 +586,8 @@ pub unsafe extern "C" fn libra_LibraSignedTransaction_from(
             payload,
             max_gas_amount,
             gas_unit_price,
-            expiration_time_secs,
+            expiration_timestamp_secs,
+            chain_id,
         },
         None => {
             let raw_txn_other = LibraRawTransaction {
@@ -622,7 +599,8 @@ pub unsafe extern "C" fn libra_LibraSignedTransaction_from(
                 },
                 max_gas_amount,
                 gas_unit_price,
-                expiration_time_secs,
+                expiration_timestamp_secs,
+                chain_id,
             };
             *out = LibraSignedTransaction {
                 raw_txn: raw_txn_other,
@@ -646,7 +624,7 @@ pub unsafe extern "C" fn libra_LibraSignedTransaction_from(
 mod test {
     use super::*;
     use lcs::from_bytes;
-    use libra_crypto::{hash::CryptoHash, PrivateKey, SigningKey, Uniform};
+    use libra_crypto::{PrivateKey, SigningKey, Uniform};
     use libra_types::{
         account_config::COIN1_NAME,
         transaction::{SignedTransaction, TransactionArgument},
@@ -669,7 +647,7 @@ mod test {
         let amount = 100_000_000;
         let gas_unit_price = 123;
         let max_gas_amount = 1000;
-        let expiration_time_secs = 0;
+        let expiration_timestamp_secs = 0;
         let metadata = vec![1, 2, 3];
         let metadata_signature = [0x1; 64].to_vec();
         let coin_ident = std::ffi::CString::new(LBR_NAME).expect("Invalid ident");
@@ -708,7 +686,8 @@ mod test {
                 max_gas_amount,
                 gas_unit_price,
                 coin_ident.as_ptr(),
-                expiration_time_secs,
+                expiration_timestamp_secs,
+                ChainId::test().id(),
                 script_bytes.as_ptr(),
                 script_len,
                 buf_ptr,
@@ -757,7 +736,8 @@ mod test {
                 max_gas_amount,
                 gas_unit_price,
                 coin_idnet.as_ptr(),
-                expiration_time_secs,
+                expiration_timestamp_secs,
+                ChainId::test().id(),
                 script_bytes.as_ptr(),
                 script_len,
                 buf_ptr2,
@@ -805,7 +785,8 @@ mod test {
                 max_gas_amount,
                 gas_unit_price,
                 coin_ident_2.as_ptr(),
-                expiration_time_secs,
+                expiration_timestamp_secs,
+                ChainId::test().id(),
                 script_bytes.as_ptr(),
                 script_len,
                 buf_ptr,
@@ -952,9 +933,10 @@ mod test {
         };
     }
 
-    /// Generate a Rotate Compliance Public Key Script and deserialize
+    /// Generate a RotateDualAttestationInfo Script and deserialize
     #[test]
-    fn test_lcs_rotate_compliance_public_key_transaction_script() {
+    fn test_lcs_rotate_dual_attestationInfo_transaction_script() {
+        let new_url = b"new_name".to_vec();
         let private_key = Ed25519PrivateKey::generate_for_testing();
         let new_compliance_public_key = private_key.public_key();
 
@@ -963,43 +945,10 @@ mod test {
         let mut script_len: usize = 0;
 
         let script_result = unsafe {
-            libra_TransactionRotateCompliancePublicKeyScript_from(
-                new_compliance_public_key.to_bytes().as_ptr(),
-                script_buf_ptr,
-                &mut script_len,
-            )
-        };
-
-        assert_eq!(script_result, LibraStatus::Ok);
-
-        let script_bytes: &[u8] = unsafe { slice::from_raw_parts(script_buf, script_len) };
-        let deserialized_script: Script = from_bytes(script_bytes)
-            .expect("LCS deserialization failed for rotate compliance public key Script");
-
-        if let TransactionArgument::U8Vector(val) = deserialized_script.args()[0].clone() {
-            assert_eq!(val, new_compliance_public_key.to_bytes().to_vec());
-        } else {
-            unreachable!()
-        }
-
-        unsafe {
-            libra_free_bytes_buffer(script_buf);
-        };
-    }
-
-    /// Generate a Rotate Base URL Script and deserialize
-    #[test]
-    fn test_lcs_rotate_base_url_transaction_script() {
-        let new_url = b"new_name".to_vec();
-
-        let mut script_buf: *mut u8 = std::ptr::null_mut();
-        let script_buf_ptr = &mut script_buf;
-        let mut script_len: usize = 0;
-
-        let script_result = unsafe {
-            libra_TransactionRotateBaseURLScript_from(
+            libra_TransactionRotateDualAttestationInfoScript_from(
                 new_url.as_ptr(),
                 new_url.len(),
+                new_compliance_public_key.to_bytes().as_ptr(),
                 script_buf_ptr,
                 &mut script_len,
             )
@@ -1013,6 +962,11 @@ mod test {
 
         if let TransactionArgument::U8Vector(val) = deserialized_script.args()[0].clone() {
             assert_eq!(val, new_url);
+        } else {
+            unreachable!()
+        }
+        if let TransactionArgument::U8Vector(val) = deserialized_script.args()[1].clone() {
+            assert_eq!(val, new_compliance_public_key.to_bytes().to_vec());
         } else {
             unreachable!()
         }
@@ -1035,7 +989,7 @@ mod test {
         let amount = 100_000_000;
         let gas_unit_price = 123;
         let max_gas_amount = 1000;
-        let expiration_time_secs = 0;
+        let expiration_timestamp_secs = 0;
 
         // get raw transaction in bytes
         let mut buf: u8 = 0;
@@ -1049,7 +1003,8 @@ mod test {
                 amount,
                 max_gas_amount,
                 gas_unit_price,
-                expiration_time_secs,
+                expiration_timestamp_secs,
+                ChainId::test().id(),
                 vec![].as_ptr(),
                 0,
                 vec![].as_ptr(),
@@ -1063,7 +1018,7 @@ mod test {
         let raw_txn_bytes: &[u8] = unsafe { slice::from_raw_parts(buf_ptr, len) };
         let deserialized_raw_txn: RawTransaction =
             from_bytes(raw_txn_bytes).expect("LCS deserialization failed for raw transaction");
-        let signature = private_key.sign_message(&deserialized_raw_txn.hash());
+        let signature = private_key.sign(&deserialized_raw_txn);
 
         // get signed transaction by signing raw transaction
         let mut signed_txn_buf: u8 = 0;
@@ -1119,12 +1074,12 @@ mod test {
         let amount = 10_000_000;
         let max_gas_amount = 10;
         let gas_unit_price = 1;
-        let expiration_time_secs = 5;
+        let expiration_timestamp_secs = 5;
         let metadata = vec![1, 2, 3];
         let metadata_signature = [0x1; 64].to_vec();
         let signature = Ed25519Signature::try_from(&[1u8; Ed25519Signature::LENGTH][..]).unwrap();
 
-        let program = encode_transfer_with_metadata_script(
+        let program = encode_peer_to_peer_with_metadata_script(
             lbr_type_tag(),
             receiver,
             amount,
@@ -1139,7 +1094,8 @@ mod test {
                 max_gas_amount,
                 gas_unit_price,
                 LBR_NAME.to_owned(),
-                Duration::from_secs(expiration_time_secs),
+                expiration_timestamp_secs,
+                ChainId::test(),
             ),
             public_key.clone(),
             signature.clone(),
@@ -1214,8 +1170,8 @@ mod test {
             Ed25519Signature::try_from(libra_signed_txn.signature.as_ref()).unwrap()
         );
         assert_eq!(
-            expiration_time_secs,
-            libra_signed_txn.raw_txn.expiration_time_secs
+            expiration_timestamp_secs,
+            libra_signed_txn.raw_txn.expiration_timestamp_secs
         );
     }
 }

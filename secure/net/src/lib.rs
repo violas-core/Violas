@@ -40,13 +40,16 @@ pub enum Error {
 pub struct NetworkClient {
     server: SocketAddr,
     stream: Option<NetworkStream>,
+    /// Read, Write, Connect timeout in milliseconds.
+    timeout_ms: u64,
 }
 
 impl NetworkClient {
-    pub fn new(server: SocketAddr) -> Self {
+    pub fn new(server: SocketAddr, timeout_ms: u64) -> Self {
         Self {
             server,
             stream: None,
+            timeout_ms,
         }
     }
 
@@ -82,19 +85,20 @@ impl NetworkClient {
 
     fn server(&mut self) -> Result<&mut NetworkStream, Error> {
         if self.stream.is_none() {
+            let timeout = std::time::Duration::from_millis(self.timeout_ms);
             debug!("Attempting to connect to upstream {}", self.server);
-            let mut stream = TcpStream::connect(self.server);
+            let mut stream = TcpStream::connect_timeout(&self.server, timeout);
 
             let sleeptime = time::Duration::from_millis(100);
             while let Err(e) = stream {
                 debug!("Failed to connect to upstream {} {:?}", self.server, e);
                 thread::sleep(sleeptime);
-                stream = TcpStream::connect(self.server);
+                stream = TcpStream::connect_timeout(&self.server, timeout);
             }
 
             let stream = stream?;
             stream.set_nodelay(true)?;
-            self.stream = Some(NetworkStream::new(stream));
+            self.stream = Some(NetworkStream::new(stream, self.timeout_ms));
             debug!("Connection established to upstream {}", self.server);
         }
 
@@ -105,14 +109,17 @@ impl NetworkClient {
 pub struct NetworkServer {
     listener: Option<TcpListener>,
     stream: Option<NetworkStream>,
+    /// Read, Write, Connect timeout in milliseconds.
+    timeout_ms: u64,
 }
 
 impl NetworkServer {
-    pub fn new(listen: SocketAddr) -> Self {
-        let listener = TcpListener::bind(listen).unwrap();
+    pub fn new(listen: SocketAddr, timeout_ms: u64) -> Self {
+        let listener = TcpListener::bind(listen);
         Self {
-            listener: Some(listener),
+            listener: Some(listener.unwrap()),
             stream: None,
+            timeout_ms,
         }
     }
 
@@ -159,7 +166,7 @@ impl NetworkServer {
             let (stream, stream_addr) = listener.accept()?;
             debug!("Connection established with downstream {}", stream_addr);
             stream.set_nodelay(true)?;
-            self.stream = Some(NetworkStream::new(stream));
+            self.stream = Some(NetworkStream::new(stream, self.timeout_ms));
         }
 
         self.stream.as_mut().ok_or_else(|| Error::NoActiveStream)
@@ -173,7 +180,12 @@ struct NetworkStream {
 }
 
 impl NetworkStream {
-    pub fn new(stream: TcpStream) -> Self {
+    pub fn new(stream: TcpStream, timeout_ms: u64) -> Self {
+        let timeout = Some(std::time::Duration::from_millis(timeout_ms));
+        // These only fail if a duration of 0 is passed in.
+        stream.set_read_timeout(timeout).unwrap();
+        stream.set_write_timeout(timeout).unwrap();
+
         Self {
             stream,
             buffer: Vec::new(),
@@ -271,12 +283,15 @@ mod test {
     use libra_config::utils;
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
+    /// Read, Write, Connect timeout in milliseconds.
+    const TIMEOUT: u64 = 5_000;
+
     #[test]
     fn test_ping() {
         let server_port = utils::get_available_port();
         let server_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), server_port);
-        let mut server = NetworkServer::new(server_addr);
-        let mut client = NetworkClient::new(server_addr);
+        let mut server = NetworkServer::new(server_addr, TIMEOUT);
+        let mut client = NetworkClient::new(server_addr, TIMEOUT);
 
         let data = vec![0, 1, 2, 3];
         client.write(&data).unwrap();
@@ -293,8 +308,8 @@ mod test {
     fn test_client_shutdown() {
         let server_port = utils::get_available_port();
         let server_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), server_port);
-        let mut server = NetworkServer::new(server_addr);
-        let mut client = NetworkClient::new(server_addr);
+        let mut server = NetworkServer::new(server_addr, TIMEOUT);
+        let mut client = NetworkClient::new(server_addr, TIMEOUT);
 
         let data = vec![0, 1, 2, 3];
         client.write(&data).unwrap();
@@ -302,7 +317,7 @@ mod test {
         assert_eq!(data, result);
 
         client.shutdown().unwrap();
-        let mut client = NetworkClient::new(server_addr);
+        let mut client = NetworkClient::new(server_addr, TIMEOUT);
         assert!(server.read().is_err());
 
         let data = vec![4, 5, 6, 7];
@@ -315,8 +330,8 @@ mod test {
     fn test_server_shutdown() {
         let server_port = utils::get_available_port();
         let server_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), server_port);
-        let mut server = NetworkServer::new(server_addr);
-        let mut client = NetworkClient::new(server_addr);
+        let mut server = NetworkServer::new(server_addr, TIMEOUT);
+        let mut client = NetworkClient::new(server_addr, TIMEOUT);
 
         let data = vec![0, 1, 2, 3];
         client.write(&data).unwrap();
@@ -324,7 +339,7 @@ mod test {
         assert_eq!(data, result);
 
         server.shutdown().unwrap();
-        let mut server = NetworkServer::new(server_addr);
+        let mut server = NetworkServer::new(server_addr, TIMEOUT);
 
         let data = vec![4, 5, 6, 7];
         // We aren't notified immediately that a server has shutdown, but it happens eventually
@@ -340,8 +355,8 @@ mod test {
     fn test_write_two_messages_buffered() {
         let server_port = utils::get_available_port();
         let server_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), server_port);
-        let mut server = NetworkServer::new(server_addr);
-        let mut client = NetworkClient::new(server_addr);
+        let mut server = NetworkServer::new(server_addr, TIMEOUT);
+        let mut client = NetworkClient::new(server_addr, TIMEOUT);
         let data1 = vec![0, 1, 2, 3];
         let data2 = vec![4, 5, 6, 7];
         client.write(&data1).unwrap();
@@ -349,6 +364,59 @@ mod test {
         let result1 = server.read().unwrap();
         let result2 = server.read().unwrap();
         assert_eq!(data1, result1);
+        assert_eq!(data2, result2);
+    }
+
+    #[test]
+    fn test_server_timeout() {
+        let server_port = utils::get_available_port();
+        let server_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), server_port);
+        let mut server = NetworkServer::new(server_addr, TIMEOUT);
+        let mut client = NetworkClient::new(server_addr, TIMEOUT);
+        let data1 = vec![0, 1, 2, 3];
+        let data2 = vec![4, 5, 6, 7];
+
+        // First client, success
+        client.write(&data1).unwrap();
+        let result1 = server.read().unwrap();
+        assert_eq!(data1, result1);
+
+        // Timedout
+        server.read().unwrap_err();
+
+        // New client, success, note the previous client connection is still active, the server is
+        // actively letting it go due to lack of activity.
+        let mut client2 = NetworkClient::new(server_addr, TIMEOUT);
+        client2.write(&data2).unwrap();
+        let result2 = server.read().unwrap();
+        assert_eq!(data2, result2);
+    }
+
+    #[test]
+    fn test_client_timeout() {
+        let server_port = utils::get_available_port();
+        let server_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), server_port);
+        let mut server = NetworkServer::new(server_addr, TIMEOUT);
+        let mut client = NetworkClient::new(server_addr, TIMEOUT);
+        let data1 = vec![0, 1, 2, 3];
+        let data2 = vec![4, 5, 6, 7];
+
+        // First server success
+        client.write(&data1).unwrap();
+        let result1 = server.read().unwrap();
+        assert_eq!(data1, result1);
+
+        // Timedout, it is hard to simulate a client receiving a write timeout
+        client.read().unwrap_err();
+
+        // Clean up old Server listener but keep the stream online. Start a new server, which will
+        // be the one the client now connects to.
+        server.listener = None;
+        let mut server2 = NetworkServer::new(server_addr, TIMEOUT);
+
+        // Client starts a new stream, success
+        client.write(&data2).unwrap();
+        let result2 = server2.read().unwrap();
         assert_eq!(data2, result2);
     }
 }

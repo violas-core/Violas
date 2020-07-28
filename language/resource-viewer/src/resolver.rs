@@ -1,7 +1,10 @@
 // Copyright (c) The Libra Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::module_cache::ModuleCache;
+use crate::{
+    fat_type::{FatStructType, FatType},
+    module_cache::ModuleCache,
+};
 use anyhow::{anyhow, Result};
 use compiled_stdlib::{stdlib_modules, StdLibOptions};
 use libra_state_view::StateView;
@@ -10,7 +13,6 @@ use move_core_types::{
     identifier::{IdentStr, Identifier},
     language_storage::{ModuleId, StructTag, TypeTag},
 };
-use move_vm_types::loaded_data::types::{FatStructType, FatType};
 use std::rc::Rc;
 use vm::{
     access::ModuleAccess,
@@ -31,7 +33,7 @@ impl<'a> Resolver<'a> {
         if use_stdlib {
             let modules = stdlib_modules(StdLibOptions::Compiled);
             for module in modules {
-                cache.insert(module.self_id(), module.clone().into_inner());
+                cache.insert(module.self_id(), module.clone());
             }
         }
         Resolver { state, cache }

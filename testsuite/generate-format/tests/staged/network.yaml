@@ -1,4 +1,6 @@
 ---
+ChainId:
+  NEWTYPESTRUCT: U8
 DirectSendMsg:
   STRUCT:
     - protocol_id:
@@ -7,6 +9,11 @@ DirectSendMsg:
     - raw_msg: BYTES
 DnsName:
   NEWTYPESTRUCT: STR
+EncNetworkAddress:
+  STRUCT:
+    - key_version: U32
+    - seq_num: U64
+    - enc_addr: BYTES
 ErrorCode:
   ENUM:
     0:
@@ -36,8 +43,6 @@ MessagingProtocolVersion:
   ENUM:
     0:
       V1: UNIT
-ChainId:
-  NEWTYPESTRUCT: STR
 NetworkAddress:
   NEWTYPESTRUCT:
     SEQ:
@@ -132,11 +137,9 @@ ProtocolId:
       DiscoveryDirectSend: UNIT
     5:
       HealthCheckerRpc: UNIT
-    6:
-      IdentityDirectSend: UNIT
-    7:
-      OnchainDiscoveryRpc: UNIT
 PublicKey:
+  NEWTYPESTRUCT: BYTES
+RawEncNetworkAddress:
   NEWTYPESTRUCT: BYTES
 RawNetworkAddress:
   NEWTYPESTRUCT: BYTES
@@ -153,5 +156,4 @@ RpcResponse:
     - priority: U8
     - raw_response: BYTES
 SupportedProtocols:
-  NEWTYPESTRUCT:
-    SEQ: U8
+  NEWTYPESTRUCT: BYTES

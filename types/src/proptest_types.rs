@@ -10,6 +10,7 @@ use crate::{
     account_state_blob::AccountStateBlob,
     block_info::{BlockInfo, Round},
     block_metadata::BlockMetadata,
+    chain_id::ChainId,
     contract_event::ContractEvent,
     epoch_state::EpochState,
     event::{EventHandle, EventKey},
@@ -19,14 +20,13 @@ use crate::{
     transaction::{
         ChangeSet, Module, RawTransaction, Script, SignatureCheckedTransaction, SignedTransaction,
         Transaction, TransactionArgument, TransactionListWithProof, TransactionPayload,
-        TransactionStatus, TransactionToCommit, Version,
+        TransactionStatus, TransactionToCommit, Version, WriteSetPayload,
     },
-    vm_error::{StatusCode, VMStatus},
+    vm_status::{KeptVMStatus, VMStatus},
     write_set::{WriteOp, WriteSet, WriteSetMut},
 };
 use libra_crypto::{
     ed25519::{self, Ed25519PrivateKey, Ed25519PublicKey, Ed25519Signature},
-    hash::CryptoHash,
     test_utils::KeyPair,
     traits::*,
     HashValue,
@@ -39,7 +39,7 @@ use proptest::{
     prelude::*,
 };
 use proptest_derive::Arbitrary;
-use std::{convert::TryFrom, iter::Iterator, time::Duration};
+use std::{convert::TryFrom, iter::Iterator};
 
 impl WriteOp {
     pub fn value_strategy() -> impl Strategy<Value = Self> {
@@ -286,6 +286,7 @@ fn new_raw_transaction(
     gas_currency_code: String,
     expiration_time_secs: u64,
 ) -> RawTransaction {
+    let chain_id = ChainId::test();
     match payload {
         TransactionPayload::Module(module) => RawTransaction::new_module(
             sender,
@@ -294,7 +295,8 @@ fn new_raw_transaction(
             max_gas_amount,
             gas_unit_price,
             gas_currency_code,
-            Duration::from_secs(expiration_time_secs),
+            expiration_time_secs,
+            chain_id,
         ),
         TransactionPayload::Script(script) => RawTransaction::new_script(
             sender,
@@ -303,12 +305,19 @@ fn new_raw_transaction(
             max_gas_amount,
             gas_unit_price,
             gas_currency_code,
-            Duration::from_secs(expiration_time_secs),
+            expiration_time_secs,
+            chain_id,
         ),
-        TransactionPayload::WriteSet(write_set) => {
+        TransactionPayload::WriteSet(WriteSetPayload::Direct(write_set)) => {
             // It's a bit unfortunate that max_gas_amount etc is generated but
             // not used, but it isn't a huge deal.
-            RawTransaction::new_change_set(sender, sequence_number, write_set)
+            RawTransaction::new_change_set(sender, sequence_number, write_set, chain_id)
+        }
+        TransactionPayload::WriteSet(WriteSetPayload::Script {
+            execute_as: signer,
+            script,
+        }) => {
+            RawTransaction::new_writeset_script(sender, sequence_number, script, signer, chain_id)
         }
     }
 }
@@ -468,48 +477,28 @@ impl TransactionPayload {
     }
 
     pub fn write_set_strategy() -> impl Strategy<Value = Self> {
-        any::<WriteSet>().prop_map(|ws| TransactionPayload::WriteSet(ChangeSet::new(ws, vec![])))
+        any::<WriteSet>().prop_map(|ws| {
+            TransactionPayload::WriteSet(WriteSetPayload::Direct(ChangeSet::new(ws, vec![])))
+        })
     }
 
     /// Similar to `write_set_strategy` except generates a valid write set for the genesis block.
     pub fn genesis_strategy() -> impl Strategy<Value = Self> {
-        WriteSet::genesis_strategy()
-            .prop_map(|ws| TransactionPayload::WriteSet(ChangeSet::new(ws, vec![])))
-    }
-}
-
-/// The `Arbitrary` impl only generates validation statuses since the full enum is too large.
-impl Arbitrary for StatusCode {
-    type Parameters = ();
-    type Strategy = BoxedStrategy<Self>;
-
-    fn arbitrary_with(_args: ()) -> Self::Strategy {
-        prop_oneof![
-            Just(StatusCode::UNKNOWN_VALIDATION_STATUS),
-            Just(StatusCode::INVALID_SIGNATURE),
-            Just(StatusCode::INVALID_AUTH_KEY),
-            Just(StatusCode::SEQUENCE_NUMBER_TOO_OLD),
-            Just(StatusCode::SEQUENCE_NUMBER_TOO_NEW),
-            Just(StatusCode::INSUFFICIENT_BALANCE_FOR_TRANSACTION_FEE),
-            Just(StatusCode::TRANSACTION_EXPIRED),
-            Just(StatusCode::SENDING_ACCOUNT_DOES_NOT_EXIST),
-            Just(StatusCode::REJECTED_WRITE_SET),
-            Just(StatusCode::INVALID_WRITE_SET),
-            Just(StatusCode::EXCEEDED_MAX_TRANSACTION_SIZE),
-            Just(StatusCode::UNKNOWN_SCRIPT),
-            Just(StatusCode::UNKNOWN_MODULE),
-            Just(StatusCode::MAX_GAS_UNITS_EXCEEDS_MAX_GAS_UNITS_BOUND),
-            Just(StatusCode::MAX_GAS_UNITS_BELOW_MIN_TRANSACTION_GAS_UNITS),
-            Just(StatusCode::GAS_UNIT_PRICE_BELOW_MIN_BOUND),
-            Just(StatusCode::GAS_UNIT_PRICE_ABOVE_MAX_BOUND),
-        ]
-        .boxed()
+        WriteSet::genesis_strategy().prop_map(|ws| {
+            TransactionPayload::WriteSet(WriteSetPayload::Direct(ChangeSet::new(ws, vec![])))
+        })
     }
 }
 
 prop_compose! {
     fn arb_transaction_status()(vm_status in any::<VMStatus>()) -> TransactionStatus {
         vm_status.into()
+    }
+}
+
+prop_compose! {
+    fn arb_pubkey()(keypair in ed25519::keypair_strategy()) -> AccountAddress {
+            account_address::from_public_key(&keypair.public_key)
     }
 }
 
@@ -568,11 +557,11 @@ impl Arbitrary for Module {
 }
 
 prop_compose! {
-    fn arb_validator_signature_for_hash(hash: HashValue)(
-        hash in Just(hash),
+    fn arb_validator_signature_for_ledger_info(ledger_info: LedgerInfo)(
+        ledger_info in Just(ledger_info),
         keypair in ed25519::keypair_strategy(),
     ) -> (AccountAddress, Ed25519Signature) {
-        let signature = keypair.private_key.sign_message(&hash);
+        let signature = keypair.private_key.sign(&ledger_info);
         (account_address::from_public_key(&keypair.public_key), signature)
     }
 }
@@ -582,11 +571,10 @@ impl Arbitrary for LedgerInfoWithSignatures {
     fn arbitrary_with(num_validators_range: Self::Parameters) -> Self::Strategy {
         (any::<LedgerInfo>(), Just(num_validators_range))
             .prop_flat_map(|(ledger_info, num_validators_range)| {
-                let hash = ledger_info.hash();
                 (
-                    Just(ledger_info),
+                    Just(ledger_info.clone()),
                     prop::collection::vec(
-                        arb_validator_signature_for_hash(hash),
+                        arb_validator_signature_for_ledger_info(ledger_info),
                         num_validators_range,
                     ),
                 )
@@ -648,7 +636,6 @@ impl AccountResourceGen {
             self.key_rotation_capability,
             account_info.sent_event_handle.clone(),
             account_info.received_event_handle.clone(),
-            false,
         )
     }
 }
@@ -761,7 +748,7 @@ pub struct TransactionToCommitGen {
     /// Gas used.
     gas_used: u64,
     /// Transaction status
-    major_status: StatusCode,
+    status: KeptVMStatus,
 }
 
 impl TransactionToCommitGen {
@@ -793,7 +780,7 @@ impl TransactionToCommitGen {
             account_states,
             events,
             self.gas_used,
-            self.major_status,
+            self.status,
         )
     }
 }
@@ -818,10 +805,10 @@ impl Arbitrary for TransactionToCommitGen {
             ),
             vec((any::<Index>(), any::<AccountStateBlobGen>()), 0..=1),
             any::<u64>(),
-            any::<StatusCode>(),
+            any::<KeptVMStatus>(),
         )
             .prop_map(
-                |(sender, event_emitters, mut touched_accounts, gas_used, major_status)| {
+                |(sender, event_emitters, mut touched_accounts, gas_used, status)| {
                     // To reflect change of account/event sequence numbers, txn sender account and
                     // event emitter accounts must be updated.
                     let (sender_index, sender_blob_gen, txn_gen) = sender;
@@ -838,7 +825,7 @@ impl Arbitrary for TransactionToCommitGen {
                         event_gens,
                         account_state_gens: touched_accounts,
                         gas_used,
-                        major_status,
+                        status,
                     }
                 },
             )
@@ -898,26 +885,18 @@ impl Arbitrary for TransactionListWithProof {
 impl Arbitrary for BlockMetadata {
     type Parameters = SizeRange;
     fn arbitrary_with(num_validators_range: Self::Parameters) -> Self::Strategy {
-        let signature_strategy = (any::<HashValue>(), Just(num_validators_range)).prop_flat_map(
-            |(hash, num_validators_range)| {
-                prop::collection::vec(arb_validator_signature_for_hash(hash), num_validators_range)
-            },
-        );
+        let addr_strategy = (Just(num_validators_range)).prop_flat_map(|num_validator_range| {
+            prop::collection::vec(arb_pubkey(), num_validator_range)
+        });
         (
             any::<HashValue>(),
             any::<u64>(),
             any::<u64>(),
-            signature_strategy,
+            addr_strategy,
             any::<AccountAddress>(),
         )
-            .prop_map(|(id, round, timestamp, signatures, proposer)| {
-                BlockMetadata::new(
-                    id,
-                    round,
-                    timestamp,
-                    signatures.into_iter().map(|(addr, _)| addr).collect(),
-                    proposer,
-                )
+            .prop_map(|(id, round, timestamp, addresses, proposer)| {
+                BlockMetadata::new(id, round, timestamp, addresses, proposer)
             })
             .boxed()
     }
@@ -1028,13 +1007,12 @@ impl LedgerInfoWithSignaturesGen {
         block_size: usize,
     ) -> LedgerInfoWithSignatures {
         let ledger_info = self.ledger_info_gen.materialize(universe, block_size);
-        let ledger_info_hash = ledger_info.hash();
         let signatures = self
             .signers
             .into_iter()
             .map(|signer_index| {
                 let account = universe.get_account_info(signer_index);
-                let signature = account.private_key.sign_message(&ledger_info_hash);
+                let signature = account.private_key.sign(&ledger_info);
                 (account.address, signature)
             })
             .collect();

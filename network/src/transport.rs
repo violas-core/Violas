@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{
+    logging::network_events,
     noise::{stream::NoiseStream, AntiReplayTimestamps, HandshakeAuthMode, NoiseUpgrader},
     protocols::{
         identity::exchange_handshake,
@@ -13,15 +14,15 @@ use futures::{
     io::{AsyncRead, AsyncWrite},
     stream::{Stream, StreamExt, TryStreamExt},
 };
-use libra_config::{chain_id::ChainId, config::HANDSHAKE_VERSION, network_id::NetworkId};
+use libra_config::{config::HANDSHAKE_VERSION, network_id::NetworkId};
 use libra_crypto::x25519;
 use libra_logger::prelude::*;
 use libra_network_address::{parse_dns_tcp, parse_ip_tcp, parse_memory, NetworkAddress};
-use libra_types::PeerId;
+use libra_types::{chain_id::ChainId, PeerId};
 use netcore::transport::{tcp, ConnectionOrigin, Transport};
 use serde::Serialize;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     convert::TryFrom,
     fmt::Debug,
     io,
@@ -219,7 +220,13 @@ async fn upgrade_inbound<T: TSocket>(
     let socket = fut_socket.await?;
 
     // try authenticating via noise handshake
-    let (socket, peer_id) = ctxt.noise.upgrade_inbound(socket).await?;
+    let (socket, peer_id) = ctxt.noise.upgrade_inbound(socket).await.map_err(|err| {
+        // security logging
+        send_struct_log!(security_log(security_events::INVALID_NETWORK_PEER)
+            .data_display("error", &err)
+            .field(network_events::NETWORK_ADDRESS, &addr));
+        err
+    })?;
     let remote_pubkey = socket.get_remote_static();
     let addr = addr.append_prod_protos(remote_pubkey, HANDSHAKE_VERSION);
 
@@ -282,7 +289,7 @@ where
         base_transport: TTransport,
         self_peer_id: PeerId,
         identity_key: x25519::PrivateKey,
-        trusted_peers: Option<Arc<RwLock<HashMap<PeerId, x25519::PublicKey>>>>,
+        trusted_peers: Option<Arc<RwLock<HashMap<PeerId, HashSet<x25519::PublicKey>>>>>,
         handshake_version: u8,
         chain_id: ChainId,
         network_id: NetworkId,
@@ -519,9 +526,11 @@ mod test {
         key1: &x25519::PrivateKey,
         id2: PeerId,
         key2: &x25519::PrivateKey,
-    ) -> Arc<RwLock<HashMap<PeerId, x25519::PublicKey>>> {
+    ) -> Arc<RwLock<HashMap<PeerId, HashSet<x25519::PublicKey>>>> {
+        let pubkey_set1 = [key1.public_key()].iter().copied().collect();
+        let pubkey_set2 = [key2.public_key()].iter().copied().collect();
         Arc::new(RwLock::new(
-            vec![(id1, key1.public_key()), (id2, key2.public_key())]
+            vec![(id1, pubkey_set1), (id2, pubkey_set2)]
                 .into_iter()
                 .collect(),
         ))
@@ -539,7 +548,7 @@ mod test {
         Runtime,
         (PeerId, LibraNetTransport<TTransport>),
         (PeerId, LibraNetTransport<TTransport>),
-        Option<Arc<RwLock<HashMap<PeerId, x25519::PublicKey>>>>,
+        Option<Arc<RwLock<HashMap<PeerId, HashSet<x25519::PublicKey>>>>>,
         SupportedProtocols,
     )
     where
@@ -587,7 +596,7 @@ mod test {
             listener_key,
             trusted_peers.clone(),
             HANDSHAKE_VERSION,
-            chain_id.clone(),
+            chain_id,
             NetworkId::Validator,
             supported_protocols.clone(),
         );

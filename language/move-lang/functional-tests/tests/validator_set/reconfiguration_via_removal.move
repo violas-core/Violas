@@ -10,14 +10,11 @@
 //! block-time: 2
 
 //! new-transaction
-//! sender: association
+//! sender: libraroot
 script{
     use 0x1::LibraSystem;
-    use 0x1::Roles::{Self, AssociationRootRole};
     fun main(account: &signer) {
-        let assoc_root_role = Roles::extract_privilege_to_capability<AssociationRootRole>(account);
-        LibraSystem::remove_validator(&assoc_root_role, {{vivian}});
-        Roles::restore_capability_to_privilege(account, assoc_root_role);
+        LibraSystem::remove_validator(account, {{vivian}});
     }
 }
 

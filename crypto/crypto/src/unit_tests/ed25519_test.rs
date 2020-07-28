@@ -1,5 +1,9 @@
 // Copyright (c) The Libra Core Contributors
 // SPDX-License-Identifier: Apache-2.0
+#[cfg(feature = "vanilla")]
+use vanilla_curve25519_dalek as curve25519_dalek;
+#[cfg(feature = "vanilla")]
+use vanilla_ed25519_dalek as ed25519_dalek;
 
 use crate as libra_crypto;
 use crate::{
@@ -7,17 +11,16 @@ use crate::{
         Ed25519PrivateKey, Ed25519PublicKey, Ed25519Signature, ED25519_PRIVATE_KEY_LENGTH,
         ED25519_PUBLIC_KEY_LENGTH, ED25519_SIGNATURE_LENGTH,
     },
-    test_utils::uniform_keypair_strategy,
+    test_utils::{random_serializable_struct, uniform_keypair_strategy},
     traits::*,
     x25519,
 };
 
 use core::{
     convert::TryFrom,
-    ops::{Index, IndexMut},
+    ops::{Index, IndexMut, Neg},
 };
 
-use crate::hash::HashValue;
 use libra_crypto_derive::{CryptoHasher, LCSCryptoHash};
 use proptest::{collection::vec, prelude::*};
 use serde::{Deserialize, Serialize};
@@ -26,6 +29,40 @@ use serde::{Deserialize, Serialize};
 struct CryptoHashable(pub usize);
 
 proptest! {
+
+    // In this test we demonstrate a signature that's not message-bound by only
+    // modifying the public key and the R component, under a pathological yet
+    // admissible s < l value for the signature.
+    #[test]
+    fn verify_sig_strict_torsion(idx in 0usize..8usize){
+        let message = b"hello_world";
+
+        // Dalek only performs an order check, so this is allowed
+        let bad_scalar = curve25519_dalek::scalar::Scalar::zero();
+
+        let bad_component_1 = curve25519_dalek::edwards::CompressedEdwardsY(EIGHT_TORSION[idx]).decompress().unwrap();
+        let bad_component_2 = bad_component_1.neg();
+
+        // compute bad_pub_key, bad_signature
+        let bad_pub_key_point = bad_component_1; // we need this to cancel the hashed component of the verification equation
+
+        // we pick an evil R component
+        let bad_sig_point = bad_component_2;
+
+        let bad_key = ed25519_dalek::PublicKey::from_bytes(&bad_pub_key_point.compress().to_bytes()).unwrap();
+        // We check that we would have caught this one on the public key
+        prop_assert!(Ed25519PublicKey::try_from(&bad_pub_key_point.compress().to_bytes()[..]).is_err());
+
+        let bad_signature = ed25519_dalek::Signature::from_bytes(&[
+            &bad_sig_point.compress().to_bytes()[..],
+            &bad_scalar.to_bytes()[..]
+        ].concat()).unwrap();
+
+        // Seek k = H(R, A, M) ≡ 1 [8]
+        prop_assume!(bad_key.verify(&message[..], &bad_signature).is_ok());
+        prop_assert!(bad_key.verify_strict(&message[..], &bad_signature).is_err());
+
+    }
 
     #[test]
     fn convert_from_ed25519_publickey(keypair in uniform_keypair_strategy::<Ed25519PrivateKey, Ed25519PublicKey>()) {
@@ -98,18 +135,19 @@ proptest! {
 
     #[test]
     fn test_batch_verify(
-        hash in any::<HashValue>(),
-        keypairs in proptest::array::uniform10(uniform_keypair_strategy::<Ed25519PrivateKey, Ed25519PublicKey>())) {
+        message in random_serializable_struct(),
+        keypairs in proptest::array::uniform10(uniform_keypair_strategy::<Ed25519PrivateKey, Ed25519PublicKey>())
+    ) {
         let mut signatures: Vec<(Ed25519PublicKey, Ed25519Signature)> = keypairs.iter().map(|keypair| {
-            (keypair.public_key.clone(), keypair.private_key.sign_message(&hash))
+            (keypair.public_key.clone(), keypair.private_key.sign(&message))
         }).collect();
-        prop_assert!(Ed25519Signature::batch_verify_signatures(&hash, signatures.clone()).is_ok());
+        prop_assert!(Ed25519Signature::batch_verify(&message, signatures.clone()).is_ok());
         // We swap message and signature for the last element,
         // resulting in an incorrect signature
         let (key, _sig) = signatures.pop().unwrap();
         let other_sig = signatures.last().unwrap().clone().1;
         signatures.push((key, other_sig));
-        prop_assert!(Ed25519Signature::batch_verify_signatures(&hash, signatures).is_err());
+        prop_assert!(Ed25519Signature::batch_verify(&message, signatures).is_err());
     }
 
     #[test]
@@ -132,14 +170,14 @@ proptest! {
 
     #[test]
     fn test_signature_verification_custom_serialisation(
-        hash in any::<HashValue>(),
+        message in random_serializable_struct(),
         keypair in uniform_keypair_strategy::<Ed25519PrivateKey, Ed25519PublicKey>()
     ) {
-        let signature = keypair.private_key.sign_message(&hash);
+        let signature = keypair.private_key.sign(&message);
         let serialized: &[u8] = &(signature.to_bytes());
         prop_assert_eq!(ED25519_SIGNATURE_LENGTH, serialized.len());
         let deserialized = Ed25519Signature::try_from(serialized).unwrap();
-        prop_assert!(keypair.public_key.verify_signature(&hash, &deserialized).is_ok());
+        prop_assert!(deserialized.verify(&message, &keypair.public_key).is_ok());
     }
 
     #[test]
@@ -161,20 +199,20 @@ proptest! {
         keypair in uniform_keypair_strategy::<Ed25519PrivateKey, Ed25519PublicKey>()
     ) {
         let hashable = CryptoHashable(x);
-        let signature = keypair.private_key.sign(&hashable).expect("all `RawTransaction` objects should LCS-serialize correctly");
+        let signature = keypair.private_key.sign(&hashable);
         let serialized: &[u8] = &(signature.to_bytes());
         prop_assert_eq!(ED25519_SIGNATURE_LENGTH, serialized.len());
         let deserialized = Ed25519Signature::try_from(serialized).unwrap();
-        prop_assert!(deserialized.verify_struct_msg(&hashable, &keypair.public_key).is_ok());
+        prop_assert!(deserialized.verify(&hashable, &keypair.public_key).is_ok());
     }
 
     // Check for canonical S.
     #[test]
     fn test_signature_malleability(
-        hash in any::<HashValue>(),
+        message in random_serializable_struct(),
         keypair in uniform_keypair_strategy::<Ed25519PrivateKey, Ed25519PublicKey>()
     ) {
-        let signature = keypair.private_key.sign_message(&hash);
+        let signature = keypair.private_key.sign(&message);
         let mut serialized = signature.to_bytes();
 
         let mut r_bytes: [u8; 32] = [0u8; 32];

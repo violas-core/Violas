@@ -1,42 +1,85 @@
 // Copyright (c) The Libra Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::{on_chain_config::OnChainConfig, transaction::SCRIPT_HASH_LENGTH};
+use crate::{
+    account_address::AccountAddress, account_config::libra_root_address,
+    on_chain_config::OnChainConfig, transaction::SCRIPT_HASH_LENGTH,
+};
 use anyhow::{format_err, Result};
 use libra_crypto::HashValue;
 use move_core_types::gas_schedule::{CostTable, GasConstants};
 use serde::{Deserialize, Serialize};
 
 /// Defines and holds the publishing policies for the VM. There are three possible configurations:
-/// 1. No module publishing, only whitelisted scripts are allowed.
+/// 1. No module publishing, only allowlisted scripts are allowed.
 /// 2. No module publishing, custom scripts are allowed.
 /// 3. Both module publishing and custom scripts are allowed.
-/// We represent these as an enum instead of a struct since whitelisting and module/script
+/// We represent these as an enum instead of a struct since allowlisting and module/script
 /// publishing are mutually exclusive options.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-pub enum VMPublishingOption {
-    /// Only allow scripts on a whitelist to be run
+pub struct VMPublishingOption {
+    pub script_option: ScriptPublishingOption,
+    pub module_option: ModulePublishingOption,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub enum ScriptPublishingOption {
+    /// Only allow scripts in an allowlist to be run
     Locked(Vec<[u8; SCRIPT_HASH_LENGTH]>),
-    /// Allow custom scripts, but _not_ custom module publishing
+    /// Allow both custom scripts
     CustomScripts,
-    /// Allow both custom scripts and custom module publishing
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub enum ModulePublishingOption {
+    /// Only allow a limited set of sender to publish a module.
+    LimitedSender(Vec<AccountAddress>),
+    /// Allow everyone to publish new module
     Open,
 }
 
 impl VMPublishingOption {
-    pub fn is_open(&self) -> bool {
-        match self {
-            VMPublishingOption::Open => true,
+    pub fn locked(allowlist: Vec<[u8; SCRIPT_HASH_LENGTH]>) -> Self {
+        Self {
+            script_option: ScriptPublishingOption::Locked(allowlist),
+            module_option: ModulePublishingOption::LimitedSender(vec![libra_root_address()]),
+        }
+    }
+
+    pub fn custom_scripts() -> Self {
+        Self {
+            script_option: ScriptPublishingOption::CustomScripts,
+            module_option: ModulePublishingOption::LimitedSender(vec![libra_root_address()]),
+        }
+    }
+
+    pub fn open() -> Self {
+        Self {
+            script_option: ScriptPublishingOption::CustomScripts,
+            module_option: ModulePublishingOption::Open,
+        }
+    }
+
+    pub fn is_open_module(&self) -> bool {
+        match &self.module_option {
+            ModulePublishingOption::Open => true,
             _ => false,
         }
     }
 
+    pub fn is_allowed_module(&self, module_sender: &AccountAddress) -> bool {
+        match &self.module_option {
+            ModulePublishingOption::Open => true,
+            ModulePublishingOption::LimitedSender(allowlist) => allowlist.contains(module_sender),
+        }
+    }
+
     pub fn is_allowed_script(&self, program: &[u8]) -> bool {
-        match self {
-            VMPublishingOption::Open | VMPublishingOption::CustomScripts => true,
-            VMPublishingOption::Locked(whitelist) => {
+        match &self.script_option {
+            ScriptPublishingOption::CustomScripts => true,
+            ScriptPublishingOption::Locked(allowlist) => {
                 let hash_value = HashValue::sha3_256_of(program);
-                whitelist.contains(hash_value.as_ref())
+                allowlist.contains(hash_value.as_ref())
             }
         }
     }

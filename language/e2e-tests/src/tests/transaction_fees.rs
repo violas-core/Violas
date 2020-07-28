@@ -1,40 +1,54 @@
 // Copyright (c) The Libra Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::{
-    account::{Account, AccountData},
-    executor::FakeExecutor,
-    gas_costs,
-};
+use crate::{account::Account, executor::FakeExecutor};
 use compiled_stdlib::transaction_scripts::StdlibScript;
 use libra_crypto::{ed25519::Ed25519PrivateKey, PrivateKey, Uniform};
 use libra_types::{
-    account_config::{self, BurnEvent, LBR_NAME},
-    transaction::{authenticator::AuthenticationKey, TransactionArgument},
-    vm_error::StatusCode,
+    account_config::{self, BurnEvent, COIN1_NAME},
+    transaction::{authenticator::AuthenticationKey, Script, TransactionArgument},
+    vm_status::KeptVMStatus,
 };
 use move_core_types::{
     identifier::Identifier,
     language_storage::{StructTag, TypeTag},
 };
 use std::convert::TryFrom;
-use transaction_builder::{encode_burn_txn_fees_script, encode_mint_script};
+use transaction_builder::{
+    encode_burn_txn_fees_script, encode_create_testing_account_script, encode_testnet_mint_script,
+};
 
 #[test]
 fn burn_txn_fees() {
     let mut executor = FakeExecutor::from_genesis_file();
-    let sender = AccountData::new(0, 0);
+    let sender = Account::new();
+    let dd = Account::new_genesis_account(account_config::testnet_dd_account_address());
     let tc = Account::new_blessed_tc();
-    executor.add_account_data(&sender);
-    executor.execute_and_apply(tc.signed_script_txn(
-        encode_mint_script(
-            account_config::lbr_type_tag(),
-            &sender.account().address(),
-            vec![],
-            10_000_000,
-        ),
-        0,
-    ));
+    let libra_root = Account::new_libra_root();
+
+    executor.execute_and_apply(
+        libra_root
+            .transaction()
+            .script(encode_create_testing_account_script(
+                account_config::coin1_tag(),
+                *sender.address(),
+                sender.auth_key_prefix(),
+                false,
+            ))
+            .sequence_number(1)
+            .sign(),
+    );
+
+    executor.execute_and_apply(
+        dd.transaction()
+            .script(encode_testnet_mint_script(
+                account_config::coin1_tag(),
+                *sender.address(),
+                10_000_000,
+            ))
+            .sequence_number(0)
+            .sign(),
+    );
 
     let gas_used = {
         let privkey = Ed25519PrivateKey::generate_for_testing();
@@ -42,34 +56,37 @@ fn burn_txn_fees() {
         let new_key_hash = AuthenticationKey::ed25519(&pubkey).to_vec();
         let args = vec![TransactionArgument::U8Vector(new_key_hash)];
         let status = executor.execute_and_apply(
-            sender.account().create_signed_txn_with_args(
-                StdlibScript::RotateAuthenticationKey
-                    .compiled_bytes()
-                    .into_vec(),
-                vec![],
-                args,
-                0,
-                gas_costs::TXN_RESERVED,
-                1,
-                LBR_NAME.to_owned(),
-            ),
+            sender
+                .transaction()
+                .script(Script::new(
+                    StdlibScript::RotateAuthenticationKey
+                        .compiled_bytes()
+                        .into_vec(),
+                    vec![],
+                    args,
+                ))
+                .sequence_number(0)
+                .gas_unit_price(1)
+                .gas_currency_code(COIN1_NAME)
+                .sign(),
         );
-        assert_eq!(
-            status.status().vm_status().major_status,
-            StatusCode::EXECUTED
-        );
+        assert_eq!(status.status().status(), Ok(KeptVMStatus::Executed));
         status.gas_used()
     };
 
-    let lbr_ty = TypeTag::Struct(StructTag {
+    let coin1_ty = TypeTag::Struct(StructTag {
         address: account_config::CORE_CODE_ADDRESS,
-        module: Identifier::new("LBR").unwrap(),
-        name: Identifier::new("LBR").unwrap(),
+        module: Identifier::new("Coin1").unwrap(),
+        name: Identifier::new("Coin1").unwrap(),
         type_params: vec![],
     });
 
-    let output =
-        executor.execute_and_apply(tc.signed_script_txn(encode_burn_txn_fees_script(lbr_ty), 1));
+    let output = executor.execute_and_apply(
+        tc.transaction()
+            .script(encode_burn_txn_fees_script(coin1_ty))
+            .sequence_number(0)
+            .sign(),
+    );
 
     let burn_events: Vec<_> = output
         .events()
@@ -77,14 +94,11 @@ fn burn_txn_fees() {
         .filter_map(|event| BurnEvent::try_from(event).ok())
         .collect();
 
-    assert_eq!(burn_events.len(), 2);
+    assert_eq!(burn_events.len(), 1);
     assert!(burn_events
         .iter()
         .any(|event| event.currency_code().as_str() == "Coin1"));
-    assert!(burn_events
-        .iter()
-        .any(|event| event.currency_code().as_str() == "Coin2"));
     burn_events
         .iter()
-        .for_each(|event| assert_eq!(event.amount(), gas_used / 2));
+        .for_each(|event| assert_eq!(event.amount(), gas_used));
 }

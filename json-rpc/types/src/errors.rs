@@ -4,7 +4,7 @@
 use anyhow::Result;
 use libra_types::{
     mempool_status::{MempoolStatus, MempoolStatusCode},
-    vm_error::{StatusType, VMStatus},
+    vm_status::{StatusCode, StatusType},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -14,7 +14,7 @@ use serde_json::Value;
 pub enum ServerCode {
     DefaultServerError = -32000,
 
-    // VM errors - see `vm_error.rs` for specs
+    // VM errors - see `vm_status.rs` for specs
     VmValidationError = -32001,
     VmVerificationError = -32002,
     VmInvariantViolationError = -32003,
@@ -32,10 +32,23 @@ pub enum ServerCode {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+pub enum ErrorData {
+    InvalidArguments(InvalidArguments),
+    StatusCode(StatusCode),
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, Copy)]
+pub struct InvalidArguments {
+    pub required: usize,
+    pub optional: usize,
+    pub given: usize,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct JsonRpcError {
     pub code: i16,
     pub message: String,
-    pub data: Option<Value>,
+    pub data: Option<ErrorData>,
 }
 
 impl std::error::Error for JsonRpcError {}
@@ -43,6 +56,18 @@ impl std::error::Error for JsonRpcError {}
 impl std::fmt::Display for JsonRpcError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "{:?}", self)
+    }
+}
+
+impl From<serde_json::error::Error> for JsonRpcError {
+    fn from(err: serde_json::error::Error) -> Self {
+        JsonRpcError::internal_error(err.to_string())
+    }
+}
+
+impl From<anyhow::Error> for JsonRpcError {
+    fn from(err: anyhow::Error) -> Self {
+        JsonRpcError::internal_error(err.to_string())
     }
 }
 
@@ -59,11 +84,11 @@ impl JsonRpcError {
         }
     }
 
-    pub fn invalid_params() -> Self {
+    pub fn invalid_params(data: Option<ErrorData>) -> Self {
         Self {
             code: -32602,
             message: "Invalid params".to_string(),
-            data: None,
+            data,
         }
     }
 
@@ -108,7 +133,7 @@ impl JsonRpcError {
         })
     }
 
-    pub fn vm_error(error: VMStatus) -> Self {
+    pub fn vm_status(error: StatusCode) -> Self {
         // map VM status to custom server code
         let vm_status_type = error.status_type();
         let code = match vm_status_type {
@@ -123,15 +148,20 @@ impl JsonRpcError {
         Self {
             code: code as i16,
             message: format!("Server error: VM {} error: {:?}", vm_status_type, error),
-            data: Some(serde_json::json!(error)),
+            data: Some(ErrorData::StatusCode(error)),
         }
     }
 
-    pub fn get_vm_error(&self) -> Option<VMStatus> {
-        if let Some(data) = &self.data {
-            if let Ok(vm_error) = serde_json::from_value::<VMStatus>(data.clone()) {
-                return Some(vm_error);
-            }
+    pub fn as_status_code(&self) -> Option<StatusCode> {
+        if let Some(ErrorData::StatusCode(data)) = &self.data {
+            return Some(*data);
+        }
+        None
+    }
+
+    pub fn as_invalid_arguments(&self) -> Option<InvalidArguments> {
+        if let Some(ErrorData::InvalidArguments(data)) = &self.data {
+            return Some(*data);
         }
         None
     }

@@ -1,26 +1,30 @@
 script {
-    use 0x1::DesignatedDealer;
-    use 0x1::LibraAccount;
-    use 0x1::SlidingNonce;
-    use 0x1::Roles::{Self, TreasuryComplianceRole};
+use 0x1::LibraAccount;
+use 0x1::SlidingNonce;
 
-        /// Create designated dealer account at 'new_account_address' and 'auth_key_prefix' for nonsynthetic CoinType.
-        /// Create dealer and preburn resource.
-        fun create_designated_dealer<CoinType>(tc_account: &signer, sliding_nonce: u64, new_account_address: address, auth_key_prefix: vector<u8>) {
-            // XXX We need to figure out if TC is in charge of this or association root account. For now we assume assoc root.
-            SlidingNonce::record_nonce_or_abort(tc_account, sliding_nonce);
-            let tc_capability = Roles::extract_privilege_to_capability<TreasuryComplianceRole>(tc_account);
-            LibraAccount::create_designated_dealer<CoinType>(
-                tc_account,
-                &tc_capability,
-                new_account_address,
-                auth_key_prefix
-            );
-            // Create default tiers for newly created DD
-            DesignatedDealer::add_tier(&tc_capability, new_account_address, 500000);
-            DesignatedDealer::add_tier(&tc_capability, new_account_address, 5000000);
-            DesignatedDealer::add_tier(&tc_capability, new_account_address, 50000000);
-            DesignatedDealer::add_tier(&tc_capability, new_account_address, 500000000);
-            Roles::restore_capability_to_privilege(tc_account, tc_capability);
-        }
-    }
+/// Create an account with the DesignatedDealer role at `addr` with authentication key
+/// `auth_key_prefix` | `addr` and a 0 balance of type `Currency`. If `add_all_currencies` is true,
+/// 0 balances for all available currencies in the system will also be added. This can only be
+/// invoked by an account with the TreasuryCompliance role.
+fun create_designated_dealer<Currency>(
+    tc_account: &signer,
+    sliding_nonce: u64,
+    addr: address,
+    auth_key_prefix: vector<u8>,
+    human_name: vector<u8>,
+    base_url: vector<u8>,
+    compliance_public_key: vector<u8>,
+    add_all_currencies: bool,
+) {
+    SlidingNonce::record_nonce_or_abort(tc_account, sliding_nonce);
+    LibraAccount::create_designated_dealer<Currency>(
+        tc_account,
+        addr,
+        auth_key_prefix,
+        human_name,
+        base_url,
+        compliance_public_key,
+        add_all_currencies
+    );
+}
+}

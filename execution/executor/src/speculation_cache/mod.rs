@@ -17,9 +17,10 @@
 #[cfg(test)]
 mod test;
 
+use crate::types::ProcessedVMOutput;
 use anyhow::{format_err, Result};
 use consensus_types::block::Block;
-use executor_types::{Error, ExecutedTrees, ProcessedVMOutput};
+use executor_types::{Error, ExecutedTrees};
 use libra_crypto::{hash::PRE_GENESIS_BLOCK_ID, HashValue};
 use libra_logger::prelude::*;
 use libra_types::{ledger_info::LedgerInfo, transaction::Transaction};
@@ -73,6 +74,12 @@ impl SpeculationBlock {
 
     pub fn output(&self) -> &ProcessedVMOutput {
         &self.output
+    }
+
+    pub fn replace(&mut self, transactions: Vec<Transaction>, output: ProcessedVMOutput) {
+        self.transactions = transactions;
+        self.output = output;
+        self.children = vec![];
     }
 }
 
@@ -157,7 +164,7 @@ impl SpeculationCache {
         committed_trees: ExecutedTrees,
         committed_ledger_info: &LedgerInfo,
     ) {
-        let new_root_block_id = if committed_ledger_info.next_epoch_state().is_some() {
+        let new_root_block_id = if committed_ledger_info.ends_epoch() {
             // Update the root block id with reconfig virtual block id, to be consistent
             // with the logic of Consensus.
             let id = Block::make_genesis_block_from_ledger_info(committed_ledger_info).id();
@@ -195,32 +202,49 @@ impl SpeculationCache {
             ProcessedVMOutput, /* block execution output */
         ),
     ) -> Result<(), Error> {
-        // 0. Check existence first
+        // Check existence first
         let (block_id, txns, output) = block;
-        if self.block_map.lock().unwrap().contains_key(&block_id) {
+
+        // If block is re-executed, update it.
+        let old_block = self
+            .block_map
+            .lock()
+            .unwrap()
+            .get(&block_id)
+            .map(|b| {
+                b.upgrade().ok_or_else(|| {
+                    format_err!(
+                        "block {:x} has been deallocated. Something went wrong.",
+                        block_id
+                    )
+                })
+            })
+            .transpose()?;
+
+        if let Some(old_block) = old_block {
+            old_block.lock().unwrap().replace(txns, output);
             return Ok(());
         }
 
-        let block = Arc::new(Mutex::new(SpeculationBlock::new(
+        let new_block = Arc::new(Mutex::new(SpeculationBlock::new(
             block_id,
             txns,
             output,
             Arc::clone(&self.block_map),
         )));
-        // 1. Add to the map
+        // Add to the map
         self.block_map
             .lock()
             .unwrap()
-            .insert(block_id, Arc::downgrade(&block));
-        // 2. Add to the tree
+            .insert(block_id, Arc::downgrade(&new_block));
+        // Add to the tree
         if parent_block_id == self.committed_block_id() {
-            self.heads.push(block);
-            return Ok(());
+            self.heads.push(new_block);
         } else {
             self.get_block(&parent_block_id)?
                 .lock()
                 .unwrap()
-                .add_child(block);
+                .add_child(new_block);
         }
         Ok(())
     }

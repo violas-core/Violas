@@ -8,6 +8,7 @@ use libra_crypto::{ed25519::Ed25519PrivateKey, PrivateKey, Uniform};
 use libra_types::{
     account_address::AccountAddress,
     account_config::LBR_NAME,
+    chain_id::ChainId,
     mempool_status::MempoolStatusCode,
     transaction::{RawTransaction, Script, SignedTransaction},
 };
@@ -51,29 +52,26 @@ impl TestTransaction {
 
     pub(crate) fn make_signed_transaction_with_expiration_time(
         &self,
-        exp_time: std::time::Duration,
+        exp_timestamp_secs: u64,
     ) -> SignedTransaction {
-        self.make_signed_transaction_impl(100, exp_time)
+        self.make_signed_transaction_impl(100, exp_timestamp_secs)
     }
 
     pub(crate) fn make_signed_transaction_with_max_gas_amount(
         &self,
         max_gas_amount: u64,
     ) -> SignedTransaction {
-        self.make_signed_transaction_impl(
-            max_gas_amount,
-            std::time::Duration::from_secs(u64::max_value()),
-        )
+        self.make_signed_transaction_impl(max_gas_amount, u64::max_value())
     }
 
     pub(crate) fn make_signed_transaction(&self) -> SignedTransaction {
-        self.make_signed_transaction_impl(100, std::time::Duration::from_secs(u64::max_value()))
+        self.make_signed_transaction_impl(100, u64::max_value())
     }
 
     fn make_signed_transaction_impl(
         &self,
         max_gas_amount: u64,
-        exp_time: std::time::Duration,
+        exp_timestamp_secs: u64,
     ) -> SignedTransaction {
         let raw_txn = RawTransaction::new_script(
             TestTransaction::get_address(self.address),
@@ -82,7 +80,8 @@ impl TestTransaction {
             max_gas_amount,
             self.gas_price,
             LBR_NAME.to_owned(),
-            exp_time,
+            exp_timestamp_secs,
+            ChainId::test(),
         );
         let mut seed: [u8; 32] = [0u8; 32];
         seed[..4].copy_from_slice(&[1, 2, 3, 4]);

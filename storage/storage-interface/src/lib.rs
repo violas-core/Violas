@@ -158,6 +158,12 @@ pub trait DbReader: Send + Sync {
         limit: u64,
     ) -> Result<Vec<(u64, ContractEvent)>>;
 
+    /// See [`LibraDB::get_block_timestamp`].
+    ///
+    /// [`LibraDB::get_block_timestamp`]:
+    /// ../libradb/struct.LibraDB.html#method.get_block_timestamp
+    fn get_block_timestamp(&self, version: u64) -> Result<u64>;
+
     /// See [`LibraDB::get_latest_account_state`].
     ///
     /// [`LibraDB::get_latest_account_state`]:
@@ -328,12 +334,16 @@ impl DbReaderWriter {
         Self { reader, writer }
     }
 
-    pub fn wrap<D: 'static + DbReader + DbWriter>(db: D) -> (Arc<D>, Self) {
-        let arc_db = Arc::new(db);
+    pub fn from_arc<D: 'static + DbReader + DbWriter>(arc_db: Arc<D>) -> Self {
         let reader = Arc::clone(&arc_db);
         let writer = Arc::clone(&arc_db);
 
-        (arc_db, Self { reader, writer })
+        Self { reader, writer }
+    }
+
+    pub fn wrap<D: 'static + DbReader + DbWriter>(db: D) -> (Arc<D>, Self) {
+        let arc_db = Arc::new(db);
+        (Arc::clone(&arc_db), Self::from_arc(arc_db))
     }
 }
 

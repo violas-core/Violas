@@ -12,10 +12,14 @@ use structopt::{clap::arg_enum, StructOpt};
 mod consensus;
 /// Libra transactions.
 mod libra;
+/// Analyze Serde formats to detect certain patterns.
+mod linter;
 /// Move ABI.
 mod move_abi;
 /// Network messages.
 mod network;
+
+pub use linter::lint_lcs_format;
 
 arg_enum! {
 #[derive(Debug, StructOpt, Clone, Copy)]
@@ -39,11 +43,17 @@ impl Corpus {
 
     /// Compute the registry of formats.
     pub fn get_registry(self) -> Registry {
-        match self {
-            Corpus::Libra => libra::get_registry().unwrap(),
-            Corpus::Consensus => consensus::get_registry().unwrap(),
-            Corpus::Network => network::get_registry().unwrap(),
-            Corpus::MoveABI => move_abi::get_registry().unwrap(),
+        let result = match self {
+            Corpus::Libra => libra::get_registry(),
+            Corpus::Consensus => consensus::get_registry(),
+            Corpus::Network => network::get_registry(),
+            Corpus::MoveABI => move_abi::get_registry(),
+        };
+        match result {
+            Ok(registry) => registry,
+            Err(error) => {
+                panic!("{}:{}", error, error.explanation());
+            }
         }
     }
 

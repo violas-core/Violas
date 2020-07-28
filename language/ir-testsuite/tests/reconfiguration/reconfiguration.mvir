@@ -7,15 +7,11 @@
 //! block-time: 2
 
 //! new-transaction
-// Reconfiguration can only be invoked by association.
+// Reconfiguration can only be invoked by libraroot.
 import 0x1.LibraConfig;
-import 0x1.Roles;
 
 main(account: &signer) {
-    let x: Roles.Capability<Roles.AssociationRootRole>;
-    x = Roles.extract_privilege_to_capability<Roles.AssociationRootRole>(copy(account));
-    LibraConfig.reconfigure(&x);
-    Roles.restore_capability_to_privilege<Roles.AssociationRootRole>(move(account), move(x));
+    LibraConfig.reconfigure(copy(account));
     return;
 }
 
@@ -23,15 +19,11 @@ main(account: &signer) {
 // check: 1
 
 //! new-transaction
-//! sender: association
+//! sender: libraroot
 import 0x1.LibraConfig;
-import 0x1.Roles;
 
 main(account: &signer) {
-    let x: Roles.Capability<Roles.AssociationRootRole>;
-    x = Roles.extract_privilege_to_capability<Roles.AssociationRootRole>(copy(account));
-    LibraConfig.reconfigure(&x);
-    Roles.restore_capability_to_privilege<Roles.AssociationRootRole>(move(account), move(x));
+    LibraConfig.reconfigure(copy(account));
     return;
 }
 
@@ -39,16 +31,13 @@ main(account: &signer) {
 // check: EXECUTED
 
 //! new-transaction
-//! sender: association
+//! sender: libraroot
 // Cannot trigger two reconfiguration within the same block.
 import 0x1.LibraConfig;
-import 0x1.Roles;
+// import 0x1.Roles;
 
 main(account: &signer) {
-    let x: Roles.Capability<Roles.AssociationRootRole>;
-    x = Roles.extract_privilege_to_capability<Roles.AssociationRootRole>(copy(account));
-    LibraConfig.reconfigure(&x);
-    Roles.restore_capability_to_privilege<Roles.AssociationRootRole>(move(account), move(x));
+    LibraConfig.reconfigure(copy(account));
     return;
 }
 
@@ -60,15 +49,11 @@ main(account: &signer) {
 //! block-time: 3
 
 //! new-transaction
-//! sender: association
+//! sender: libraroot
 import 0x1.LibraConfig;
-import 0x1.Roles;
 
 main(account: &signer) {
-    let x: Roles.Capability<Roles.AssociationRootRole>;
-    x = Roles.extract_privilege_to_capability<Roles.AssociationRootRole>(copy(account));
-    LibraConfig.reconfigure(&x);
-    Roles.restore_capability_to_privilege<Roles.AssociationRootRole>(move(account), move(x));
+    LibraConfig.reconfigure(copy(account));
     return;
 }
 

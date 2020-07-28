@@ -3,7 +3,7 @@
 
 //! Module contains RPC method handlers for Full Node JSON-RPC interface
 use crate::{
-    errors::JsonRpcError,
+    errors::{ErrorData, InvalidArguments, JsonRpcError},
     views::{
         AccountStateWithProofView, AccountView, BlockMetadata, CurrencyInfoView, EventView,
         StateProofView, TransactionView,
@@ -11,15 +11,16 @@ use crate::{
 };
 use anyhow::{ensure, format_err, Error, Result};
 use core::future::Future;
-use debug_interface::prelude::*;
 use futures::{channel::oneshot, SinkExt};
 use libra_config::config::RoleType;
 use libra_crypto::hash::CryptoHash;
 use libra_mempool::MempoolClientSender;
+use libra_trace::prelude::*;
 use libra_types::{
     account_address::AccountAddress,
     account_config::{from_currency_code_string, CurrencyInfoResource},
     account_state::AccountState,
+    chain_id::ChainId,
     event::EventKey,
     ledger_info::LedgerInfoWithSignatures,
     mempool_status::MempoolStatusCode,
@@ -37,19 +38,30 @@ pub(crate) struct JsonRpcService {
     db: Arc<dyn DbReader>,
     mempool_sender: MempoolClientSender,
     role: RoleType,
+    chain_id: ChainId,
 }
 
 impl JsonRpcService {
-    pub fn new(db: Arc<dyn DbReader>, mempool_sender: MempoolClientSender, role: RoleType) -> Self {
+    pub fn new(
+        db: Arc<dyn DbReader>,
+        mempool_sender: MempoolClientSender,
+        role: RoleType,
+        chain_id: ChainId,
+    ) -> Self {
         Self {
             db,
             mempool_sender,
             role,
+            chain_id,
         }
     }
 
     pub fn get_latest_ledger_info(&self) -> Result<LedgerInfoWithSignatures> {
         self.db.get_latest_ledger_info()
+    }
+
+    pub fn chain_id(&self) -> ChainId {
+        self.chain_id
     }
 }
 
@@ -64,10 +76,19 @@ pub(crate) struct JsonRpcRequest {
 }
 
 impl JsonRpcRequest {
-    /// Returns the request parameter at the given index. Note: this method should not panic with
-    /// an out of bounds error, as the number of request parameters has already been checked.
+    /// Returns the request parameter at the given index.
+    /// Returns Null if given index is out of bounds.
     fn get_param(&self, index: usize) -> Value {
-        self.params[index].clone()
+        self.get_param_with_default(index, Value::Null)
+    }
+
+    /// Returns the request parameter at the given index.
+    /// Returns default Value if given index is out of bounds.
+    fn get_param_with_default(&self, index: usize, default: Value) -> Value {
+        if self.params.len() > index {
+            return self.params[index].clone();
+        }
+        default
     }
 
     fn version(&self) -> u64 {
@@ -86,10 +107,10 @@ async fn submit(mut service: JsonRpcService, request: JsonRpcRequest) -> Result<
         .mempool_sender
         .send((transaction, req_sender))
         .await?;
-    let (mempool_status, vm_status) = callback.await??;
+    let (mempool_status, vm_status_opt) = callback.await??;
 
-    if let Some(vm_error) = vm_status {
-        Err(Error::new(JsonRpcError::vm_error(vm_error)))
+    if let Some(vm_status) = vm_status_opt {
+        Err(Error::new(JsonRpcError::vm_status(vm_status)))
     } else if mempool_status.code == MempoolStatusCode::Accepted {
         Ok(())
     } else {
@@ -98,7 +119,7 @@ async fn submit(mut service: JsonRpcService, request: JsonRpcRequest) -> Result<
 }
 
 /// Returns account state (AccountView) by given address
-async fn get_account_state(
+async fn get_account(
     service: JsonRpcService,
     request: JsonRpcRequest,
 ) -> Result<Option<AccountView>> {
@@ -117,8 +138,15 @@ async fn get_account_state(
         let account_state = AccountState::try_from(&blob)?;
         if let Some(account) = account_state.get_account_resource()? {
             let balances = account_state.get_balance_resources(&currencies)?;
-            if let Some(account_role) = account_state.get_account_role()? {
-                return Ok(Some(AccountView::new(&account, balances, account_role)));
+            if let Some(account_role) = account_state.get_account_role(&currencies)? {
+                if let Some(freezing_bit) = account_state.get_freezing_bit()? {
+                    return Ok(Some(AccountView::new(
+                        &account,
+                        balances,
+                        account_role,
+                        freezing_bit,
+                    )));
+                }
             }
         }
     }
@@ -129,19 +157,16 @@ async fn get_account_state(
 /// returning the current blockchain metadata
 /// Can be used to verify that target Full Node is up-to-date
 async fn get_metadata(service: JsonRpcService, request: JsonRpcRequest) -> Result<BlockMetadata> {
-    let (version, timestamp) = match serde_json::from_value::<u64>(request.get_param(0)) {
-        Ok(version) => {
-            // TODO: fix once we have a real way to get transaction timestamps
-            let li = service.db.get_epoch_ending_ledger_info(version)?;
-            (version, li.ledger_info().timestamp_usecs())
-        }
-        _ => (
-            request.version(),
-            request.ledger_info.ledger_info().timestamp_usecs(),
-        ),
-    };
-
-    Ok(BlockMetadata { version, timestamp })
+    match serde_json::from_value::<u64>(request.get_param(0)) {
+        Ok(version) => Ok(BlockMetadata {
+            version,
+            timestamp: service.db.get_block_timestamp(version)?,
+        }),
+        _ => Ok(BlockMetadata {
+            version: request.version(),
+            timestamp: request.ledger_info.ledger_info().timestamp_usecs(),
+        }),
+    }
 }
 
 /// Returns transactions by range
@@ -192,10 +217,10 @@ async fn get_transactions(
 
         result.push(TransactionView {
             version: start_version + v as u64,
-            hash: tx.hash().to_string(),
+            hash: tx.hash().to_hex(),
             transaction: tx.into(),
             events,
-            vm_status: info.major_status(),
+            vm_status: info.status().into(),
             gas_used: info.gas_used(),
         });
     }
@@ -235,10 +260,10 @@ async fn get_account_transaction(
 
         Ok(Some(TransactionView {
             version: tx_version,
-            hash: tx.transaction.hash().to_string(),
+            hash: tx.transaction.hash().to_hex(),
             transaction: tx.transaction.into(),
             events,
-            vm_status: tx.proof.transaction_info().major_status(),
+            vm_status: tx.proof.transaction_info().status().into(),
             gas_used: tx.proof.transaction_info().gas_used(),
         }))
     } else {
@@ -340,29 +365,32 @@ async fn get_network_status(service: JsonRpcService, _request: JsonRpcRequest) -
 /// Builds registry of all available RPC methods
 /// To register new RPC method, add it via `register_rpc_method!` macros call
 /// Note that RPC method name will equal to name of function
+#[allow(unused_comparisons)]
 pub(crate) fn build_registry() -> RpcRegistry {
     let mut registry = RpcRegistry::new();
-    register_rpc_method!(registry, "submit", submit, 1);
-    register_rpc_method!(registry, "get_metadata", get_metadata, 1);
-    register_rpc_method!(registry, "get_account_state", get_account_state, 1);
-    register_rpc_method!(registry, "get_transactions", get_transactions, 3);
+    register_rpc_method!(registry, "submit", submit, 1, 0);
+    register_rpc_method!(registry, "get_metadata", get_metadata, 0, 1);
+    register_rpc_method!(registry, "get_account", get_account, 1, 0);
+    register_rpc_method!(registry, "get_transactions", get_transactions, 3, 0);
     register_rpc_method!(
         registry,
         "get_account_transaction",
         get_account_transaction,
-        3
+        3,
+        0
     );
-    register_rpc_method!(registry, "get_events", get_events, 3);
-    register_rpc_method!(registry, "get_currencies", currencies_info, 0);
+    register_rpc_method!(registry, "get_events", get_events, 3, 0);
+    register_rpc_method!(registry, "get_currencies", currencies_info, 0, 0);
 
-    register_rpc_method!(registry, "get_state_proof", get_state_proof, 1);
+    register_rpc_method!(registry, "get_state_proof", get_state_proof, 1, 0);
     register_rpc_method!(
         registry,
         "get_account_state_with_proof",
         get_account_state_with_proof,
-        3
+        3,
+        0
     );
-    register_rpc_method!(registry, "get_network_status", get_network_status, 0);
+    register_rpc_method!(registry, "get_network_status", get_network_status, 0, 0);
 
     registry
 }

@@ -4,16 +4,11 @@
 #![forbid(unsafe_code)]
 
 use anyhow::Context;
-use bytecode_verifier::{
-    verifier::{verify_module_dependencies, VerifiedScript},
-    VerifiedModule,
-};
+use bytecode_verifier::{verify_module, verify_script, DependencyChecker};
 use compiled_stdlib::{stdlib_modules, StdLibOptions};
 use compiler::{util, Compiler};
 use ir_to_bytecode::parser::{parse_module, parse_script};
-use libra_types::{
-    access_path::AccessPath, account_address::AccountAddress, account_config, vm_error::VMStatus,
-};
+use libra_types::{access_path::AccessPath, account_address::AccountAddress, account_config};
 use std::{
     convert::TryFrom,
     fs,
@@ -21,7 +16,7 @@ use std::{
     path::{Path, PathBuf},
 };
 use structopt::StructOpt;
-use vm::file_format::CompiledModule;
+use vm::{errors::VMError, file_format::CompiledModule};
 
 #[derive(Debug, StructOpt)]
 #[structopt(name = "IR Compiler", about = "Move IR to bytecode compiler.")]
@@ -52,19 +47,18 @@ struct Args {
     pub output_source_maps: bool,
 }
 
-fn print_error_and_exit(verification_error: &VMStatus) -> ! {
+fn print_error_and_exit(verification_error: &VMError) -> ! {
     println!("Verification failed:");
     println!("{:?}", verification_error);
     std::process::exit(1);
 }
 
-fn do_verify_module(module: CompiledModule, dependencies: &[VerifiedModule]) -> VerifiedModule {
-    let verified_module =
-        VerifiedModule::new(module).unwrap_or_else(|(_, err)| print_error_and_exit(&err));
-    if let Err(err) = verify_module_dependencies(&verified_module, dependencies) {
+fn do_verify_module(module: CompiledModule, dependencies: &[CompiledModule]) -> CompiledModule {
+    verify_module(&module).unwrap_or_else(|err| print_error_and_exit(&err));
+    if let Err(err) = DependencyChecker::verify_module(&module, dependencies) {
         print_error_and_exit(&err);
     }
-    verified_module
+    module
 }
 
 fn write_output(path: &PathBuf, buf: &[u8]) {
@@ -127,11 +121,10 @@ fn main() {
             deps_list
                 .into_iter()
                 .map(|module_bytes| {
-                    VerifiedModule::new(
-                        CompiledModule::deserialize(module_bytes.as_slice())
-                            .expect("Downloaded module blob can't be deserialized"),
-                    )
-                    .expect("Downloaded module blob failed verifier")
+                    let module = CompiledModule::deserialize(module_bytes.as_slice())
+                        .expect("Downloaded module blob can't be deserialized");
+                    verify_module(&module).expect("Downloaded module blob failed verifier");
+                    module
                 })
                 .collect()
         } else if args.no_stdlib {
@@ -153,13 +146,7 @@ fn main() {
             .into_compiled_script_and_source_map(file_name, &source)
             .expect("Failed to compile script");
 
-        let compiled_script = if !args.no_verify {
-            let verified_script =
-                VerifiedScript::new(compiled_script).expect("Failed to verify script");
-            verified_script.into_inner()
-        } else {
-            compiled_script
-        };
+        verify_script(&compiled_script).expect("Failed to verify script");
 
         if args.output_source_maps {
             let source_map_bytes =
@@ -179,8 +166,7 @@ fn main() {
         let (compiled_module, source_map) =
             util::do_compile_module(&args.source_path, address, &deps);
         let compiled_module = if !args.no_verify {
-            let verified_module = do_verify_module(compiled_module, &deps);
-            verified_module.into_inner()
+            do_verify_module(compiled_module, &deps)
         } else {
             compiled_module
         };

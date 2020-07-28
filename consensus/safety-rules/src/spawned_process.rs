@@ -3,7 +3,7 @@
 
 use crate::remote_service::RemoteService;
 
-use libra_config::config::{NodeConfig, PersistableConfig, SafetyRulesService};
+use libra_config::config::{PersistableConfig, SafetyRulesConfig, SafetyRulesService};
 use libra_temppath::TempPath;
 use std::{net::SocketAddr, process::Child};
 
@@ -11,18 +11,19 @@ pub struct SpawnedProcess {
     handle: Child,
     server_addr: SocketAddr,
     _config_path: TempPath,
+    network_timeout_ms: u64,
 }
 
 impl SpawnedProcess {
-    pub fn new(config: &NodeConfig) -> Self {
+    pub fn new(config: &SafetyRulesConfig) -> Self {
         let mut config_path = TempPath::new();
         config_path.persist();
         config_path.create_as_file().unwrap();
         config.save_config(&config_path).unwrap();
 
-        let service = &config.consensus.safety_rules.service;
+        let service = &config.service;
         let server_addr = if let SafetyRulesService::SpawnedProcess(process_config) = service {
-            process_config.server_address
+            process_config.server_address()
         } else {
             panic!("Invalid SafeRulesService, expected SpawnedProcess.");
         };
@@ -31,6 +32,7 @@ impl SpawnedProcess {
             handle: runner::run(&config_path.path()),
             server_addr,
             _config_path: config_path,
+            network_timeout_ms: config.network_timeout_ms,
         }
     }
 }
@@ -38,6 +40,9 @@ impl SpawnedProcess {
 impl RemoteService for SpawnedProcess {
     fn server_address(&self) -> SocketAddr {
         self.server_addr
+    }
+    fn network_timeout_ms(&self) -> u64 {
+        self.network_timeout_ms
     }
 }
 

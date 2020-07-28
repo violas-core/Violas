@@ -20,8 +20,9 @@ use anyhow::Result;
 use byteorder::{ByteOrder, LittleEndian};
 use hmac::Hmac;
 use libra_crypto::{
+    compat::Sha3_256,
     ed25519::{Ed25519PrivateKey, Ed25519PublicKey, Ed25519Signature},
-    hash::HashValue,
+    hash::CryptoHash,
     hkdf::Hkdf,
     traits::SigningKey,
 };
@@ -29,16 +30,15 @@ use libra_types::{account_address::AccountAddress, transaction::authenticator::A
 use mirai_annotations::*;
 use pbkdf2::pbkdf2;
 use serde::{Deserialize, Serialize};
-use sha3::Sha3_256;
 use std::{convert::TryFrom, ops::AddAssign};
 
-/// Master is a set of raw bytes that are used for child key derivation
-pub struct Master([u8; 32]);
-impl_array_newtype!(Master, u8, 32);
-impl_array_newtype_show!(Master);
-impl_array_newtype_encodable!(Master, u8, 32);
+/// Main is a set of raw bytes that are used for child key derivation
+pub struct Main([u8; 32]);
+impl_array_newtype!(Main, u8, 32);
+impl_array_newtype_show!(Main);
+impl_array_newtype_encodable!(Main, u8, 32);
 
-/// A child number for a derived key, used to derive a certain private key from the Master
+/// A child number for a derived key, used to derive a certain private key from Main
 #[derive(Default, Copy, Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct ChildNumber(pub(crate) u64);
 // invariant self.0 <= u64::max_value() / 2;
@@ -109,40 +109,44 @@ impl ExtendedPrivKey {
         AuthenticationKey::ed25519(&self.get_public())
     }
 
-    /// Libra specific sign function that is capable of signing an arbitrary HashValue
-    /// NOTE: In Libra, we do not sign the raw bytes of a transaction, instead we sign the raw
-    /// bytes of the sha3 hash of the raw bytes of a transaction. It is important to note that the
-    /// raw bytes of the sha3 hash will be hashed again as part of the ed25519 signature algorithm.
-    /// In other words: In Libra, the message used for signature and verification is the sha3 hash
-    /// of the transaction. This sha3 hash is then hashed again using SHA512 to arrive at the
-    /// deterministic nonce for the EdDSA.
-    pub fn sign(&self, msg: HashValue) -> Ed25519Signature {
-        self.private_key.sign_message(&msg)
+    /// Libra specific sign function that is capable of signing an arbitrary
+    /// Serializable value.
+    ///
+    /// NOTE: In Libra, we do not sign the raw bytes of a transaction, but
+    /// those raw bytes prefixed by a domain separation hash.
+    /// Informally signed_bytes = sha3(domain_separator) || lcs_serialization_bytes
+    ///
+    /// The domain separator hash is derived automatically from a `#[derive(CryptoHasher,
+    /// LCSCryptoHash)]` annotation, or can be declared manually in a process
+    /// described in `libra_crypto::hash`.
+    ///
+    pub fn sign<T: CryptoHash + Serialize>(&self, msg: &T) -> Ed25519Signature {
+        self.private_key.sign(msg)
     }
 }
 
 /// Wrapper struct from which we derive child keys
 pub struct KeyFactory {
-    master: Master,
+    main: Main,
 }
 
 impl KeyFactory {
     const MNEMONIC_SALT_PREFIX: &'static [u8] = b"LIBRA WALLET: mnemonic salt prefix$";
-    const MASTER_KEY_SALT: &'static [u8] = b"LIBRA WALLET: master key salt$";
+    const MAIN_KEY_SALT: &'static [u8] = b"LIBRA WALLET: main key salt$";
     const INFO_PREFIX: &'static [u8] = b"LIBRA WALLET: derived key$";
     /// Instantiate a new KeyFactor from a Seed, where the [u8; 64] raw bytes of the Seed are used
-    /// to derive both the Master
+    /// to derive both the Main and its child keys
     pub fn new(seed: &Seed) -> Result<Self> {
-        let hkdf_extract = Hkdf::<Sha3_256>::extract(Some(KeyFactory::MASTER_KEY_SALT), &seed.0)?;
+        let hkdf_extract = Hkdf::<Sha3_256>::extract(Some(KeyFactory::MAIN_KEY_SALT), &seed.0)?;
 
         Ok(Self {
-            master: Master::from(&hkdf_extract[..32]),
+            main: Main::from(&hkdf_extract[..32]),
         })
     }
 
-    /// Getter for the Master
-    pub fn master(&self) -> &[u8] {
-        &self.master.0[..]
+    /// Getter for Main
+    pub fn main(&self) -> &[u8] {
+        &self.main.0[..]
     }
 
     /// Derive a particular PrivateKey at a certain ChildNumber
@@ -155,7 +159,7 @@ impl KeyFactory {
         let mut info = KeyFactory::INFO_PREFIX.to_vec();
         info.extend_from_slice(&le_n);
 
-        let hkdf_expand = Hkdf::<Sha3_256>::expand(&self.master(), Some(&info), 32)?;
+        let hkdf_expand = Hkdf::<Sha3_256>::expand(&self.main(), Some(&info), 32)?;
         let sk = Ed25519PrivateKey::try_from(hkdf_expand.as_slice())
             .expect("Unable to convert into private key");
 
@@ -200,14 +204,14 @@ fn test_key_derivation() {
 
     let key_factory = KeyFactory::new(&seed).unwrap();
     assert_eq!(
-        "16274c9618ed59177ca948529c1884ba65c57984d562ec2b4e5aa1ee3e3903be",
-        hex::encode(&key_factory.master())
+        "f3573b6dfee9718f6344971a7eb6c3521448b12fb893b77bdb7e8f99e3f7013f",
+        hex::encode(&key_factory.main())
     );
 
     // Check child_0 key derivation.
     let child_private_0 = key_factory.private_child(ChildNumber(0)).unwrap();
     assert_eq!(
-        "358a375f36d74c30b7f3299b62d712b307725938f8cc931100fbd10a434fc8b9",
+        "e6400d102987959a5165867583fdb1b4ae0ef6679a655d5a671483edee10f3f2",
         hex::encode(&child_private_0.private_key.to_bytes()[..])
     );
 
@@ -221,7 +225,7 @@ fn test_key_derivation() {
     // Check child_1 key derivation.
     let child_private_1 = key_factory.private_child(ChildNumber(1)).unwrap();
     assert_eq!(
-        "a325fe7d27b1b49f191cc03525951fec41b6ffa2d4b3007bb1d9dd353b7e56a6",
+        "ea0d01cd35dada45246208dfea0be4a32a9fc63dffcacbf277b321dd2c9a4828",
         hex::encode(&child_private_1.private_key.to_bytes()[..])
     );
 
@@ -232,7 +236,7 @@ fn test_key_derivation() {
     // Check determinism, regenerate child_1, but by incrementing ChildNumber(0).
     let child_private_1_from_increment = key_factory.private_child(child_1_again).unwrap();
     assert_eq!(
-        "a325fe7d27b1b49f191cc03525951fec41b6ffa2d4b3007bb1d9dd353b7e56a6",
+        "ea0d01cd35dada45246208dfea0be4a32a9fc63dffcacbf277b321dd2c9a4828",
         hex::encode(&child_private_1_from_increment.private_key.to_bytes()[..])
     );
 }

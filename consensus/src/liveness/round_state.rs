@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{
-    block_storage::{PendingVotes, VoteReceptionResult},
     counters,
+    pending_votes::{PendingVotes, VoteReceptionResult},
     util::time_service::{SendTask, TimeService},
 };
 use consensus_types::{common::Round, sync_info::SyncInfo, vote::Vote};
@@ -80,7 +80,6 @@ pub struct ExponentialTimeInterval {
     max_exponent: usize,
 }
 
-#[allow(dead_code)]
 impl ExponentialTimeInterval {
     #[cfg(any(test, feature = "fuzzing"))]
     pub fn fixed(duration: Duration) -> Self {

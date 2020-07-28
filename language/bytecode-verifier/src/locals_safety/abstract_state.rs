@@ -3,19 +3,17 @@
 
 //! This module defines the abstract state for the local safety analysis.
 
-use crate::{
-    absint::{AbstractDomain, JoinResult},
-    signature::kind,
-};
+use crate::absint::{AbstractDomain, JoinResult};
 use mirai_annotations::{checked_precondition, checked_verify};
+use move_core_types::vm_status::StatusCode;
 use vm::{
-    access::ModuleAccess,
-    file_format::{CompiledModule, FunctionDefinition, Kind, LocalIndex},
+    errors::PartialVMError,
+    file_format::{CodeOffset, FunctionDefinitionIndex, Kind, LocalIndex},
 };
 
 /// LocalState represents the current assignment state of a local
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum LocalState {
+pub(crate) enum LocalState {
     /// The local does not have a value
     Unavailable,
     /// The local was assigned a resource in at least one control flow path, but was `Unavailable`
@@ -24,42 +22,35 @@ pub enum LocalState {
     /// The local has a value
     Available,
 }
+use crate::binary_views::{BinaryIndexedView, FunctionView};
 use LocalState::*;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AbstractState {
+pub(crate) struct AbstractState {
+    current_function: Option<FunctionDefinitionIndex>,
     local_kinds: Vec<Kind>,
     local_states: Vec<LocalState>,
 }
 
 impl AbstractState {
     /// create a new abstract state
-    pub fn new(module: &CompiledModule, function_definition: &FunctionDefinition) -> Self {
-        let func_handle = module.function_handle_at(function_definition.function);
-        let parameter_types = &module.signature_at(func_handle.parameters).0;
-        let additional_local_types = &module
-            .signature_at(
-                function_definition
-                    .code
-                    .as_ref()
-                    .expect("Abstract interpreter should only run on non-native functions")
-                    .locals,
-            )
-            .0;
-        let num_locals = parameter_types.len() + additional_local_types.len();
-
-        let num_args = module.signature_at(func_handle.parameters).0.len();
+    pub fn new(resolver: &BinaryIndexedView, function_view: &FunctionView) -> Self {
+        let num_args = function_view.parameters().len();
+        let num_locals = num_args + function_view.locals().len();
         let local_states = (0..num_locals)
             .map(|i| if i < num_args { Available } else { Unavailable })
             .collect();
 
-        let local_kinds = parameter_types
+        let local_kinds = function_view
+            .parameters()
+            .0
             .iter()
-            .chain(additional_local_types.iter())
-            .map(|st| kind(module, st, &func_handle.type_parameters))
+            .chain(function_view.locals().0.iter())
+            .map(|st| resolver.kind(st, &function_view.type_parameters()))
             .collect();
 
         Self {
+            current_function: function_view.index(),
             local_states,
             local_kinds,
         }
@@ -90,9 +81,18 @@ impl AbstractState {
         self.local_states[idx as usize] = Unavailable
     }
 
+    pub fn error(&self, status: StatusCode, offset: CodeOffset) -> PartialVMError {
+        PartialVMError::new(status).at_code_offset(
+            self.current_function.unwrap_or(FunctionDefinitionIndex(0)),
+            offset,
+        )
+    }
+
     fn join_(&self, other: &Self) -> Self {
+        checked_precondition!(self.current_function == other.current_function);
         checked_precondition!(self.local_kinds.len() == other.local_kinds.len());
         checked_precondition!(self.local_states.len() == other.local_states.len());
+        let current_function = self.current_function;
         let local_kinds = self.local_kinds.clone();
         let local_states = self
             .local_states
@@ -124,6 +124,7 @@ impl AbstractState {
             .collect();
 
         Self {
+            current_function,
             local_states,
             local_kinds,
         }

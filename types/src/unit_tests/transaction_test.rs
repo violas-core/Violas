@@ -4,6 +4,7 @@
 use crate::{
     account_address::AccountAddress,
     account_config::LBR_NAME,
+    chain_id::ChainId,
     transaction::{
         RawTransaction, Script, SignedTransaction, Transaction, TransactionInfo,
         TransactionListWithProof, TransactionPayload, TransactionWithProof,
@@ -27,7 +28,8 @@ fn test_invalid_signature() {
             0,
             0,
             LBR_NAME.to_owned(),
-            std::time::Duration::new(0, 0),
+            0,
+            ChainId::test(),
         ),
         Ed25519PrivateKey::generate_for_testing().public_key(),
         Ed25519Signature::try_from(&[1u8; 64][..]).unwrap(),

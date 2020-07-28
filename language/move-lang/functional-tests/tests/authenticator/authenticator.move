@@ -54,8 +54,10 @@ fun main() {
 }
 }
 
+// TODO(status_migration) remove duplicate check
 // check: ABORTED
-// check: 7001
+// check: ABORTED
+// check: 0
 
 // bad threshold should be rejected (threshold 1 for empty keys)
 //! new-transaction
@@ -68,8 +70,10 @@ fun main() {
 }
 }
 
+// TODO(status_migration) remove duplicate check
 // check: ABORTED
-// check: 7002
+// check: ABORTED
+// check: 1
 
 //! new-transaction
 script {
@@ -88,8 +92,11 @@ fun main() {
     Authenticator::create_multi_ed25519(keys, 3);
 }
 }
+
+// TODO(status_migration) remove duplicate check
 // check: ABORTED
-// check: 7003
+// check: ABORTED
+// check: 2
 
 // bad threshold should be rejected (threshold 2 for 1 key)
 //! new-transaction
@@ -106,8 +113,10 @@ fun main() {
 }
 }
 
+// TODO(status_migration) remove duplicate check
 // check: ABORTED
-// check: 7002
+// check: ABORTED
+// check: 3
 
 // bad threshold should be rejected (threshold 0 for 1 address)
 //! new-transaction
@@ -124,8 +133,10 @@ fun main() {
 }
 }
 
+// TODO(status_migration) remove duplicate check
 // check: ABORTED
-// check: 7001
+// check: ABORTED
+// check: 1
 
 // 1-of-1 multi-ed25519 should have a different auth key than ed25519 with the same public key
 //! new-transaction

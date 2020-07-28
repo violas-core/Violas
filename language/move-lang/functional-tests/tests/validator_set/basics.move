@@ -5,29 +5,26 @@
 //! new-transaction
 script {
 use 0x1::LibraSystem;
-use 0x1::LibraConfig::CreateOnChainConfig;
-use 0x1::Roles;
 fun main(account: &signer) {
-    let r = Roles::extract_privilege_to_capability<CreateOnChainConfig>(account);
-    LibraSystem::initialize_validator_set(account, &r);
-    Roles::restore_capability_to_privilege(account, r);
+    LibraSystem::initialize_validator_set(account);
 }
 }
+// TODO(status_migration) remove duplicate check
 // check: ABORTED
-// check: 1
+// check: ABORTED
+// check: 0
 
 //! new-transaction
 script {
     use 0x1::LibraSystem;
-    use 0x1::Roles::{Self, AssociationRootRole};
     fun main(account: &signer) {
-        let assoc_root_role = Roles::extract_privilege_to_capability<AssociationRootRole>(account);
-        LibraSystem::update_and_reconfigure(&assoc_root_role);
-        Roles::restore_capability_to_privilege(account, assoc_root_role);
+        LibraSystem::update_config_and_reconfigure(account, {{bob}});
     }
 }
+// TODO(status_migration) remove duplicate check
 // check: ABORTED
-// check: 22
+// check: ABORTED
+// check: 1
 
 //! new-transaction
 //! sender: bob
@@ -72,8 +69,10 @@ script {
                                     x"", x"", x"", x"");
     }
 }
+// TODO(status_migration) remove duplicate check
 // check: ABORTED
-// check: 1101
+// check: ABORTED
+// check: 1
 
 //! new-transaction
 //! sender: bob
@@ -83,5 +82,7 @@ script {
         ValidatorConfig::set_config(account, {{vivian}}, x"d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a", x"", x"", x"", x"");
     }
 }
+// TODO(status_migration) remove duplicate check
 // check: ABORTED
-// check: 1101
+// check: ABORTED
+// check: 1

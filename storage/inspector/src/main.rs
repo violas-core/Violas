@@ -107,13 +107,14 @@ fn list_txns(db: &LibraDB) {
         .expect("Unable to get latest version");
     let backup = db.get_backup_handler();
     let iter = backup
-        .get_transaction_iter(0, version)
+        .get_transaction_iter(0, version as usize)
         .expect("Unable to get txn iter");
     for (v, tx) in iter.enumerate() {
         println!(
             "TXN {}: {}",
             v,
             tx.expect("Unable to read TX")
+                .0
                 .format_for_client(get_transaction_name)
         );
     }

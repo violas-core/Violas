@@ -229,9 +229,6 @@ fn module_(context: &mut Context, mdef: P::ModuleDefinition) -> (ModuleIdent, E:
         name,
     };
     let current_module = ModuleIdent(sp(name_loc, mident_));
-    let old_is_source_module = context.is_source_module;
-    context.is_source_module =
-        context.is_source_module && !fake_natives::is_fake_native(&current_module);
 
     let mut new_scope = AliasMap::new();
     module_self_aliases(&mut new_scope, &current_module);
@@ -278,7 +275,6 @@ fn module_(context: &mut Context, mdef: P::ModuleDefinition) -> (ModuleIdent, E:
         functions,
         specs,
     };
-    context.is_source_module = old_is_source_module;
     (current_module, def)
 }
 
@@ -808,12 +804,25 @@ fn spec_member(
     use E::SpecBlockMember_ as EM;
     use P::SpecBlockMember_ as PM;
     let em = match pm {
-        PM::Condition { kind, exp } => {
+        PM::Condition {
+            kind,
+            properties: pproperties,
+            exp,
+        } => {
+            let properties = pproperties
+                .into_iter()
+                .map(|p| pragma_property(context, p))
+                .collect();
             let exp = exp_(context, exp);
-            EM::Condition { kind, exp }
+            EM::Condition {
+                kind,
+                properties,
+                exp,
+            }
         }
         PM::Function {
             name,
+            uninterpreted,
             signature,
             body,
         } => {
@@ -822,6 +831,7 @@ fn spec_member(
             let signature = function_signature(context, signature);
             context.set_to_outer_scope(old_aliases);
             EM::Function {
+                uninterpreted,
                 name,
                 signature,
                 body,

@@ -6,17 +6,14 @@
 //! It is important to note that the cost schedule defined in this file does not track hashing
 //! operations or other native operations; the cost of each native operation will be returned by the
 //! native function itself.
-use libra_types::{
-    transaction::MAX_TRANSACTION_SIZE_IN_BYTES,
-    vm_error::{StatusCode, VMStatus},
-};
+use libra_types::{transaction::MAX_TRANSACTION_SIZE_IN_BYTES, vm_status::StatusCode};
 use mirai_annotations::*;
 use move_core_types::gas_schedule::{
     words_in, AbstractMemorySize, CostTable, GasAlgebra, GasCarrier, GasConstants, GasCost,
     GasUnits,
 };
 use vm::{
-    errors::VMResult,
+    errors::{Location, PartialVMError, PartialVMResult, VMResult},
     file_format::{
         Bytecode, ConstantPoolIndex, FieldHandleIndex, FieldInstantiationIndex,
         FunctionHandleIndex, FunctionInstantiationIndex, StructDefInstantiationIndex,
@@ -38,14 +35,14 @@ pub struct CostStrategy<'a> {
 }
 
 impl<'a> CostStrategy<'a> {
-    /// A transaction `CostStrategy`. Charge for every operation and fails once there
+    /// A transaction `CostStrategy`. Charge for every operation and fail when there
     /// is no more gas to pay for operations.
     ///
-    /// This is the instantiation the must be used when execution a user script.
+    /// This is the instantiation that must be used when executing a user script.
     pub fn transaction(cost_table: &'a CostTable, gas_left: GasUnits<GasCarrier>) -> Self {
         Self {
+            gas_left: gas_left.map(|x| x * cost_table.gas_constants.gas_unit_scaling_factor),
             cost_table,
-            gas_left,
             charge: true,
         }
     }
@@ -56,8 +53,8 @@ impl<'a> CostStrategy<'a> {
     /// code that does not have to charge the user.
     pub fn system(cost_table: &'a CostTable, gas_left: GasUnits<GasCarrier>) -> Self {
         Self {
+            gas_left: gas_left.map(|x| x * cost_table.gas_constants.gas_unit_scaling_factor),
             cost_table,
-            gas_left,
             charge: false,
         }
     }
@@ -70,10 +67,11 @@ impl<'a> CostStrategy<'a> {
     /// Return the gas left.
     pub fn remaining_gas(&self) -> GasUnits<GasCarrier> {
         self.gas_left
+            .map(|gas| gas / self.cost_table.gas_constants.gas_unit_scaling_factor)
     }
 
     /// Charge a given amount of gas and fail if not enough gas units are left.
-    pub fn deduct_gas(&mut self, amount: GasUnits<GasCarrier>) -> VMResult<()> {
+    pub fn deduct_gas(&mut self, amount: GasUnits<GasCarrier>) -> PartialVMResult<()> {
         if !self.charge {
             return Ok(());
         }
@@ -86,7 +84,7 @@ impl<'a> CostStrategy<'a> {
         } else {
             // Zero out the internal gas state
             self.gas_left = GasUnits::new(0);
-            Err(VMStatus::new(StatusCode::OUT_OF_GAS))
+            Err(PartialVMError::new(StatusCode::OUT_OF_GAS))
         }
     }
 
@@ -95,7 +93,7 @@ impl<'a> CostStrategy<'a> {
         &mut self,
         opcode: Opcodes,
         size: AbstractMemorySize<GasCarrier>,
-    ) -> VMResult<()> {
+    ) -> PartialVMResult<()> {
         self.deduct_gas(
             self.cost_table
                 .instruction_cost(opcode as u8)
@@ -105,7 +103,7 @@ impl<'a> CostStrategy<'a> {
     }
 
     /// Charge an instruction and fail if not enough gas units are left.
-    pub fn charge_instr(&mut self, opcode: Opcodes) -> VMResult<()> {
+    pub fn charge_instr(&mut self, opcode: Opcodes) -> PartialVMResult<()> {
         self.deduct_gas(self.cost_table.instruction_cost(opcode as u8).total())
     }
 
@@ -117,6 +115,14 @@ impl<'a> CostStrategy<'a> {
     ) -> VMResult<()> {
         let cost = calculate_intrinsic_gas(instrinsic_cost, &self.cost_table.gas_constants);
         self.deduct_gas(cost)
+            .map_err(|e| e.finish(Location::Undefined))
+    }
+
+    pub fn disable_metering(&mut self) {
+        self.charge = false
+    }
+    pub fn enable_metering(&mut self) {
+        self.charge = true
     }
 }
 
@@ -159,20 +165,11 @@ pub fn zero_cost_schedule() -> CostTable {
     // about the actual gas for instructions.  The only thing we care about is having an entry
     // in the gas schedule for each instruction.
     let instrs = vec![
-        (
-            MoveToSender(StructDefinitionIndex::new(0)),
-            GasCost::new(0, 0),
-        ),
-        (
-            MoveToSenderGeneric(StructDefInstantiationIndex::new(0)),
-            GasCost::new(0, 0),
-        ),
         (MoveTo(StructDefinitionIndex::new(0)), GasCost::new(0, 0)),
         (
             MoveToGeneric(StructDefInstantiationIndex::new(0)),
             GasCost::new(0, 0),
         ),
-        (GetTxnSenderAddress, GasCost::new(0, 0)),
         (MoveFrom(StructDefinitionIndex::new(0)), GasCost::new(0, 0)),
         (
             MoveFromGeneric(StructDefInstantiationIndex::new(0)),
@@ -307,9 +304,8 @@ pub enum NativeCostIndex {
     POP_BACK = 10,
     DESTROY_EMPTY = 11,
     SWAP = 12,
-    SAVE_ACCOUNT = 13,
-    ED25519_VALIDATE_KEY = 14,
-    SIGNER_BORROW = 15,
-    CREATE_SIGNER = 16,
-    DESTROY_SIGNER = 17,
+    ED25519_VALIDATE_KEY = 13,
+    SIGNER_BORROW = 14,
+    CREATE_SIGNER = 15,
+    DESTROY_SIGNER = 16,
 }

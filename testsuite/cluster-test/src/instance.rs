@@ -10,12 +10,24 @@ use libra_config::config::NodeConfig;
 use libra_json_rpc_client::{JsonRpcAsyncClient, JsonRpcBatch};
 use reqwest::{Client, Url};
 use serde_json::Value;
-use std::{collections::HashSet, fmt, str::FromStr};
-use tokio::process::Command;
+use std::{
+    collections::HashSet,
+    fmt,
+    process::Stdio,
+    str::FromStr,
+    time::{Duration, Instant},
+};
+use tokio::{process::Command, time};
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ValidatorGroup {
+    pub index: u32,
+    pub twin_index: Option<u32>,
+}
 
 #[derive(Debug, Clone)]
 pub struct InstanceConfig {
-    pub validator_group: u32,
+    pub validator_group: ValidatorGroup,
     pub application_config: ApplicationConfig,
 }
 
@@ -78,6 +90,22 @@ struct K8sInstanceInfo {
     kube: ClusterSwarmKube,
 }
 
+impl ValidatorGroup {
+    pub fn new_for_index(index: u32) -> ValidatorGroup {
+        Self {
+            index,
+            twin_index: None,
+        }
+    }
+
+    pub fn index_only(&self) -> u32 {
+        match self.twin_index {
+            None => self.index,
+            _ => panic!("Only validator has twin index"),
+        }
+    }
+}
+
 impl InstanceConfig {
     pub fn replace_tag(&mut self, new_tag: String) -> Result<()> {
         match &mut self.application_config {
@@ -101,14 +129,25 @@ impl InstanceConfig {
 
     pub fn pod_name(&self) -> String {
         match &self.application_config {
-            ApplicationConfig::Validator(_) => format!("val-{}", self.validator_group),
+            ApplicationConfig::Validator(_) => match self.validator_group.twin_index {
+                None => format!("val-{}", self.validator_group.index),
+                twin_index => format!(
+                    "val-{}-twin-{}",
+                    self.validator_group.index,
+                    twin_index.unwrap()
+                ),
+            },
             ApplicationConfig::Fullnode(fullnode_config) => format!(
                 "fn-{}-{}",
-                self.validator_group, fullnode_config.fullnode_index
+                self.validator_group.index, fullnode_config.fullnode_index
             ),
-            ApplicationConfig::LSR(_) => format!("lsr-{}", self.validator_group),
-            ApplicationConfig::Vault(_) => format!("vault-{}", self.validator_group),
+            ApplicationConfig::LSR(_) => format!("lsr-{}", self.validator_group.index),
+            ApplicationConfig::Vault(_) => format!("vault-{}", self.validator_group.index),
         }
+    }
+
+    pub fn make_twin(&mut self, twin_index: u32) {
+        self.validator_group.twin_index = Some(twin_index);
     }
 }
 
@@ -186,13 +225,22 @@ impl Instance {
         Ok(())
     }
 
+    pub async fn wait_json_rpc(&self, deadline: Instant) -> Result<()> {
+        while self.try_json_rpc().await.is_err() {
+            if Instant::now() > deadline {
+                return Err(format_err!("wait_json_rpc for {} timed out", self));
+            }
+            time::delay_for(Duration::from_secs(3)).await;
+        }
+        Ok(())
+    }
+
     pub fn peer_name(&self) -> &String {
         &self.peer_name
     }
 
-    pub fn validator_group(&self) -> u32 {
-        let backend = self.k8s_backend();
-        backend.instance_config.validator_group
+    pub fn validator_group(&self) -> ValidatorGroup {
+        self.k8s_backend().instance_config.validator_group.clone()
     }
 
     pub fn ip(&self) -> &String {
@@ -204,7 +252,7 @@ impl Instance {
     }
 
     pub fn json_rpc_url(&self) -> Url {
-        Url::from_str(&format!("http://{}:{}", self.ip(), self.ac_port())).expect("Invalid URL.")
+        Url::from_str(&format!("http://{}:{}/v1", self.ip(), self.ac_port())).expect("Invalid URL.")
     }
 
     fn k8s_backend(&self) -> &K8sInstanceInfo {
@@ -257,9 +305,9 @@ impl Instance {
     }
 
     /// Unlike util_cmd, exec runs command inside the container
-    pub async fn exec(&self, command: &str) -> Result<()> {
-        let child = Command::new("kubectl")
-            .arg("exec")
+    pub async fn exec(&self, command: &str, mute: bool) -> Result<()> {
+        let mut cmd = Command::new("kubectl");
+        cmd.arg("exec")
             .arg(&self.peer_name)
             .arg("--container")
             .arg("main")
@@ -267,16 +315,18 @@ impl Instance {
             .arg("sh")
             .arg("-c")
             .arg(command)
-            .kill_on_drop(true)
-            .spawn()
-            .map_err(|e| {
-                format_err!(
-                    "Failed to spawn child process {} on {}: {}",
-                    command,
-                    self.peer_name(),
-                    e
-                )
-            })?;
+            .kill_on_drop(true);
+        if mute {
+            cmd.stdout(Stdio::null()).stderr(Stdio::null());
+        }
+        let child = cmd.spawn().map_err(|e| {
+            format_err!(
+                "Failed to spawn child process {} on {}: {}",
+                command,
+                self.peer_name(),
+                e
+            )
+        })?;
         let status = child
             .await
             .map_err(|e| format_err!("Error running {} on {}: {}", command, self.peer_name(), e))?;

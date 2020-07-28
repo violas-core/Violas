@@ -17,7 +17,8 @@ use libra_crypto::{
     x25519, HashValue,
 };
 use libra_types::{
-    account_config::{association_address, lbr_type_tag},
+    account_address,
+    account_config::{lbr_type_tag, libra_root_address},
     on_chain_config::{OnChainConfig, VMConfig, VMPublishingOption},
 };
 use libra_vm::LibraVM;
@@ -26,8 +27,8 @@ use rand::SeedableRng;
 use storage_interface::DbReaderWriter;
 use subscription_service::ReconfigSubscription;
 use transaction_builder::{
-    encode_block_prologue_script, encode_publishing_option_script, encode_reconfigure_script,
-    encode_set_validator_config_script, encode_transfer_with_metadata_script,
+    encode_block_prologue_script, encode_modify_publishing_option_script,
+    encode_peer_to_peer_with_metadata_script, encode_set_validator_config_and_reconfigure_script,
 };
 
 // TODO test for subscription with multiple subscribed configs once there are >1 on-chain configs
@@ -38,7 +39,7 @@ fn test_on_chain_config_pub_sub() {
     let (subscription, mut reconfig_receiver) =
         ReconfigSubscription::subscribe_all(vec![VMConfig::CONFIG_ID], vec![]);
 
-    let (mut config, genesis_key) = config_builder::test_config();
+    let (config, genesis_key) = config_builder::test_config();
     let (db, db_rw) = DbReaderWriter::wrap(LibraDB::new_for_test(&config.storage.dir()));
     bootstrap_db_if_empty::<LibraVM>(&db_rw, get_genesis_txn(&config).unwrap()).unwrap();
 
@@ -75,37 +76,37 @@ fn test_on_chain_config_pub_sub() {
     //////////////////////////////////////////////////
     // Case 2: publish if subscribed config changed //
     //////////////////////////////////////////////////
-    let genesis_account = association_address();
+    let genesis_account = libra_root_address();
     let network_config = config.validator_network.as_ref().unwrap();
     let validator_account = network_config.peer_id();
-    let keys = config
+    let operator_key = config
         .test
-        .as_mut()
+        .as_ref()
         .unwrap()
-        .operator_keypair
-        .as_mut()
-        .unwrap();
-
-    let validator_privkey = keys.take_private().unwrap();
-    let validator_pubkey = keys.public_key();
+        .operator_key
+        .as_ref()
+        .unwrap()
+        .private_key();
+    let operator_public_key = operator_key.public_key();
+    let operator_account = account_address::from_public_key(&operator_public_key);
 
     // Create a dummy block prologue transaction that will bump the timer.
     let txn1 = encode_block_prologue_script(gen_block_metadata(1, validator_account));
 
-    // Add a script to whitelist.
-    let new_whitelist = {
-        let mut existing_list = StdlibScript::whitelist();
+    // Add a script to allowlist.
+    let new_allowlist = {
+        let mut existing_list = StdlibScript::allowlist();
         existing_list.push(*HashValue::sha3_256_of(&[]).as_ref());
         existing_list
     };
-    let vm_publishing_option = VMPublishingOption::Locked(new_whitelist);
+    let vm_publishing_option = VMPublishingOption::locked(new_allowlist);
 
     let txn2 = get_test_signed_transaction(
         genesis_account,
         /* sequence_number = */ 1,
         genesis_key.clone(),
         genesis_key.public_key(),
-        Some(encode_publishing_option_script(
+        Some(encode_modify_publishing_option_script(
             vm_publishing_option.clone(),
         )),
     );
@@ -151,7 +152,7 @@ fn test_on_chain_config_pub_sub() {
         /* sequence_number = */ 2,
         genesis_key.clone(),
         genesis_key.public_key(),
-        Some(encode_transfer_with_metadata_script(
+        Some(encode_peer_to_peer_with_metadata_script(
             lbr_type_tag(),
             validator_account,
             1_000_000,
@@ -168,11 +169,11 @@ fn test_on_chain_config_pub_sub() {
     let mut rng = ::rand::rngs::StdRng::from_seed(TEST_SEED);
     let new_network_pubkey = x25519::PrivateKey::generate(&mut rng).public_key();
     let txn5 = get_test_signed_transaction(
-        validator_account,
+        operator_account,
         /* sequence_number = */ 0,
-        validator_privkey,
-        validator_pubkey,
-        Some(encode_set_validator_config_script(
+        operator_key,
+        operator_public_key,
+        Some(encode_set_validator_config_and_reconfigure_script(
             validator_account,
             new_pubkey.to_bytes().to_vec(),
             new_network_pubkey.as_slice().to_vec(),
@@ -182,16 +183,7 @@ fn test_on_chain_config_pub_sub() {
         )),
     );
 
-    // reconfigure the system with a new consensus key
-    let txn6 = get_test_signed_transaction(
-        association_address(),
-        /* sequence_number = */ 3,
-        genesis_key.clone(),
-        genesis_key.public_key(),
-        Some(encode_reconfigure_script()),
-    );
-
-    let block2 = vec![txn3, txn4, txn5, txn6];
+    let block2 = vec![txn3, txn4, txn5];
     let block2_id = gen_block_id(2);
 
     let output = block_executor

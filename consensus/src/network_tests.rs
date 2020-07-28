@@ -300,11 +300,6 @@ impl NetworkPlayground {
         true
     }
 
-    /// Returns true for any message other than timeout
-    pub fn exclude_timeout_msg(msg_copy: &(Author, ConsensusMsg)) -> bool {
-        !Self::timeout_votes_only(msg_copy)
-    }
-
     /// Returns true for proposal messages only.
     pub fn proposals_only(msg: &(Author, ConsensusMsg)) -> bool {
         matches!(&msg.1, ConsensusMsg::ProposalMsg(_))
@@ -313,24 +308,6 @@ impl NetworkPlayground {
     /// Returns true for vote messages only.
     pub fn votes_only(msg: &(Author, ConsensusMsg)) -> bool {
         matches!(&msg.1, ConsensusMsg::VoteMsg(_))
-    }
-
-    /// Returns true for vote messages that carry round signatures only.
-    pub fn timeout_votes_only(msg: &(Author, ConsensusMsg)) -> bool {
-        matches!(
-            &msg.1,
-            // Timeout votes carry non-empty round signatures.
-            ConsensusMsg::VoteMsg(vote_msg) if vote_msg.vote().timeout_signature().is_some()
-        )
-    }
-
-    /// Returns true for sync info messages only.
-    pub fn sync_info_only(msg: &(Author, ConsensusMsg)) -> bool {
-        matches!(&msg.1, ConsensusMsg::SyncInfo(_))
-    }
-
-    pub fn epoch_change_only(msg: &(Author, ConsensusMsg)) -> bool {
-        matches!(&msg.1, ConsensusMsg::EpochChangeProof(_))
     }
 
     pub fn extend_author_to_twin_ids(&mut self, author: Author, twin_id: TwinId) {
@@ -351,15 +328,15 @@ impl NetworkPlayground {
             .is_message_dropped(src_twin_id, dst_twin_id)
     }
 
-    pub fn drop_message_for(&mut self, src: &TwinId, dst: TwinId) -> bool {
-        self.drop_config.write().unwrap().drop_message_for(src, dst)
-    }
-
-    pub fn stop_drop_message_for(&mut self, src: &TwinId, dst: &TwinId) -> bool {
+    pub fn split_network(
+        &mut self,
+        partition_first: Vec<TwinId>,
+        partition_second: Vec<TwinId>,
+    ) -> bool {
         self.drop_config
             .write()
             .unwrap()
-            .stop_drop_message_for(src, dst)
+            .split_network(partition_first, partition_second)
     }
 
     pub async fn start(mut self) {
@@ -405,10 +382,6 @@ impl AuthorToTwinIds {
     pub fn get_twin_ids(&self, author: Author) -> Vec<TwinId> {
         self.0.get(&author).unwrap().clone()
     }
-
-    pub fn get_author_to_twin_ids(&self) -> HashMap<Author, Vec<TwinId>> {
-        self.0.clone()
-    }
 }
 
 struct DropConfig(HashMap<TwinId, HashSet<TwinId>>);
@@ -418,12 +391,24 @@ impl DropConfig {
         self.0.get(src).unwrap().contains(&dst)
     }
 
-    pub fn drop_message_for(&mut self, src: &TwinId, dst: TwinId) -> bool {
-        self.0.get_mut(src).unwrap().insert(dst)
+    pub fn drop_message_for(&mut self, src: &TwinId, dst: &TwinId) -> bool {
+        self.0.get_mut(src).unwrap().insert(*dst)
     }
 
-    pub fn stop_drop_message_for(&mut self, src: &TwinId, dst: &TwinId) -> bool {
-        self.0.get_mut(src).unwrap().remove(dst)
+    pub fn split_network(
+        &mut self,
+        partition_first: Vec<TwinId>,
+        partition_second: Vec<TwinId>,
+    ) -> bool {
+        let mut done = true;
+        for node_first in partition_first.iter() {
+            for node_second in partition_second.iter() {
+                // drop messages in both directions
+                done &= self.drop_message_for(node_first, node_second);
+                done &= self.drop_message_for(node_second, node_first);
+            }
+        }
+        done
     }
 
     fn add_node(&mut self, src: TwinId) {

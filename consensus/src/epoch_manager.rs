@@ -9,6 +9,7 @@ use crate::{
         proposal_generator::ProposalGenerator,
         proposer_election::ProposerElection,
         rotating_proposer_election::{choose_leader, RotatingProposer},
+        round_proposer_election::RoundProposer,
         round_state::{ExponentialTimeInterval, RoundState},
     },
     metrics_safety_rules::MetricsSafetyRules,
@@ -36,7 +37,7 @@ use libra_types::{
     on_chain_config::{OnChainConfigPayload, ValidatorSet},
 };
 use network::protocols::network::Event;
-use safety_rules::{SafetyRulesManager, TSafetyRules};
+use safety_rules::SafetyRulesManager;
 use std::{cmp::Ordering, sync::Arc, time::Duration};
 
 /// RecoveryManager is used to process events in order to sync up with peer if we can't recover from local consensusdb
@@ -81,7 +82,7 @@ pub struct EpochManager {
 
 impl EpochManager {
     pub fn new(
-        node_config: &mut NodeConfig,
+        node_config: &NodeConfig,
         time_service: Arc<dyn TimeService>,
         self_sender: channel::Sender<anyhow::Result<Event<ConsensusMsg>>>,
         network_sender: ConsensusNetworkSender,
@@ -92,7 +93,8 @@ impl EpochManager {
     ) -> Self {
         let author = node_config.validator_network.as_ref().unwrap().peer_id();
         let config = node_config.consensus.clone();
-        let safety_rules_manager = SafetyRulesManager::new(node_config);
+        let sr_config = &node_config.consensus.safety_rules;
+        let safety_rules_manager = SafetyRulesManager::new(sr_config);
         Self {
             author,
             config,
@@ -132,7 +134,7 @@ impl EpochManager {
         // Timeout goes from initial_timeout to initial_timeout*11 in 6 steps
         let time_interval = Box::new(ExponentialTimeInterval::new(
             Duration::from_millis(self.config.round_initial_timeout_ms),
-            1.5,
+            1.2,
             6,
         ));
         RoundState::new(time_interval, time_service, timeout_sender)
@@ -147,7 +149,7 @@ impl EpochManager {
             .verifier
             .get_ordered_account_addresses_iter()
             .collect::<Vec<_>>();
-        match self.config.proposer_type {
+        match &self.config.proposer_type {
             ConsensusProposerType::RotatingProposer => Box::new(RotatingProposer::new(
                 proposers,
                 self.config.contiguous_rounds,
@@ -170,6 +172,14 @@ impl EpochManager {
                     heuristic_config.inactive_weights,
                 ));
                 Box::new(LeaderReputation::new(proposers, backend, heuristic))
+            }
+            ConsensusProposerType::RoundProposer(round_proposers) => {
+                // Hardcoded to the first proposer
+                let default_proposer = proposers.get(0).unwrap();
+                Box::new(RoundProposer::new(
+                    round_proposers.clone(),
+                    *default_proposer,
+                ))
             }
         }
     }
@@ -269,18 +279,10 @@ impl EpochManager {
 
         info!("Update SafetyRules");
 
-        let mut safety_rules = MetricsSafetyRules::new(self.safety_rules_manager.client());
-        let consensus_state = safety_rules
-            .consensus_state()
-            .expect("Unable to retrieve ConsensusState from SafetyRules");
-        let sr_waypoint = consensus_state.waypoint();
-        let proofs = self
-            .storage
-            .retrieve_epoch_change_proof(sr_waypoint.version())
-            .expect("Unable to retrieve Waypoint state from Storage");
-
+        let mut safety_rules =
+            MetricsSafetyRules::new(self.safety_rules_manager.client(), self.storage.clone());
         safety_rules
-            .initialize(&proofs)
+            .perform_initialize()
             .expect("Unable to initialize SafetyRules");
 
         info!("Create ProposalGenerator");
@@ -373,10 +375,25 @@ impl EpochManager {
         peer_id: AccountAddress,
         consensus_msg: ConsensusMsg,
     ) -> anyhow::Result<()> {
-        if let Some(event) = self.process_epoch(peer_id, consensus_msg).await? {
-            let verified_event = event
+        // we can't verify signatures from a different epoch
+        let maybe_unverified_event = self.process_epoch(peer_id, consensus_msg).await?;
+
+        if let Some(unverified_event) = maybe_unverified_event {
+            // same epoch -> run well-formedness + signature check
+            let verified_event = unverified_event
+                .clone()
                 .verify(&self.epoch_state().verifier)
-                .context("[EpochManager] Verify event")?;
+                .context("[EpochManager] Verify event")
+                .map_err(|err|
+                        // security log + return the error
+                        {send_struct_log!(security_log(security_events::CONSENSUS_INVALID_MESSAGE)
+                            .data("from_peer", &peer_id)
+                            .data_display("error", &err)
+                            .data("event", &unverified_event)
+                        );
+                    err})?;
+
+            // process the verified event
             self.process_event(peer_id, verified_event).await?;
         }
         Ok(())

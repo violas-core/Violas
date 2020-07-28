@@ -241,9 +241,11 @@ pub type SpecApplyFragment = Spanned<SpecApplyFragment_>;
 pub enum SpecBlockMember_ {
     Condition {
         kind: SpecConditionKind,
+        properties: Vec<PragmaProperty>,
         exp: Exp,
     },
     Function {
+        uninterpreted: bool,
         name: FunctionName,
         signature: FunctionSignature,
         body: FunctionBody,
@@ -910,16 +912,23 @@ impl AstDebug for SpecConditionKind {
 impl AstDebug for SpecBlockMember_ {
     fn ast_debug(&self, w: &mut AstWriter) {
         match self {
-            SpecBlockMember_::Condition { kind, exp } => {
+            SpecBlockMember_::Condition {
+                kind,
+                properties: _,
+                exp,
+            } => {
                 kind.ast_debug(w);
                 exp.ast_debug(w);
             }
             SpecBlockMember_::Function {
+                uninterpreted,
                 signature,
                 name,
                 body,
             } => {
-                if let FunctionBody_::Native = &body.value {
+                if *uninterpreted {
+                    w.write("uninterpreted ");
+                } else if let FunctionBody_::Native = &body.value {
                     w.write("native ");
                 }
                 w.write("fun ");

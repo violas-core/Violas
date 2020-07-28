@@ -3,6 +3,7 @@
 members = [
     "client/json-rpc",
     "client/libra-dev",
+    "client/swiss-knife",
     "common/bitvec",
     "common/bounded-executor",
     "common/channel",
@@ -10,18 +11,19 @@ members = [
     "common/datatest-stable",
     "common/debug-interface",
     "common/futures-semaphore",
+    "common/inject-error",
     "common/lcs",
+    "common/libradoc",
     "common/logger",
     "common/metrics",
     "common/nibble",
     "common/num-variants",
-    "common/option-future",
     "common/proptest-helpers",
     "common/retrier",
-    "common/security-logger",
     "common/stream-ratelimiter",
     "common/subscription-service",
     "common/temppath",
+    "common/trace",
     "common/workspace-builder",
     "common/workspace-hack",
     "config",
@@ -29,6 +31,9 @@ members = [
     "config/generate-key",
     "config/global-constants",
     "config/management",
+    "config/management/genesis",
+    "config/management/operational",
+    "config/seed-peer-generator",
     "consensus",
     "consensus/consensus-types",
     "consensus/safety-rules",
@@ -92,7 +97,6 @@ members = [
     "network/memsocket",
     "network/netcore",
     "network/network-address",
-    "network/onchain-discovery",
     "network/simple-onchain-discovery",
     "network/socket-bench-server",
     "secure/json-rpc",
@@ -135,11 +139,16 @@ members = [
 #
 # For more, see the "Conditional compilation for tests" section in documentation/coding_guidelines.md.
 default-members = [
+    "common/inject-error",
+    "common/trace",
     "config/config-builder",
     "config/generate-key",
-    "config/management",
+    "config/management/genesis",
+    "config/management/operational",
+    "config/seed-peer-generator",
     "consensus/safety-rules",
     "client/libra-dev",
+    "client/swiss-knife",
     "execution/db-bootstrapper",
     "execution/execution-correctness",
     "testsuite/cli",
@@ -161,7 +170,6 @@ default-members = [
 
 [profile.release]
 debug = true
-lto = 'thin'
 
 [profile.bench]
 debug = true

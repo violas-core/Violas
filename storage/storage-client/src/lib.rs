@@ -28,9 +28,9 @@ pub struct StorageClient {
 }
 
 impl StorageClient {
-    pub fn new(server_address: &SocketAddr) -> Self {
+    pub fn new(server_address: &SocketAddr, timeout: u64) -> Self {
         Self {
-            network_client: Mutex::new(NetworkClient::new(*server_address)),
+            network_client: Mutex::new(NetworkClient::new(*server_address, timeout)),
         }
     }
 
@@ -171,6 +171,10 @@ impl DbReader for StorageClient {
     }
 
     fn get_epoch_ending_ledger_info(&self, _: u64) -> Result<LedgerInfoWithSignatures> {
+        unimplemented!()
+    }
+
+    fn get_block_timestamp(&self, _version: u64) -> Result<u64> {
         unimplemented!()
     }
 }

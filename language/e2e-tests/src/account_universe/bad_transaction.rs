@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{
-    account::Account,
     account_universe::{AUTransactionGen, AccountUniverse},
     common_transactions::{empty_txn, EMPTY_SCRIPT},
     gas_costs,
@@ -14,8 +13,8 @@ use libra_crypto::{
 use libra_proptest_helpers::Index;
 use libra_types::{
     account_config::LBR_NAME,
-    transaction::{SignedTransaction, TransactionStatus},
-    vm_error::{StatusCode, VMStatus},
+    transaction::{Script, SignedTransaction, TransactionStatus},
+    vm_status::StatusCode,
 };
 use move_core_types::gas_schedule::{AbstractMemorySize, GasAlgebra, GasCarrier, GasConstants};
 use move_vm_types::gas_schedule::calculate_intrinsic_gas;
@@ -58,9 +57,9 @@ impl AUTransactionGen for SequenceNumberMismatchGen {
             txn,
             (
                 if seq >= sender.sequence_number {
-                    TransactionStatus::Discard(VMStatus::new(StatusCode::SEQUENCE_NUMBER_TOO_NEW))
+                    TransactionStatus::Discard(StatusCode::SEQUENCE_NUMBER_TOO_NEW)
                 } else {
-                    TransactionStatus::Discard(VMStatus::new(StatusCode::SEQUENCE_NUMBER_TOO_OLD))
+                    TransactionStatus::Discard(StatusCode::SEQUENCE_NUMBER_TOO_OLD)
                 },
                 0,
             ),
@@ -104,25 +103,19 @@ impl AUTransactionGen for InsufficientBalanceGen {
             txn,
             (
                 if max_gas_unit > default_constants.maximum_number_of_gas_units.get() {
-                    TransactionStatus::Discard(VMStatus::new(
+                    TransactionStatus::Discard(
                         StatusCode::MAX_GAS_UNITS_EXCEEDS_MAX_GAS_UNITS_BOUND,
-                    ))
+                    )
                 } else if max_gas_unit < min_cost {
-                    TransactionStatus::Discard(VMStatus::new(
+                    TransactionStatus::Discard(
                         StatusCode::MAX_GAS_UNITS_BELOW_MIN_TRANSACTION_GAS_UNITS,
-                    ))
+                    )
                 } else if self.gas_unit_price > default_constants.max_price_per_gas_unit.get() {
-                    TransactionStatus::Discard(VMStatus::new(
-                        StatusCode::GAS_UNIT_PRICE_ABOVE_MAX_BOUND,
-                    ))
+                    TransactionStatus::Discard(StatusCode::GAS_UNIT_PRICE_ABOVE_MAX_BOUND)
                 } else if self.gas_unit_price < default_constants.min_price_per_gas_unit.get() {
-                    TransactionStatus::Discard(VMStatus::new(
-                        StatusCode::GAS_UNIT_PRICE_BELOW_MIN_BOUND,
-                    ))
+                    TransactionStatus::Discard(StatusCode::GAS_UNIT_PRICE_BELOW_MIN_BOUND)
                 } else {
-                    TransactionStatus::Discard(VMStatus::new(
-                        StatusCode::INSUFFICIENT_BALANCE_FOR_TRANSACTION_FEE,
-                    ))
+                    TransactionStatus::Discard(StatusCode::INSUFFICIENT_BALANCE_FOR_TRANSACTION_FEE)
                 },
                 0,
             ),
@@ -147,29 +140,22 @@ impl AUTransactionGen for InvalidAuthkeyGen {
     ) -> (SignedTransaction, (TransactionStatus, u64)) {
         let sender = universe.pick(self.sender).1;
 
-        let txn = Account::create_raw_txn_with_args(
-            *sender.account().address(),
-            EMPTY_SCRIPT.clone(),
-            vec![],
-            vec![],
-            sender.sequence_number,
-            gas_costs::TXN_RESERVED,
-            0,
-            LBR_NAME.to_owned(),
-        )
-        .sign(
-            &self.new_keypair.private_key,
-            self.new_keypair.public_key.clone(),
-        )
-        .unwrap()
-        .into_inner();
+        let txn = sender
+            .account()
+            .transaction()
+            .script(Script::new(EMPTY_SCRIPT.clone(), vec![], vec![]))
+            .sequence_number(sender.sequence_number)
+            .raw()
+            .sign(
+                &self.new_keypair.private_key,
+                self.new_keypair.public_key.clone(),
+            )
+            .unwrap()
+            .into_inner();
 
         (
             txn,
-            (
-                TransactionStatus::Discard(VMStatus::new(StatusCode::INVALID_AUTH_KEY)),
-                0,
-            ),
+            (TransactionStatus::Discard(StatusCode::INVALID_AUTH_KEY), 0),
         )
     }
 }

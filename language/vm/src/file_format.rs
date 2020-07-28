@@ -27,17 +27,18 @@
 //! those structs translate to tables and table specifications.
 
 use crate::{
-    access::ModuleAccess, check_bounds::BoundsChecker, errors::VMResult, internals::ModuleIndex,
+    access::ModuleAccess,
+    check_bounds::BoundsChecker,
+    errors::{PartialVMError, PartialVMResult},
+    internals::ModuleIndex,
     IndexKind, SignatureTokenKind,
-};
-use libra_types::{
-    account_address::AccountAddress,
-    vm_error::{StatusCode, VMStatus},
 };
 use mirai_annotations::*;
 use move_core_types::{
+    account_address::AccountAddress,
     identifier::{IdentStr, Identifier},
     language_storage::ModuleId,
+    vm_status::StatusCode,
 };
 use num_variants::NumVariants;
 #[cfg(any(test, feature = "fuzzing"))]
@@ -353,10 +354,10 @@ pub struct StructDefinition {
 }
 
 impl StructDefinition {
-    pub fn declared_field_count(&self) -> Result<MemberCount, VMStatus> {
+    pub fn declared_field_count(&self) -> PartialVMResult<MemberCount> {
         match &self.field_information {
             // TODO we might want a more informative error here
-            StructFieldInformation::Native => Err(VMStatus::new(StatusCode::LINKER_ERROR)
+            StructFieldInformation::Native => Err(PartialVMError::new(StatusCode::LINKER_ERROR)
                 .with_message("Looking for field in native structure".to_string())),
             StructFieldInformation::Declared(fields) => Ok(fields.len() as u16),
         }
@@ -595,6 +596,37 @@ impl<'a> Iterator for SignatureTokenPreorderTraversalIter<'a> {
     }
 }
 
+/// Alternative preorder traversal iterator for SignatureToken that also returns the depth at each node.
+pub struct SignatureTokenPreorderTraversalIterWithDepth<'a> {
+    stack: Vec<(&'a SignatureToken, usize)>,
+}
+
+impl<'a> Iterator for SignatureTokenPreorderTraversalIterWithDepth<'a> {
+    type Item = (&'a SignatureToken, usize);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        use SignatureToken::*;
+
+        match self.stack.pop() {
+            Some((tok, depth)) => {
+                match tok {
+                    Reference(inner_tok) | MutableReference(inner_tok) | Vector(inner_tok) => {
+                        self.stack.push((inner_tok, depth + 1))
+                    }
+
+                    StructInstantiation(_, inner_toks) => self
+                        .stack
+                        .extend(inner_toks.iter().map(|tok| (tok, depth + 1)).rev()),
+
+                    Signer | Bool | Address | U8 | U64 | U128 | Struct(_) | TypeParameter(_) => (),
+                }
+                Some((tok, depth))
+            }
+            None => None,
+        }
+    }
+}
+
 /// `Arbitrary` for `SignatureToken` cannot be derived automatically as it's a recursive type.
 #[cfg(any(test, feature = "fuzzing"))]
 impl Arbitrary for SignatureToken {
@@ -707,6 +739,23 @@ impl SignatureToken {
         matches!(self, MutableReference(_))
     }
 
+    /// Returns true if the `SignatureToken` can represent a constant (as in representable in
+    /// the constants table).
+    pub fn is_constant(&self) -> bool {
+        use SignatureToken::*;
+
+        match self {
+            Bool | U8 | U64 | U128 | Address => true,
+            Vector(inner) => inner.is_constant(),
+            Signer
+            | Struct(_)
+            | StructInstantiation(_, _)
+            | Reference(_)
+            | MutableReference(_)
+            | TypeParameter(_) => false,
+        }
+    }
+
     /// Set the index to this one. Useful for random testing.
     ///
     /// Panics if this token doesn't contain a struct handle.
@@ -724,6 +773,14 @@ impl SignatureToken {
 
     pub fn preorder_traversal(&self) -> SignatureTokenPreorderTraversalIter<'_> {
         SignatureTokenPreorderTraversalIter { stack: vec![self] }
+    }
+
+    pub fn preorder_traversal_with_depth(
+        &self,
+    ) -> SignatureTokenPreorderTraversalIterWithDepth<'_> {
+        SignatureTokenPreorderTraversalIterWithDepth {
+            stack: vec![(self, 1)],
+        }
     }
 }
 
@@ -1118,12 +1175,10 @@ pub enum Bytecode {
     ///
     /// ```..., errorcode -> ...```
     Abort,
-    /// Get the sender address from the transaction and pushes it on the stack.
+    /// No operation.
     ///
-    /// Stack transition:
-    ///
-    /// ```... -> ..., address_value```
-    GetTxnSenderAddress,
+    /// Stack transition: none
+    Nop,
     /// Returns whether or not a given address has an object of type StructDefinitionIndex
     /// published already
     ///
@@ -1140,14 +1195,6 @@ pub enum Bytecode {
     /// ```..., address_value -> ..., value```
     MoveFrom(StructDefinitionIndex),
     MoveFromGeneric(StructDefInstantiationIndex),
-    /// Move the instance at the top of the stack to the address of the sender.
-    /// Abort execution if an object of type StructDefinitionIndex already exists in address.
-    ///
-    /// Stack transition:
-    ///
-    /// ```..., value -> ...```
-    MoveToSender(StructDefinitionIndex),
-    MoveToSenderGeneric(StructDefInstantiationIndex),
     /// Move the instance at the top of the stack to the address of the `Signer` on the stack below
     /// it
     /// Abort execution if an object of type StructDefinitionIndex already exists in address.
@@ -1169,10 +1216,6 @@ pub enum Bytecode {
     ///
     /// ```..., u64_value(1), u64_value(2) -> ..., u64_value```
     Shr,
-    /// No operation.
-    ///
-    /// Stack transition: none
-    Nop,
 }
 
 pub const NUMBER_OF_NATIVE_FUNCTIONS: usize = 17;
@@ -1236,16 +1279,13 @@ impl ::std::fmt::Debug for Bytecode {
             Bytecode::Le => write!(f, "Le"),
             Bytecode::Ge => write!(f, "Ge"),
             Bytecode::Abort => write!(f, "Abort"),
-            Bytecode::GetTxnSenderAddress => write!(f, "GetTxnSenderAddress"),
+            Bytecode::Nop => write!(f, "Nop"),
             Bytecode::Exists(a) => write!(f, "Exists({:?})", a),
             Bytecode::ExistsGeneric(a) => write!(f, "ExistsGeneric({:?})", a),
             Bytecode::MoveFrom(a) => write!(f, "MoveFrom({:?})", a),
             Bytecode::MoveFromGeneric(a) => write!(f, "MoveFromGeneric({:?})", a),
-            Bytecode::MoveToSender(a) => write!(f, "MoveToSender({:?})", a),
-            Bytecode::MoveToSenderGeneric(a) => write!(f, "MoveToSenderGeneric({:?})", a),
             Bytecode::MoveTo(a) => write!(f, "MoveTo({:?})", a),
             Bytecode::MoveToGeneric(a) => write!(f, "MoveToGeneric({:?})", a),
-            Bytecode::Nop => write!(f, "Nop"),
         }
     }
 }
@@ -1394,7 +1434,7 @@ impl CompiledScriptMut {
     /// Converts this instance into `CompiledScript` after verifying it for basic internal
     /// consistency. This includes bounds checks but no others.
     #[allow(deprecated)]
-    pub fn freeze(self) -> VMResult<CompiledScript> {
+    pub fn freeze(self) -> PartialVMResult<CompiledScript> {
         let (info, fake_module) = self.into_module();
         Ok(fake_module.freeze()?.into_script(info))
     }
@@ -1534,10 +1574,10 @@ pub struct CompiledModule(CompiledModuleMut);
 /// the bounds checker.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct CompiledModuleMut {
-    /// Handles to external modules and self.
-    pub module_handles: Vec<ModuleHandle>,
     /// Handle to self.
     pub self_module_handle_idx: ModuleHandleIndex,
+    /// Handles to external modules and self.
+    pub module_handles: Vec<ModuleHandle>,
     /// Handles to external and internal types.
     pub struct_handles: Vec<StructHandle>,
     /// Handles to external and internal functions.
@@ -1705,8 +1745,9 @@ impl CompiledModuleMut {
 
     /// Converts this instance into `CompiledModule` after verifying it for basic internal
     /// consistency. This includes bounds checks but no others.
-    pub fn freeze(self) -> VMResult<CompiledModule> {
-        BoundsChecker::new(&self).verify()?;
+    pub fn freeze(self) -> PartialVMResult<CompiledModule> {
+        // Impossible to access self_id for location as it might not be safe due to bounds failing
+        BoundsChecker::verify(&self)?;
         Ok(CompiledModule(self))
     }
 }

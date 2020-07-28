@@ -4,13 +4,14 @@
 #![forbid(unsafe_code)]
 
 use config_builder::{FullNodeConfig, KeyManagerConfig, ValidatorConfig};
-use libra_config::config::{KeyManagerConfig as KMConfig, NodeConfig};
+use libra_config::config::{KeyManagerConfig as KMConfig, NodeConfig, PersistableConfig};
 use libra_network_address::NetworkAddress;
+use libra_types::chain_id::ChainId;
 use std::{convert::TryInto, fs, fs::File, io::Write, net::SocketAddr, path::PathBuf};
 use structopt::StructOpt;
 
-const KEY_MANAGER_CONFIG: &str = "key_manager.config.toml";
-const NODE_CONFIG: &str = "node.config.toml";
+const KEY_MANAGER_CONFIG: &str = "key_manager.yaml";
+const NODE_CONFIG: &str = "node.yaml";
 
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, StructOpt)]
@@ -33,6 +34,9 @@ struct FaucetArgs {
     #[structopt(short = "o", long, parse(from_os_str))]
     /// The output directory
     output_dir: PathBuf,
+    #[structopt(long)]
+    /// Defines which chain version libra will use
+    chain_id: Option<ChainId>,
     #[structopt(short = "s", long)]
     /// Use the provided seed for generating keys for each of the validators.
     seed: Option<String>,
@@ -51,6 +55,9 @@ enum FullNodeCommand {
 
 #[derive(Debug, StructOpt)]
 struct FullNodeArgs {
+    #[structopt(long)]
+    /// Defines which chain version libra will use
+    chain_id: Option<ChainId>,
     // Describe the validator networrk
     #[structopt(short = "n", long, default_value = "1")]
     /// Specify the number of Validators to configure in the genesis blob.
@@ -95,6 +102,9 @@ struct FullNodeArgs {
 
 #[derive(Debug, StructOpt)]
 struct KeyManagerArgs {
+    #[structopt(long)]
+    /// Defines which chain version libra will use
+    chain_id: Option<ChainId>,
     #[structopt(long, parse(from_os_str))]
     /// The data directory for the configs (e.g. /opt/libra/etc).
     data_dir: PathBuf,
@@ -150,6 +160,9 @@ struct ValidatorArgs {
 
 #[derive(Debug, StructOpt)]
 struct ValidatorCommonArgs {
+    #[structopt(long)]
+    /// Defines which chain version libra will use
+    chain_id: Option<ChainId>,
     #[structopt(short = "d", long, parse(from_os_str))]
     /// The data directory for the configs (e.g. /opt/libra/etc).
     data_dir: PathBuf,
@@ -214,17 +227,20 @@ fn build_faucet(args: FaucetArgs) {
     let mut config_builder = ValidatorConfig::new();
     config_builder.num_nodes = args.validators_in_genesis;
 
+    if let Some(chain_id) = args.chain_id {
+        config_builder.chain_id = chain_id;
+    }
     if let Some(seed) = args.seed.as_ref() {
         let seed = hex::decode(seed).expect("Invalid hex in seed.");
         config_builder.seed = seed[..32].try_into().expect("Invalid seed");
     }
 
-    let (faucet_key, waypoint) = config_builder
+    let (libra_root_key, waypoint) = config_builder
         .build_faucet_client()
         .expect("Unable to build faucet");
     let key_path = args.output_dir.join("mint.key");
     fs::create_dir_all(&args.output_dir).expect("Unable to create output directory");
-    generate_key::save_key(faucet_key, key_path);
+    generate_key::save_key(libra_root_key, key_path);
 
     let waypoint_path = args.output_dir.join("waypoint.txt");
     let mut file =
@@ -274,6 +290,9 @@ fn build_full_node(command: FullNodeCommand) {
 
 fn build_full_node_config_builder(args: &FullNodeArgs) -> FullNodeConfig {
     let mut config_builder = FullNodeConfig::new();
+    if let Some(chain_id) = args.chain_id {
+        config_builder.chain_id(chain_id);
+    }
     config_builder.advertised_address = args.advertised.clone();
     config_builder.bootstrap = args.bootstrap.clone();
     config_builder.full_node_index = args.full_node_index;
@@ -305,6 +324,9 @@ fn build_key_manager(args: KeyManagerArgs) {
     }
 
     let mut config_builder = KeyManagerConfig::new();
+    if let Some(chain_id) = args.chain_id {
+        config_builder.chain_id = chain_id;
+    }
     config_builder.rotation_period_secs = args.rotation_period_secs;
     config_builder.sleep_period_secs = args.sleep_period_secs;
     config_builder.txn_expiration_secs = args.txn_expiration_secs;
@@ -329,9 +351,14 @@ fn build_safety_rules(args: SafetyRulesArgs) {
     }
 
     let config_builder = safety_rules_common(&args.validator_common);
-    let mut node_config = config_builder.build().expect("ConfigBuilder failed");
-    node_config.set_data_dir(args.validator_common.data_dir);
-    save_node_config(node_config, &args.validator_common.output_dir);
+    let node_config = config_builder.build().expect("ConfigBuilder failed");
+    let mut safety_rules_config = node_config.consensus.safety_rules;
+    safety_rules_config.set_data_dir(args.validator_common.data_dir);
+    let output_dir = &args.validator_common.output_dir;
+    fs::create_dir_all(output_dir).expect("Unable to create output directory");
+    safety_rules_config
+        .save_config(output_dir.join(NODE_CONFIG))
+        .expect("Unable to save config");
 }
 
 fn build_validator(args: ValidatorArgs) {
@@ -362,6 +389,9 @@ fn build_validator(args: ValidatorArgs) {
 fn safety_rules_common(args: &ValidatorCommonArgs) -> ValidatorConfig {
     let mut config_builder = ValidatorConfig::new();
 
+    if let Some(chain_id) = args.chain_id {
+        config_builder.chain_id = chain_id;
+    }
     config_builder.node_index = args.validator_index;
     config_builder.num_nodes = args.validators;
     config_builder.safety_rules_addr = args.safety_rules_addr;

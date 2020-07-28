@@ -5,7 +5,7 @@
 
 ### Table of Contents
 
--  [Struct `SharedEd25519PublicKey`](#0x1_SharedEd25519PublicKey_SharedEd25519PublicKey)
+-  [Resource `SharedEd25519PublicKey`](#0x1_SharedEd25519PublicKey_SharedEd25519PublicKey)
 -  [Function `publish`](#0x1_SharedEd25519PublicKey_publish)
 -  [Function `rotate_key_`](#0x1_SharedEd25519PublicKey_rotate_key_)
 -  [Function `rotate_key`](#0x1_SharedEd25519PublicKey_rotate_key)
@@ -16,7 +16,7 @@
 
 <a name="0x1_SharedEd25519PublicKey_SharedEd25519PublicKey"></a>
 
-## Struct `SharedEd25519PublicKey`
+## Resource `SharedEd25519PublicKey`
 
 
 
@@ -97,7 +97,7 @@
     // Cryptographic check of <b>public</b> key validity
     <b>assert</b>(
         <a href="Signature.md#0x1_Signature_ed25519_validate_pubkey">Signature::ed25519_validate_pubkey</a>(<b>copy</b> new_public_key),
-        9003, // TODO: proper error code
+        EMALFORMED_PUBLIC_KEY
     );
     <a href="LibraAccount.md#0x1_LibraAccount_rotate_authentication_key">LibraAccount::rotate_authentication_key</a>(
         &shared_key.rotation_cap,

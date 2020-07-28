@@ -1,16 +1,14 @@
 //! new-transaction
 script{
 use 0x1::LibraVersion;
-use 0x1::LibraConfig::CreateOnChainConfig;
-use 0x1::Roles;
 fun main(account: &signer) {
-    let r = Roles::extract_privilege_to_capability<CreateOnChainConfig>(account);
-    LibraVersion::initialize(account, &r);
-    Roles::restore_capability_to_privilege(account, r);
+    LibraVersion::initialize(account);
 }
 }
+// TODO(status_migration) remove duplicate check
 // check: ABORTED
-// check: 1
+// check: ABORTED
+// check: 0
 
 //! new-transaction
 script{
@@ -19,5 +17,7 @@ fun main(account: &signer) {
     LibraVersion::set(account, 0);
 }
 }
+// TODO(status_migration) remove duplicate check
 // check: ABORTED
-// check: 25
+// check: ABORTED
+// check: 1

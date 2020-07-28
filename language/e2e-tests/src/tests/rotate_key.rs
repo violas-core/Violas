@@ -9,13 +9,12 @@ use crate::{
 };
 use libra_crypto::{
     ed25519::Ed25519PrivateKey,
-    hash::CryptoHash,
     multi_ed25519::{MultiEd25519PublicKey, MultiEd25519Signature},
     PrivateKey, SigningKey, Uniform,
 };
 use libra_types::{
     transaction::{authenticator::AuthenticationKey, SignedTransaction, TransactionStatus},
-    vm_error::{StatusCode, VMStatus},
+    vm_status::{KeptVMStatus, StatusCode},
 };
 
 #[test]
@@ -35,7 +34,7 @@ fn rotate_ed25519_key() {
     let output = &executor.execute_transaction(txn);
     assert_eq!(
         output.status(),
-        &TransactionStatus::Keep(VMStatus::new(StatusCode::EXECUTED)),
+        &TransactionStatus::Keep(KeptVMStatus::Executed),
     );
     executor.apply_write_set(output.write_set());
 
@@ -55,7 +54,7 @@ fn rotate_ed25519_key() {
     let old_key_output = &executor.execute_transaction(old_key_txn);
     assert_eq!(
         old_key_output.status(),
-        &TransactionStatus::Discard(VMStatus::new(StatusCode::INVALID_AUTH_KEY)),
+        &TransactionStatus::Discard(StatusCode::INVALID_AUTH_KEY),
     );
 
     // Check that transactions can be sent with the new key.
@@ -64,7 +63,7 @@ fn rotate_ed25519_key() {
     let new_key_output = &executor.execute_transaction(new_key_txn);
     assert_eq!(
         new_key_output.status(),
-        &TransactionStatus::Keep(VMStatus::new(StatusCode::EXECUTED)),
+        &TransactionStatus::Keep(KeptVMStatus::Executed),
     );
 }
 
@@ -75,7 +74,7 @@ fn rotate_ed25519_multisig_key() {
     // create and publish sender
     let sender = AccountData::new(1_000_000, seq_number);
     executor.add_account_data(&sender);
-    let sender_address = sender.address();
+    let _sender_address = sender.address();
 
     // create a 1-of-2 multisig policy
     let mut keygen = KeyGen::from_seed([9u8; 32]);
@@ -95,36 +94,35 @@ fn rotate_ed25519_multisig_key() {
     ));
     assert_eq!(
         output.status(),
-        &TransactionStatus::Keep(VMStatus::new(StatusCode::EXECUTED)),
+        &TransactionStatus::Keep(KeptVMStatus::Executed),
     );
     executor.apply_write_set(output.write_set());
     seq_number += 1;
 
     // (2) send a tx signed by privkey 1
-    let txn1 = raw_rotate_key_txn(*sender_address, new_auth_key.to_vec(), seq_number);
-    let signature1 = MultiEd25519Signature::from(privkey1.sign_message(&txn1.hash()));
+    let txn1 = raw_rotate_key_txn(sender.account(), new_auth_key.to_vec(), seq_number);
+    let signature1 = MultiEd25519Signature::from(privkey1.sign(&txn1));
     let signed_txn1 =
         SignedTransaction::new_multisig(txn1, multi_ed_public_key.clone(), signature1);
     let output = &executor.execute_transaction(signed_txn1);
     assert_eq!(
         output.status(),
-        &TransactionStatus::Keep(VMStatus::new(StatusCode::EXECUTED)),
+        &TransactionStatus::Keep(KeptVMStatus::Executed),
     );
     executor.apply_write_set(output.write_set());
     seq_number += 1;
 
     // (3) send a tx signed by privkey 2
-    let txn2 = raw_rotate_key_txn(*sender_address, new_auth_key.to_vec(), seq_number);
+    let txn2 = raw_rotate_key_txn(sender.account(), new_auth_key.to_vec(), seq_number);
     let pubkey_index = 1;
     let signature2 =
-        MultiEd25519Signature::new(vec![(privkey2.sign_message(&txn2.hash()), pubkey_index)])
-            .unwrap();
+        MultiEd25519Signature::new(vec![(privkey2.sign(&txn2), pubkey_index)]).unwrap();
     let signed_txn2 = SignedTransaction::new_multisig(txn2, multi_ed_public_key, signature2);
     signed_txn2.clone().check_signature().unwrap();
     let output = &executor.execute_transaction(signed_txn2);
     assert_eq!(
         output.status(),
-        &TransactionStatus::Keep(VMStatus::new(StatusCode::EXECUTED)),
+        &TransactionStatus::Keep(KeptVMStatus::Executed),
     );
 }
 

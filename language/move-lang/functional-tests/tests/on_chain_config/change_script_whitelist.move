@@ -20,8 +20,8 @@ module FooConfig {
 //! block-time: 2
 
 //! new-transaction
-//! sender: association
-//! args: b"01",
+//! sender: libraroot
+//! args: b"0100010000000000000000000000000a550c18",
 // Step 2: Change option to CustomScript
 script {
 use 0x1::LibraVMConfig;

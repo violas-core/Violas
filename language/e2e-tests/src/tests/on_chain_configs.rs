@@ -5,24 +5,21 @@ use crate::{
     account::{self, Account, AccountData},
     common_transactions::peer_to_peer_txn,
     executor::FakeExecutor,
-    gas_costs::TXN_RESERVED,
     transaction_status_eq,
 };
 use compiled_stdlib::transaction_scripts::StdlibScript;
 use libra_types::{
-    account_config::LBR_NAME,
     on_chain_config::LibraVersion,
-    transaction::{TransactionArgument, TransactionStatus},
-    vm_error::{StatusCode, VMStatus},
+    transaction::{Script, TransactionArgument, TransactionStatus},
+    vm_status::KeptVMStatus,
 };
 use libra_vm::LibraVM;
-use transaction_builder::encode_update_travel_rule_limit;
+use transaction_builder::encode_update_dual_attestation_limit_script;
 
 #[test]
 fn initial_libra_version() {
     let mut executor = FakeExecutor::from_genesis_file();
-    let mut vm = LibraVM::new();
-    vm.load_configs(executor.get_state_view());
+    let vm = LibraVM::new(executor.get_state_view());
 
     assert_eq!(
         vm.internals().libra_version().unwrap(),
@@ -30,26 +27,55 @@ fn initial_libra_version() {
     );
 
     let account = Account::new_genesis_account(libra_types::on_chain_config::config_address());
-    let txn = account.create_signed_txn_with_args(
-        StdlibScript::UpdateLibraVersion.compiled_bytes().into_vec(),
-        vec![],
-        vec![TransactionArgument::U64(2)],
-        0,
-        TXN_RESERVED,
-        0,
-        LBR_NAME.to_owned(),
-    );
+    let txn = account
+        .transaction()
+        .script(Script::new(
+            StdlibScript::UpdateLibraVersion.compiled_bytes().into_vec(),
+            vec![],
+            vec![TransactionArgument::U64(2)],
+        ))
+        .sequence_number(1)
+        .sign();
     executor.new_block();
     executor.execute_and_apply(txn);
 
-    vm.load_configs(executor.get_state_view());
+    let new_vm = LibraVM::new(executor.get_state_view());
     assert_eq!(
-        vm.internals().libra_version().unwrap(),
+        new_vm.internals().libra_version().unwrap(),
         LibraVersion { major: 2 }
     );
 }
 
-// Testsupdate_travel_rule_limit.move DualAttestionLimit
+#[test]
+fn drop_txn_after_reconfiguration() {
+    let mut executor = FakeExecutor::from_genesis_file();
+    let vm = LibraVM::new(executor.get_state_view());
+
+    assert_eq!(
+        vm.internals().libra_version().unwrap(),
+        LibraVersion { major: 1 }
+    );
+
+    let account = Account::new_genesis_account(libra_types::on_chain_config::config_address());
+    let txn = account
+        .transaction()
+        .script(Script::new(
+            StdlibScript::UpdateLibraVersion.compiled_bytes().into_vec(),
+            vec![],
+            vec![TransactionArgument::U64(2)],
+        ))
+        .sequence_number(1)
+        .sign();
+    executor.new_block();
+
+    let sender = AccountData::new(1_000_000, 10);
+    let receiver = AccountData::new(100_000, 10);
+    let txn2 = peer_to_peer_txn(&sender.account(), &receiver.account(), 11, 1000);
+
+    let mut output = executor.execute_block(vec![txn, txn2]).unwrap();
+    assert_eq!(output.pop().unwrap().status(), &TransactionStatus::Retry)
+}
+
 #[test]
 fn updated_limit_allows_txn() {
     // create a FakeExecutor with a genesis from file
@@ -64,11 +90,18 @@ fn updated_limit_allows_txn() {
     // Execute updated dual attestation limit
     let new_micro_lbr_limit = 1_000_011;
     let output = executor.execute_and_apply(
-        blessed.signed_script_txn(encode_update_travel_rule_limit(1, new_micro_lbr_limit), 0),
+        blessed
+            .transaction()
+            .script(encode_update_dual_attestation_limit_script(
+                3,
+                new_micro_lbr_limit,
+            ))
+            .sequence_number(0)
+            .sign(),
     );
     assert_eq!(
         output.status(),
-        &TransactionStatus::Keep(VMStatus::new(StatusCode::EXECUTED))
+        &TransactionStatus::Keep(KeptVMStatus::Executed)
     );
 
     // higher transaction works with higher limit
@@ -77,7 +110,7 @@ fn updated_limit_allows_txn() {
     let output = executor.execute_and_apply(txn);
     assert!(transaction_status_eq(
         &output.status(),
-        &TransactionStatus::Keep(VMStatus::new(StatusCode::EXECUTED))
+        &TransactionStatus::Keep(KeptVMStatus::Executed)
     ));
     let sender_balance = executor
         .read_balance_resource(sender.account(), account::lbr_currency_code())

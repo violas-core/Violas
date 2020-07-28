@@ -44,17 +44,19 @@ pub use safety_rules_config::*;
 mod upstream_config;
 pub use upstream_config::*;
 mod test_config;
-use crate::{chain_id::ChainId, network_id::NetworkId};
+use crate::network_id::NetworkId;
 use libra_secure_storage::{KVStorage, Storage};
-use libra_types::waypoint::Waypoint;
+use libra_types::{
+    chain_id::{self, ChainId},
+    waypoint::Waypoint,
+};
 pub use test_config::*;
 
 /// Config pulls in configuration information from the config file.
 /// This is used to set up the nodes and configure various parameters.
 /// The config file is broken up into sections for each module
 /// so that only that module can be passed around
-#[cfg_attr(any(test, feature = "fuzzing"), derive(Clone, PartialEq))]
-#[derive(Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct NodeConfig {
     #[serde(default)]
@@ -91,6 +93,7 @@ pub struct NodeConfig {
 #[serde(default, deny_unknown_fields)]
 pub struct BaseConfig {
     data_dir: PathBuf,
+    #[serde(deserialize_with = "chain_id::deserialize_config_chain_id")]
     pub chain_id: ChainId,
     pub role: RoleType,
     pub waypoint: WaypointConfig,
@@ -100,7 +103,7 @@ impl Default for BaseConfig {
     fn default() -> BaseConfig {
         BaseConfig {
             data_dir: PathBuf::from("/opt/libra/data/commmon"),
-            chain_id: ChainId::default(),
+            chain_id: ChainId::test(),
             role: RoleType::Validator,
             waypoint: WaypointConfig::None,
         }
@@ -198,34 +201,6 @@ impl NodeConfig {
         self.storage.set_data_dir(data_dir);
     }
 
-    /// This clones the underlying data except for the keys so that this config can be used as a
-    /// template for another config.
-    pub fn clone_for_template(&self) -> Self {
-        Self {
-            rpc: self.rpc.clone(),
-            base: self.base.clone(),
-            consensus: self.consensus.clone(),
-            debug_interface: self.debug_interface.clone(),
-            execution: self.execution.clone(),
-            full_node_networks: self
-                .full_node_networks
-                .iter()
-                .map(|c| c.clone_for_template())
-                .collect(),
-            logger: self.logger.clone(),
-            metrics: self.metrics.clone(),
-            mempool: self.mempool.clone(),
-            state_sync: self.state_sync.clone(),
-            storage: self.storage.clone(),
-            test: None,
-            upstream: self.upstream.clone(),
-            validator_network: self
-                .validator_network
-                .as_ref()
-                .map(|n| n.clone_for_template()),
-        }
-    }
-
     /// Reads the config file and returns the configuration object in addition to doing some
     /// post-processing of the config
     /// Paths used in the config are either absolute or relative to the config location
@@ -253,13 +228,13 @@ impl NodeConfig {
         for network in &mut config.full_node_networks {
             network.load(RoleType::FullNode)?;
 
-            // Validate that a network isn't repeated
-            let network_id = network.network_id.clone();
+            // Check a validator network is not included in a list of full-node networks
+            let network_id = &network.network_id;
             invariant(
-                !network_ids.contains(&network_id),
-                format!("network_id {:?} was repeated", network_id),
+                !matches!(network_id, NetworkId::Validator),
+                "Included a validator network in full_node_networks".into(),
             )?;
-            network_ids.insert(network_id);
+            network_ids.insert(network_id.clone());
         }
         config.set_data_dir(config.data_dir().clone());
         Ok(config)
@@ -305,7 +280,7 @@ impl NodeConfig {
     }
 
     pub fn random_with_template(template: &Self, rng: &mut StdRng) -> Self {
-        let mut config = template.clone_for_template();
+        let mut config = template.clone();
         config.random_internal(rng);
         config
     }
@@ -314,10 +289,9 @@ impl NodeConfig {
         let mut test = TestConfig::new_with_temp_dir();
 
         if self.base.role == RoleType::Validator {
-            test.initialize_storage = true;
             test.random_account_key(rng);
             let peer_id = libra_types::account_address::from_public_key(
-                &test.operator_keypair.as_ref().unwrap().public_key(),
+                &test.owner_key.as_ref().unwrap().public_key(),
             );
 
             if self.validator_network.is_none() {
@@ -327,8 +301,14 @@ impl NodeConfig {
 
             let validator_network = self.validator_network.as_mut().unwrap();
             validator_network.random_with_peer_id(rng, Some(peer_id));
-            test.random_consensus_key(rng);
+            // We want to produce this key twice
+            let mut cloned_rng = rng.clone();
             test.random_execution_key(rng);
+
+            let mut safety_rules_test_config = SafetyRulesTestConfig::new(peer_id);
+            safety_rules_test_config.random_consensus_key(rng);
+            safety_rules_test_config.random_execution_key(&mut cloned_rng);
+            self.consensus.safety_rules.test = Some(safety_rules_test_config);
         } else {
             self.validator_network = None;
             if self.full_node_networks.is_empty() {
@@ -454,5 +434,9 @@ mod test {
         NodeConfig::default_for_public_full_node();
         NodeConfig::default_for_validator();
         NodeConfig::default_for_validator_full_node();
+
+        let contents = std::include_str!("test_data/safety_rules.yaml");
+        SafetyRulesConfig::parse(&contents)
+            .unwrap_or_else(|e| panic!("Error in safety_rules.yaml: {}", e));
     }
 }

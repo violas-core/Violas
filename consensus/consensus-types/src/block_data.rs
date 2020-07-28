@@ -98,11 +98,6 @@ impl BlockData {
     }
 
     pub fn round(&self) -> Round {
-        // Round numbers:
-        // - are reset to 0 periodically.
-        // - do not exceed std::u64::MAX - 2 per the 3 chain safety rule
-        // (ConsensusState::commit_rule_for_certified_block)
-        assumed_postcondition!(self.round < std::u64::MAX - 1);
         self.round
     }
 
@@ -123,7 +118,7 @@ impl BlockData {
     }
 
     pub fn new_genesis_from_ledger_info(ledger_info: &LedgerInfo) -> Self {
-        assert!(ledger_info.next_epoch_state().is_some());
+        assert!(ledger_info.ends_epoch());
         let ancestor = BlockInfo::new(
             ledger_info.epoch(),
             0,                 /* round */

@@ -4,6 +4,7 @@
 #![forbid(unsafe_code)]
 
 use libra_config::config::NodeConfig;
+use libra_logger::prelude::*;
 use libra_types::PeerId;
 use std::{
     path::PathBuf,
@@ -31,7 +32,7 @@ static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 fn main() {
     let args = Args::from_args();
 
-    let mut config = NodeConfig::load(args.config).expect("Failed to load node config");
+    let config = NodeConfig::load(args.config).expect("Failed to load node config");
     println!("Using node config {:?}", &config);
     crash_handler::setup_panic_handler();
 
@@ -56,8 +57,11 @@ fn main() {
         }
     }
 
-    let _node_handle = libra_node::main_node::setup_environment(&mut config);
+    if cfg!(feature = "enable-inject-error") {
+        warn!("Running with enable-inject-error!");
+    }
 
+    let _node_handle = libra_node::main_node::setup_environment(&config);
     let term = Arc::new(AtomicBool::new(false));
 
     while !term.load(Ordering::Acquire) {

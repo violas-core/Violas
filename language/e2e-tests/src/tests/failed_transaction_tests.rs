@@ -6,7 +6,7 @@ use crate::{
     common_transactions::peer_to_peer_txn,
     executor::FakeExecutor,
 };
-use libra_types::vm_error::{StatusCode, VMStatus};
+use libra_types::vm_status::{KeptVMStatus, StatusCode, VMStatus};
 use libra_vm::{data_cache::StateViewCache, transaction_metadata::TransactionMetadata, LibraVM};
 use move_core_types::gas_schedule::{GasAlgebra, GasPrice, GasUnits};
 use move_vm_types::gas_schedule::zero_cost_schedule;
@@ -17,51 +17,48 @@ fn failed_transaction_cleanup_test() {
     let sender = AccountData::new(1_000_000, 10);
     fake_executor.add_account_data(&sender);
 
-    let mut libra_vm = LibraVM::new();
-    let mut data_cache = StateViewCache::new(fake_executor.get_state_view());
-    libra_vm.load_configs(fake_executor.get_state_view());
+    let libra_vm = LibraVM::new(fake_executor.get_state_view());
+    let data_cache = StateViewCache::new(fake_executor.get_state_view());
 
     let mut txn_data = TransactionMetadata::default();
     txn_data.sender = *sender.address();
     txn_data.max_gas_amount = GasUnits::new(100_000);
     txn_data.gas_unit_price = GasPrice::new(0);
 
-    let gas_schedule = zero_cost_schedule();
     let gas_left = GasUnits::new(10_000);
+    let gas_schedule = zero_cost_schedule();
 
     // TYPE_MISMATCH should be kept and charged.
     let out1 = libra_vm.failed_transaction_cleanup(
-        VMStatus::new(StatusCode::TYPE_MISMATCH),
+        VMStatus::Error(StatusCode::TYPE_MISMATCH),
         &gas_schedule,
         gas_left,
         &txn_data,
-        &mut data_cache,
+        &data_cache,
         &account::lbr_currency_code(),
     );
     assert!(!out1.write_set().is_empty());
     assert_eq!(out1.gas_used(), 90_000);
     assert!(!out1.status().is_discarded());
     assert_eq!(
-        out1.status().vm_status().major_status,
-        StatusCode::TYPE_MISMATCH
+        out1.status().status(),
+        // StatusCode::TYPE_MISMATCH
+        Ok(KeptVMStatus::VerificationError)
     );
 
     // OUT_OF_BOUNDS_INDEX should be discarded and not charged.
     let out2 = libra_vm.failed_transaction_cleanup(
-        VMStatus::new(StatusCode::OUT_OF_BOUNDS_INDEX),
+        VMStatus::Error(StatusCode::OUT_OF_BOUNDS_INDEX),
         &gas_schedule,
         gas_left,
         &txn_data,
-        &mut data_cache,
+        &data_cache,
         &account::lbr_currency_code(),
     );
     assert!(out2.write_set().is_empty());
     assert!(out2.gas_used() == 0);
     assert!(out2.status().is_discarded());
-    assert_eq!(
-        out2.status().vm_status().major_status,
-        StatusCode::OUT_OF_BOUNDS_INDEX
-    );
+    assert_eq!(out2.status().status(), Err(StatusCode::OUT_OF_BOUNDS_INDEX));
 }
 
 #[test]
@@ -82,7 +79,7 @@ fn non_existent_sender() {
 
     let output = &executor.execute_transaction(txn);
     assert_eq!(
-        output.status().vm_status().major_status,
-        StatusCode::SENDING_ACCOUNT_DOES_NOT_EXIST,
+        output.status().status(),
+        Err(StatusCode::SENDING_ACCOUNT_DOES_NOT_EXIST),
     );
 }

@@ -12,37 +12,21 @@ fun main() {
 }
 // check: EXECUTED
 
-// minting various amounts of LBR via LBR::mint should work
-//! new-transaction
-//! sender: blessed
-script {
-use 0x1::LibraAccount;
-use 0x1::LBR;
-fun main(account: &signer) {
-   LibraAccount::deposit(account, {{alice}}, LBR::mint(account, 1));
-   LibraAccount::deposit(account, {{alice}}, LBR::mint(account,  2));
-   LibraAccount::deposit(account, {{alice}}, LBR::mint(account, 77));
-   LibraAccount::deposit(account, {{alice}}, LBR::mint(account, 100));
-   LibraAccount::deposit(account, {{alice}}, LBR::mint(account, 1589));
-}
-}
-// check: EXECUTED
-
 // minting LBR via Libra::mint should not work
 //! new-transaction
 //! sender: blessed
 script {
-use 0x1::LibraAccount;
 use 0x1::LBR::LBR;
 use 0x1::Libra;
 fun main(account: &signer) {
-   LibraAccount::deposit_to(account, Libra::mint<LBR>(account, 1000));
+    let lbr = Libra::mint<LBR>(account, 1000);
+    Libra::destroy_zero(lbr)
 }
 }
 // check: MISSING_DATA
 
 // burning LBR via Libra::burn should not work. This is cumbersome to test directly, so instead test
-// that the Association account does not have a BurnCapability
+// that the Association account does not have a BurnCapability<LBR>
 //! new-transaction
 //! sender: blessed
 script {

@@ -7,35 +7,53 @@ use crate::{
     schema::jellyfish_merkle_node::JellyfishMerkleNodeSchema,
     test_helper::{arb_blocks_to_commit, arb_mock_genesis},
 };
-#[allow(unused_imports)]
-use jellyfish_merkle::node_type::{Node, NodeKey};
 use libra_crypto::hash::CryptoHash;
+#[allow(unused_imports)]
+use libra_jellyfish_merkle::node_type::{Node, NodeKey};
 use libra_temppath::TempPath;
 #[allow(unused_imports)]
 use libra_types::{
-    account_config::AccountResource, contract_event::ContractEvent, ledger_info::LedgerInfo,
-    proof::SparseMerkleLeafNode, vm_error::StatusCode,
+    account_config::AccountResource,
+    contract_event::ContractEvent,
+    ledger_info::LedgerInfo,
+    proof::SparseMerkleLeafNode,
+    vm_status::{KeptVMStatus, StatusCode},
 };
 use proptest::prelude::*;
 use std::collections::HashMap;
 
 fn verify_epochs(db: &LibraDB, ledger_infos_with_sigs: &[LedgerInfoWithSignatures]) {
-    let (actual_epoch_change_lis, _) = db
-        .get_epoch_ending_ledger_infos(
-            0,
-            ledger_infos_with_sigs
+    const LIMIT: usize = 2;
+    let mut actual_epoch_change_lis = Vec::new();
+    let latest_epoch = ledger_infos_with_sigs
+        .last()
+        .unwrap()
+        .ledger_info()
+        .next_block_epoch();
+
+    let mut cursor = 0;
+    loop {
+        let (chunk, more) = db
+            .get_epoch_ending_ledger_infos_impl(cursor, latest_epoch, LIMIT)
+            .unwrap();
+        actual_epoch_change_lis.extend(chunk);
+        if more {
+            cursor = actual_epoch_change_lis
                 .last()
                 .unwrap()
                 .ledger_info()
-                .next_block_epoch(),
-        )
-        .unwrap();
+                .next_block_epoch();
+        } else {
+            break;
+        }
+    }
+
     let expected_epoch_change_lis: Vec<_> = ledger_infos_with_sigs
         .iter()
-        .filter(|info| info.ledger_info().next_epoch_state().is_some())
+        .filter(|info| info.ledger_info().ends_epoch())
         .cloned()
         .collect();
-    assert_eq!(actual_epoch_change_lis, expected_epoch_change_lis,);
+    assert_eq!(actual_epoch_change_lis, expected_epoch_change_lis);
 }
 
 pub fn test_save_blocks_impl(input: Vec<(Vec<TransactionToCommit>, LedgerInfoWithSignatures)>) {
@@ -410,7 +428,7 @@ fn test_get_latest_tree_state() {
         HashValue::random(),
         HashValue::random(),
         0,
-        StatusCode::UNKNOWN_STATUS,
+        KeptVMStatus::VerificationError,
     );
     put_transaction_info(&db, 0, &txn_info);
     let bootstrapped = db.get_latest_tree_state().unwrap();

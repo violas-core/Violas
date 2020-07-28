@@ -15,24 +15,26 @@ use storage_client::StorageClient;
 
 pub trait RemoteService {
     fn client(&self) -> SerializerClient {
-        let network_client = NetworkClient::new(self.server_address());
+        let network_client = NetworkClient::new(self.server_address(), self.network_timeout());
         let service = Box::new(RemoteClient::new(network_client));
         SerializerClient::new_client(service)
     }
 
     fn server_address(&self) -> SocketAddr;
+    fn network_timeout(&self) -> u64;
 }
 
 pub fn execute(
     storage_addr: SocketAddr,
     listen_addr: SocketAddr,
     prikey: Option<Ed25519PrivateKey>,
+    network_timeout: u64,
 ) {
     let block_executor = Box::new(Executor::<LibraVM>::new(
-        StorageClient::new(&storage_addr).into(),
+        StorageClient::new(&storage_addr, network_timeout).into(),
     ));
     let mut serializer_service = SerializerService::new(block_executor, prikey);
-    let mut network_server = NetworkServer::new(listen_addr);
+    let mut network_server = NetworkServer::new(listen_addr, network_timeout);
 
     loop {
         if let Err(e) = process_one_message(&mut network_server, &mut serializer_service) {
@@ -59,13 +61,21 @@ impl RemoteClient {
     pub fn new(network_client: NetworkClient) -> Self {
         Self { network_client }
     }
+
+    fn process_one_message(&mut self, input: &[u8]) -> Result<Vec<u8>, Error> {
+        self.network_client.write(&input)?;
+        self.network_client.read().map_err(|e| e.into())
+    }
 }
 
 impl TSerializerClient for RemoteClient {
     fn request(&mut self, input: ExecutionCorrectnessInput) -> Result<Vec<u8>, Error> {
         let input_message = lcs::to_bytes(&input)?;
-        self.network_client.write(&input_message)?;
-        let result = self.network_client.read()?;
-        Ok(result)
+        loop {
+            match self.process_one_message(&input_message) {
+                Err(err) => warn!("Failed to communicate with LEC service: {}", err),
+                Ok(value) => return Ok(value),
+            }
+        }
     }
 }

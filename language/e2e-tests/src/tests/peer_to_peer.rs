@@ -5,17 +5,16 @@ use crate::{
     account::{self, Account, AccountData},
     common_transactions::peer_to_peer_txn,
     executor::FakeExecutor,
-    gas_costs, transaction_status_eq,
+    transaction_status_eq,
 };
 use compiled_stdlib::transaction_scripts::StdlibScript;
 use libra_types::{
-    account_config::{self, ReceivedPaymentEvent, SentPaymentEvent, LBR_NAME},
+    account_config::{self, ReceivedPaymentEvent, SentPaymentEvent},
     on_chain_config::VMPublishingOption,
     transaction::{
-        Script, SignedTransaction, TransactionArgument, TransactionOutput, TransactionPayload,
-        TransactionStatus,
+        Script, SignedTransaction, TransactionArgument, TransactionOutput, TransactionStatus,
     },
-    vm_error::{StatusCode, VMStatus},
+    vm_status::{known_locations, KeptVMStatus},
 };
 use std::{convert::TryFrom, time::Instant};
 use vm::file_format::{Bytecode, CompiledScript};
@@ -38,7 +37,7 @@ fn single_peer_to_peer_with_event() {
     let output = executor.execute_transaction(txn);
     assert_eq!(
         output.status(),
-        &TransactionStatus::Keep(VMStatus::new(StatusCode::EXECUTED))
+        &TransactionStatus::Keep(KeptVMStatus::Executed)
     );
 
     executor.apply_write_set(output.write_set());
@@ -80,7 +79,8 @@ fn single_peer_to_peer_with_event() {
 fn single_peer_to_peer_with_padding() {
     ::libra_logger::Logger::new().environment_only(true).init();
     // create a FakeExecutor with a genesis from file
-    let mut executor = FakeExecutor::from_genesis_with_options(VMPublishingOption::CustomScripts);
+    let mut executor =
+        FakeExecutor::from_genesis_with_options(VMPublishingOption::custom_scripts());
 
     // create and publish a sender with 1_000_000 coins and a receiver with 100_000 coins
     let sender = AccountData::new(1_000_000, 10);
@@ -120,21 +120,19 @@ fn single_peer_to_peer_with_padding() {
         )
     };
 
-    let txn = sender.account().create_signed_txn_impl(
-        *sender.address(),
-        TransactionPayload::Script(padded_script),
-        10,
-        gas_costs::TXN_RESERVED, // this is a default for gas
-        0,
-        LBR_NAME.to_owned(),
-    );
+    let txn = sender
+        .account()
+        .transaction()
+        .script(padded_script)
+        .sequence_number(10)
+        .sign();
     let unpadded_txn = peer_to_peer_txn(sender.account(), receiver.account(), 10, transfer_amount);
     assert!(txn.raw_txn_bytes_len() > unpadded_txn.raw_txn_bytes_len());
     // execute transaction
     let output = executor.execute_transaction(txn);
     assert_eq!(
         output.status(),
-        &TransactionStatus::Keep(VMStatus::new(StatusCode::EXECUTED))
+        &TransactionStatus::Keep(KeptVMStatus::Executed)
     );
 
     executor.apply_write_set(output.write_set());
@@ -179,7 +177,7 @@ fn few_peer_to_peer_with_event() {
     for (idx, txn_output) in output.iter().enumerate() {
         assert_eq!(
             txn_output.status(),
-            &TransactionStatus::Keep(VMStatus::new(StatusCode::EXECUTED))
+            &TransactionStatus::Keep(KeptVMStatus::Executed)
         );
 
         // check events
@@ -250,7 +248,10 @@ fn zero_amount_peer_to_peer() {
     // Error code 7 means that the transaction was a zero-amount one.
     assert!(transaction_status_eq(
         &output.status(),
-        &TransactionStatus::Keep(VMStatus::new(StatusCode::ABORTED).with_sub_status(7))
+        &TransactionStatus::Keep(KeptVMStatus::MoveAbort(
+            known_locations::account_module_abort(),
+            2
+        )),
     ));
 }
 
@@ -435,7 +436,7 @@ fn cycle_peer_to_peer() {
     for txn_output in &output {
         assert_eq!(
             txn_output.status(),
-            &TransactionStatus::Keep(VMStatus::new(StatusCode::EXECUTED))
+            &TransactionStatus::Keep(KeptVMStatus::Executed)
         );
     }
     assert_eq!(accounts.len(), output.len());
@@ -479,7 +480,7 @@ fn cycle_peer_to_peer_multi_block() {
         for txn_output in &output {
             assert_eq!(
                 txn_output.status(),
-                &TransactionStatus::Keep(VMStatus::new(StatusCode::EXECUTED))
+                &TransactionStatus::Keep(KeptVMStatus::Executed)
             );
         }
         assert_eq!(cycle, output.len());
@@ -525,7 +526,7 @@ fn one_to_many_peer_to_peer() {
         for txn_output in &output {
             assert_eq!(
                 txn_output.status(),
-                &TransactionStatus::Keep(VMStatus::new(StatusCode::EXECUTED))
+                &TransactionStatus::Keep(KeptVMStatus::Executed)
             );
         }
         assert_eq!(cycle - 1, output.len());
@@ -571,7 +572,7 @@ fn many_to_one_peer_to_peer() {
         for txn_output in &output {
             assert_eq!(
                 txn_output.status(),
-                &TransactionStatus::Keep(VMStatus::new(StatusCode::EXECUTED))
+                &TransactionStatus::Keep(KeptVMStatus::Executed)
             );
         }
         assert_eq!(cycle - 1, output.len());

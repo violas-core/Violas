@@ -11,11 +11,8 @@ script {
 //! new-transaction
 script {
     use 0x1::LibraTransactionTimeout;
-    use 0x1::Roles::{Self, AssociationRootRole};
     fun main(account: &signer) {
-        let cap = Roles::extract_privilege_to_capability<AssociationRootRole>(account);
-        LibraTransactionTimeout::set_timeout(&cap, 0);
-        Roles::restore_capability_to_privilege(account, cap);
+        LibraTransactionTimeout::set_timeout(account, 0);
     }
 }
 // check: ABORTED
@@ -24,24 +21,18 @@ script {
 //! new-transaction
 script {
     use 0x1::LibraTransactionTimeout;
-    use 0x1::Roles::{Self, AssociationRootRole};
     fun main(account: &signer) {
-        let cap = Roles::extract_privilege_to_capability<AssociationRootRole>(account);
-        LibraTransactionTimeout::set_timeout(&cap, 0);
-        Roles::restore_capability_to_privilege(account, cap);
+        LibraTransactionTimeout::set_timeout(account, 0);
     }
 }
 // check: ABORTED
 // check: 3
 
 //! new-transaction
-//! sender: association
+//! sender: libraroot
 script {
     use 0x1::LibraTransactionTimeout;
-    use 0x1::Roles::{Self, AssociationRootRole};
     fun main(account: &signer) {
-        let cap = Roles::extract_privilege_to_capability<AssociationRootRole>(account);
-        LibraTransactionTimeout::set_timeout(&cap, 86400000000);
-        Roles::restore_capability_to_privilege(account, cap);
+        LibraTransactionTimeout::set_timeout(account, 86400000000);
     }
 }

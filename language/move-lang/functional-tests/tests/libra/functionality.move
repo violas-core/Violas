@@ -1,6 +1,4 @@
 //! account: bob, 0Coin1
-//! account: c1, 0Coin1
-//! account: c2, 0Coin2
 
 module BurnCapabilityHolder {
     use 0x1::Libra;
@@ -18,9 +16,9 @@ module BurnCapabilityHolder {
 //! sender: blessed
 script {
 use 0x1::Libra;
-use 0x1::LibraAccount;
 use 0x1::Coin1::Coin1;
 use 0x1::Coin2::Coin2;
+use 0x1::Offer;
 fun main(account: &signer) {
     let coin1 = Libra::mint<Coin1>(account, 10000);
     let coin2 = Libra::mint<Coin2>(account, 10000);
@@ -43,8 +41,8 @@ fun main(account: &signer) {
     let coin2 = Libra::join(coin21, coin22);
     assert(Libra::value<Coin1>(&coin1) == 10000, 7);
     assert(Libra::value<Coin2>(&coin2) == 10000, 8);
-    LibraAccount::deposit(account, {{c1}}, coin1);
-    LibraAccount::deposit(account, {{c2}}, coin2);
+    Offer::create(account, coin1, {{blessed}});
+    Offer::create(account, coin2, {{blessed}});
 
     Libra::destroy_zero(Libra::zero<Coin1>());
     Libra::destroy_zero(Libra::zero<Coin2>());
@@ -104,49 +102,16 @@ script {
 // check: EXECUTED
 
 //! new-transaction
-//! sender: association
+//! sender: libraroot
 script {
     use 0x1::Libra;
-    use 0x1::LibraConfig::CreateOnChainConfig;
-    use 0x1::Roles;
+    use 0x1::LibraTimestamp;
     fun main(account: &signer)  {
-        let r = Roles::extract_privilege_to_capability<CreateOnChainConfig>(account);
-        Libra::initialize(account, &r);
-        Roles::restore_capability_to_privilege(account, r);
+        LibraTimestamp::reset_time_has_started_for_test();
+        Libra::initialize(account);
     }
 }
-// check: ABORTED
-// check: 0
-
-//! new-transaction
-//! sender: blessed
-script {
-use 0x1::LibraAccount;
-use 0x1::Coin1::Coin1;
-fun main(account: &signer)  {
-    LibraAccount::mint_to_address<Coin1>(account, {{bob}}, 1000000000 * 1000000 + 1);
-}
-}
-// check: ABORTED
-// check: 11
-
-//! new-transaction
-//! sender: blessed
-script {
-    use 0x1::Libra;
-    use 0x1::Coin1::Coin1;
-    use 0x1::Roles::{Self, TreasuryComplianceRole};
-    fun main(account: &signer)  {
-        let tc_capability = Roles::extract_privilege_to_capability<TreasuryComplianceRole>(account);
-        Libra::publish_mint_capability(
-            account,
-            Libra::remove_mint_capability<Coin1>(account),
-            &tc_capability,
-        );
-        Roles::restore_capability_to_privilege(account, tc_capability);
-    }
-}
-// check: EXECUTED
+// check: CANNOT_WRITE_EXISTING_RESOURCE
 
 //! new-transaction
 //! sender: blessed

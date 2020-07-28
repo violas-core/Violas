@@ -6,11 +6,12 @@ use crate::{
     account_config::LBR_NAME,
     account_state_blob::AccountStateBlob,
     block_metadata::BlockMetadata,
+    chain_id::ChainId,
     contract_event::ContractEvent,
     ledger_info::LedgerInfo,
     proof::{accumulator::InMemoryAccumulator, TransactionInfoWithProof, TransactionListProof},
     transaction::authenticator::TransactionAuthenticator,
-    vm_error::{StatusCode, StatusType, VMStatus},
+    vm_status::{DiscardedVMStatus, KeptVMStatus, StatusCode, StatusType, VMStatus},
     write_set::WriteSet,
 };
 use anyhow::{ensure, format_err, Error, Result};
@@ -24,18 +25,18 @@ use libra_crypto::{
 use libra_crypto_derive::{CryptoHasher, LCSCryptoHash};
 #[cfg(any(test, feature = "fuzzing"))]
 use proptest_derive::Arbitrary;
-use serde::{de, ser, Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     convert::TryFrom,
     fmt,
     fmt::{Display, Formatter},
-    time::Duration,
 };
 
 pub mod authenticator;
 mod change_set;
 pub mod helpers;
+pub mod metadata;
 mod module;
 mod script;
 mod transaction_argument;
@@ -71,46 +72,17 @@ pub struct RawTransaction {
 
     gas_currency_code: String,
 
-    // Expiration time for this transaction.  If storage is queried and
+    // Expiration timestamp for this transaction. timestamp is represented
+    // as u64 in seconds from Unix Epoch. If storage is queried and
     // the time returned is greater than or equal to this time and this
     // transaction has not been included, you can be certain that it will
     // never be included.
     // A transaction that doesn't expire is represented by a very large value like
     // u64::max_value().
-    #[serde(serialize_with = "serialize_duration")]
-    #[serde(deserialize_with = "deserialize_duration")]
-    expiration_time: Duration,
-}
+    expiration_timestamp_secs: u64,
 
-// TODO(#1307)
-fn serialize_duration<S>(d: &Duration, serializer: S) -> std::result::Result<S::Ok, S::Error>
-where
-    S: ser::Serializer,
-{
-    serializer.serialize_u64(d.as_secs())
-}
-
-fn deserialize_duration<'de, D>(deserializer: D) -> std::result::Result<Duration, D::Error>
-where
-    D: de::Deserializer<'de>,
-{
-    struct DurationVisitor;
-    impl<'de> de::Visitor<'de> for DurationVisitor {
-        type Value = Duration;
-
-        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter.write_str("Duration as u64")
-        }
-
-        fn visit_u64<E>(self, v: u64) -> std::result::Result<Self::Value, E>
-        where
-            E: de::Error,
-        {
-            Ok(Duration::from_secs(v))
-        }
-    }
-
-    deserializer.deserialize_u64(DurationVisitor)
+    // chain ID of the Libra network this transaction is intended for
+    chain_id: ChainId,
 }
 
 impl RawTransaction {
@@ -125,7 +97,8 @@ impl RawTransaction {
         max_gas_amount: u64,
         gas_unit_price: u64,
         gas_currency_code: String,
-        expiration_time: Duration,
+        expiration_timestamp_secs: u64,
+        chain_id: ChainId,
     ) -> Self {
         RawTransaction {
             sender,
@@ -134,7 +107,8 @@ impl RawTransaction {
             max_gas_amount,
             gas_unit_price,
             gas_currency_code,
-            expiration_time,
+            expiration_timestamp_secs,
+            chain_id,
         }
     }
 
@@ -148,7 +122,8 @@ impl RawTransaction {
         max_gas_amount: u64,
         gas_unit_price: u64,
         gas_currency_code: String,
-        expiration_time: Duration,
+        expiration_timestamp_secs: u64,
+        chain_id: ChainId,
     ) -> Self {
         RawTransaction {
             sender,
@@ -157,7 +132,8 @@ impl RawTransaction {
             max_gas_amount,
             gas_unit_price,
             gas_currency_code,
-            expiration_time,
+            expiration_timestamp_secs,
+            chain_id,
         }
     }
 
@@ -172,7 +148,8 @@ impl RawTransaction {
         max_gas_amount: u64,
         gas_unit_price: u64,
         gas_currency_code: String,
-        expiration_time: Duration,
+        expiration_timestamp_secs: u64,
+        chain_id: ChainId,
     ) -> Self {
         RawTransaction {
             sender,
@@ -181,7 +158,8 @@ impl RawTransaction {
             max_gas_amount,
             gas_unit_price,
             gas_currency_code,
-            expiration_time,
+            expiration_timestamp_secs,
+            chain_id,
         }
     }
 
@@ -189,35 +167,57 @@ impl RawTransaction {
         sender: AccountAddress,
         sequence_number: u64,
         write_set: WriteSet,
+        chain_id: ChainId,
     ) -> Self {
-        RawTransaction {
+        Self::new_change_set(
             sender,
             sequence_number,
-            payload: TransactionPayload::WriteSet(ChangeSet::new(write_set, vec![])),
-            // Since write-set transactions bypass the VM, these fields aren't relevant.
-            max_gas_amount: 0,
-            gas_unit_price: 0,
-            gas_currency_code: LBR_NAME.to_owned(),
-            // Write-set transactions are special and important and shouldn't expire.
-            expiration_time: Duration::new(u64::max_value(), 0),
-        }
+            ChangeSet::new(write_set, vec![]),
+            chain_id,
+        )
     }
 
     pub fn new_change_set(
         sender: AccountAddress,
         sequence_number: u64,
         change_set: ChangeSet,
+        chain_id: ChainId,
     ) -> Self {
         RawTransaction {
             sender,
             sequence_number,
-            payload: TransactionPayload::WriteSet(change_set),
+            payload: TransactionPayload::WriteSet(WriteSetPayload::Direct(change_set)),
             // Since write-set transactions bypass the VM, these fields aren't relevant.
             max_gas_amount: 0,
             gas_unit_price: 0,
             gas_currency_code: LBR_NAME.to_owned(),
             // Write-set transactions are special and important and shouldn't expire.
-            expiration_time: Duration::new(u64::max_value(), 0),
+            expiration_timestamp_secs: u64::max_value(),
+            chain_id,
+        }
+    }
+
+    pub fn new_writeset_script(
+        sender: AccountAddress,
+        sequence_number: u64,
+        script: Script,
+        signer: AccountAddress,
+        chain_id: ChainId,
+    ) -> Self {
+        RawTransaction {
+            sender,
+            sequence_number,
+            payload: TransactionPayload::WriteSet(WriteSetPayload::Script {
+                execute_as: signer,
+                script,
+            }),
+            // Since write-set transactions bypass the VM, these fields aren't relevant.
+            max_gas_amount: 0,
+            gas_unit_price: 0,
+            gas_currency_code: LBR_NAME.to_owned(),
+            // Write-set transactions are special and important and shouldn't expire.
+            expiration_timestamp_secs: u64::max_value(),
+            chain_id,
         }
     }
 
@@ -230,7 +230,7 @@ impl RawTransaction {
         private_key: &Ed25519PrivateKey,
         public_key: Ed25519PublicKey,
     ) -> Result<SignatureCheckedTransaction> {
-        let signature = private_key.sign_message(&self.hash());
+        let signature = private_key.sign(&self);
         Ok(SignatureCheckedTransaction(SignedTransaction::new(
             self, public_key, signature,
         )))
@@ -242,7 +242,7 @@ impl RawTransaction {
         private_key: &Ed25519PrivateKey,
         public_key: Ed25519PublicKey,
     ) -> Result<SignatureCheckedTransaction> {
-        let signature = private_key.sign_message(&self.hash());
+        let signature = private_key.sign(&self);
         Ok(SignatureCheckedTransaction(
             SignedTransaction::new_multisig(self, public_key.into(), signature.into()),
         ))
@@ -277,7 +277,8 @@ impl RawTransaction {
              \tmax_gas_amount: {}, \n\
              \tgas_unit_price: {}, \n\
              \tgas_currency_code: {}, \n\
-             \texpiration_time: {:#?}, \n\
+             \texpiration_timestamp_secs: {:#?}, \n\
+             \tchain_id: {},
              }}",
             self.sender,
             self.sequence_number,
@@ -286,7 +287,8 @@ impl RawTransaction {
             self.max_gas_amount,
             self.gas_unit_price,
             self.gas_currency_code,
-            self.expiration_time,
+            self.expiration_timestamp_secs,
+            self.chain_id,
         )
     }
     /// Return the sender of this transaction.
@@ -297,11 +299,24 @@ impl RawTransaction {
 
 #[derive(Clone, Debug, Hash, Eq, PartialEq, Serialize, Deserialize)]
 pub enum TransactionPayload {
-    WriteSet(ChangeSet),
+    WriteSet(WriteSetPayload),
     /// A transaction that executes code.
     Script(Script),
     /// A transaction that publishes code.
     Module(Module),
+}
+
+#[derive(Clone, Debug, Hash, Eq, PartialEq, Serialize, Deserialize)]
+pub enum WriteSetPayload {
+    /// Directly passing in the write set.
+    Direct(ChangeSet),
+    /// Generate the writeset by running a script.
+    Script {
+        /// Execute the script as the designated signer.
+        execute_as: AccountAddress,
+        /// Script body that gets executed.
+        script: Script,
+    },
 }
 
 /// A transaction that has been signed.
@@ -401,6 +416,10 @@ impl SignedTransaction {
         self.raw_txn.sequence_number
     }
 
+    pub fn chain_id(&self) -> ChainId {
+        self.raw_txn.chain_id
+    }
+
     pub fn payload(&self) -> &TransactionPayload {
         &self.raw_txn.payload
     }
@@ -417,8 +436,8 @@ impl SignedTransaction {
         &self.raw_txn.gas_currency_code
     }
 
-    pub fn expiration_time(&self) -> Duration {
-        self.raw_txn.expiration_time
+    pub fn expiration_timestamp_secs(&self) -> u64 {
+        self.raw_txn.expiration_timestamp_secs
     }
 
     pub fn raw_txn_bytes_len(&self) -> usize {
@@ -430,7 +449,7 @@ impl SignedTransaction {
     /// Checks that the signature of given transaction. Returns `Ok(SignatureCheckedTransaction)` if
     /// the signature is valid.
     pub fn check_signature(self) -> Result<SignatureCheckedTransaction> {
-        self.authenticator.verify_signature(&self.raw_txn.hash())?;
+        self.authenticator.verify(&self.raw_txn)?;
         Ok(SignatureCheckedTransaction(self))
     }
 
@@ -537,22 +556,21 @@ impl TransactionWithProof {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum TransactionStatus {
     /// Discard the transaction output
-    Discard(VMStatus),
+    Discard(DiscardedVMStatus),
 
     /// Keep the transaction output
-    Keep(VMStatus),
+    Keep(KeptVMStatus),
 
     /// Retry the transaction because it is after a ValidatorSetChange txn
     Retry,
 }
 
 impl TransactionStatus {
-    pub fn vm_status(&self) -> VMStatus {
+    pub fn status(&self) -> Result<KeptVMStatus, StatusCode> {
         match self {
-            TransactionStatus::Discard(vm_status) | TransactionStatus::Keep(vm_status) => {
-                vm_status.clone()
-            }
-            TransactionStatus::Retry => VMStatus::new(StatusCode::UNKNOWN_VALIDATION_STATUS),
+            TransactionStatus::Keep(status) => Ok(status.clone()),
+            TransactionStatus::Discard(code) => Err(*code),
+            TransactionStatus::Retry => Err(StatusCode::UNKNOWN_VALIDATION_STATUS),
         }
     }
 
@@ -567,27 +585,9 @@ impl TransactionStatus {
 
 impl From<VMStatus> for TransactionStatus {
     fn from(vm_status: VMStatus) -> Self {
-        let should_discard = match vm_status.status_type() {
-            // Any unknown error should be discarded
-            StatusType::Unknown => true,
-            // Any error that is a validation status (i.e. an error arising from the prologue)
-            // causes the transaction to not be included.
-            StatusType::Validation => true,
-            // If the VM encountered an invalid internal state, we should discard the transaction.
-            StatusType::InvariantViolation => true,
-            // A transaction that publishes code that cannot be verified will be charged.
-            StatusType::Verification => false,
-            // Even if we are unable to decode the transaction, there should be a charge made to
-            // that user's account for the gas fees related to decoding, running the prologue etc.
-            StatusType::Deserialization => false,
-            // Any error encountered during the execution of the transaction will charge gas.
-            StatusType::Execution => false,
-        };
-
-        if should_discard {
-            TransactionStatus::Discard(vm_status)
-        } else {
-            TransactionStatus::Keep(vm_status)
+        match vm_status.keep_or_discard() {
+            Ok(recorded) => TransactionStatus::Keep(recorded),
+            Err(code) => TransactionStatus::Discard(code),
         }
     }
 }
@@ -595,22 +595,33 @@ impl From<VMStatus> for TransactionStatus {
 /// The result of running the transaction through the VM validator.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VMValidatorResult {
-    status: Option<VMStatus>,
+    status: Option<DiscardedVMStatus>,
     score: u64,
     is_governance_txn: bool,
 }
 
 impl VMValidatorResult {
-    pub fn new(status: Option<VMStatus>, score: u64, is_governance_txn: bool) -> Self {
+    pub fn new(vm_status: Option<DiscardedVMStatus>, score: u64, is_governance_txn: bool) -> Self {
+        debug_assert!(
+            match vm_status {
+                None => true,
+                Some(status) =>
+                    status.status_type() == StatusType::Unknown
+                        || status.status_type() == StatusType::Validation
+                        || status.status_type() == StatusType::InvariantViolation,
+            },
+            "Unexpected discarded status: {:?}",
+            vm_status
+        );
         Self {
-            status,
+            status: vm_status,
             score,
             is_governance_txn,
         }
     }
 
-    pub fn status(&self) -> Option<VMStatus> {
-        self.status.clone()
+    pub fn status(&self) -> Option<DiscardedVMStatus> {
+        self.status
     }
 
     pub fn score(&self) -> u64 {
@@ -688,10 +699,10 @@ pub struct TransactionInfo {
     /// The amount of gas used.
     gas_used: u64,
 
-    /// The major status. This will provide the general error class. Note that this is not
-    /// particularly high fidelity in the presence of sub statuses but, the major status does
-    /// determine whether or not the transaction is applied to the global state or not.
-    major_status: StatusCode,
+    /// The vm status. If it is not `Executed`, this will provide the general error class. Execution
+    /// failures and Move abort's recieve more detailed information. But other errors are generally
+    /// categorized with no status code or other information
+    status: KeptVMStatus,
 }
 
 impl TransactionInfo {
@@ -702,14 +713,14 @@ impl TransactionInfo {
         state_root_hash: HashValue,
         event_root_hash: HashValue,
         gas_used: u64,
-        major_status: StatusCode,
+        status: KeptVMStatus,
     ) -> TransactionInfo {
         TransactionInfo {
             transaction_hash,
             state_root_hash,
             event_root_hash,
             gas_used,
-            major_status,
+            status,
         }
     }
 
@@ -735,8 +746,8 @@ impl TransactionInfo {
         self.gas_used
     }
 
-    pub fn major_status(&self) -> StatusCode {
-        self.major_status
+    pub fn status(&self) -> &KeptVMStatus {
+        &self.status
     }
 }
 
@@ -744,8 +755,8 @@ impl Display for TransactionInfo {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         write!(
             f,
-            "TransactionInfo: [txn_hash: {}, state_root_hash: {}, event_root_hash: {}, gas_used: {}, major_status: {:?}]",
-            self.transaction_hash(), self.state_root_hash(), self.event_root_hash(), self.gas_used(), self.major_status(),
+            "TransactionInfo: [txn_hash: {}, state_root_hash: {}, event_root_hash: {}, gas_used: {}, recorded_status: {:?}]",
+            self.transaction_hash(), self.state_root_hash(), self.event_root_hash(), self.gas_used(), self.status(),
         )
     }
 }
@@ -756,7 +767,7 @@ pub struct TransactionToCommit {
     account_states: HashMap<AccountAddress, AccountStateBlob>,
     events: Vec<ContractEvent>,
     gas_used: u64,
-    major_status: StatusCode,
+    status: KeptVMStatus,
 }
 
 impl TransactionToCommit {
@@ -765,14 +776,14 @@ impl TransactionToCommit {
         account_states: HashMap<AccountAddress, AccountStateBlob>,
         events: Vec<ContractEvent>,
         gas_used: u64,
-        major_status: StatusCode,
+        status: KeptVMStatus,
     ) -> Self {
         TransactionToCommit {
             transaction,
             account_states,
             events,
             gas_used,
-            major_status,
+            status,
         }
     }
 
@@ -792,8 +803,8 @@ impl TransactionToCommit {
         self.gas_used
     }
 
-    pub fn major_status(&self) -> StatusCode {
-        self.major_status
+    pub fn status(&self) -> &KeptVMStatus {
+        &self.status
     }
 }
 

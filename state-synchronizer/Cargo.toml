@@ -28,6 +28,7 @@ libra-mempool = { path = "../mempool", version = "0.1.0"}
 libra-metrics = { path = "../common/metrics", version = "0.1.0" }
 libra-types = { path = "../types", version = "0.1.0" }
 libra-workspace-hack = { path = "../common/workspace-hack", version = "0.1.0" }
+netcore = { path = "../network/netcore", version = "0.1.0" }
 network = { path = "../network", version = "0.1.0" }
 network-builder = {path  = "../network/builder", version = "0.1.0"}
 storage-interface = { path = "../storage/storage-interface", version = "0.1.0" }
@@ -35,10 +36,12 @@ subscription-service = { path = "../common/subscription-service", version = "0.1
 libra-vm = { path = "../language/libra-vm", version = "0.1.0" }
 
 [dev-dependencies]
-bytes = "0.5.5"
+bytes = "0.5.6"
 
 config-builder = { path = "../config/config-builder", version = "0.1.0" }
+lcs = { path = "../common/lcs", version = "0.1.0", package = "libra-canonical-serialization" }
 libra-crypto = { path = "../crypto/crypto", version = "0.1.0" }
+libra-mempool = { path = "../mempool", version = "0.1.0", features = ["fuzzing"] }
 libra-network-address = { path = "../network/network-address", version = "0.1.0" }
 libradb = { path = "../storage/libradb", version = "0.1.0" }
 vm-genesis = { path = "../language/tools/vm-genesis", version = "0.1.0" }
@@ -51,4 +54,4 @@ subscription-service = { path = "../common/subscription-service", version = "0.1
 
 [features]
 default = []
-fuzzing = ["libra-mempool/fuzzing", "libra-types/fuzzing", "libradb/fuzzing"]
+fuzzing = ["libra-config/fuzzing", "libra-mempool/fuzzing", "libra-types/fuzzing", "libradb/fuzzing"]

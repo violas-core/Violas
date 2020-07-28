@@ -16,6 +16,7 @@ use channel::{libra_channel, message_queues::QueueStyle};
 use futures::sink::SinkExt;
 use libra_config::{config::RoleType, network_id::NetworkId};
 use libra_network_address::NetworkAddress;
+use netcore::transport::ConnectionOrigin;
 use std::{num::NonZeroUsize, str::FromStr};
 use tokio::runtime::Runtime;
 
@@ -177,16 +178,14 @@ async fn send_new_peer_notification(
     connection_notifs_tx: &mut conn_notifs_channel::Sender,
 ) {
     let (delivered_tx, delivered_rx) = oneshot::channel();
+    let notif = peer_manager::ConnectionNotification::NewPeer(
+        peer_id,
+        NetworkAddress::from_str("/ip6/::1/tcp/8081").unwrap(),
+        ConnectionOrigin::Inbound,
+        NetworkContext::mock(),
+    );
     connection_notifs_tx
-        .push_with_feedback(
-            peer_id,
-            peer_manager::ConnectionNotification::NewPeer(
-                peer_id,
-                NetworkAddress::from_str("/ip6/::1/tcp/8081").unwrap(),
-                NetworkContext::mock(),
-            ),
-            Some(delivered_tx),
-        )
+        .push_with_feedback(peer_id, notif, Some(delivered_tx))
         .unwrap();
     delivered_rx.await.unwrap();
 }

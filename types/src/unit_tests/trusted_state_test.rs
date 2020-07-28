@@ -13,10 +13,7 @@ use crate::{
     validator_verifier::{random_validator_verifier, ValidatorConsensusInfo, ValidatorVerifier},
     waypoint::Waypoint,
 };
-use libra_crypto::{
-    ed25519::Ed25519Signature,
-    hash::{CryptoHash, HashValue},
-};
+use libra_crypto::{ed25519::Ed25519Signature, hash::HashValue};
 use proptest::{
     collection::{size_range, vec, SizeRange},
     prelude::*,
@@ -81,7 +78,7 @@ fn sign_ledger_info(
 ) -> BTreeMap<AccountAddress, Ed25519Signature> {
     signers
         .iter()
-        .map(|s| (s.author(), s.sign_message(ledger_info.hash())))
+        .map(|s| (s.author(), s.sign(ledger_info)))
         .collect()
 }
 
@@ -382,7 +379,7 @@ proptest! {
             li_with_sigs.ledger_info().clone(),
             BTreeMap::new(), /* empty signatures */
         );
-        ::std::mem::replace(bad_li_idx.get_mut(&mut lis_with_sigs), bad_li_with_sigs);
+        *bad_li_idx.get_mut(&mut lis_with_sigs) = bad_li_with_sigs;
 
         let change_proof = EpochChangeProof::new(lis_with_sigs, false /* more */);
         trusted_state

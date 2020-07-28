@@ -5,7 +5,7 @@
 //! to interpret metadata about the translation target.
 
 #[allow(unused_imports)]
-use log::info;
+use log::{info, warn};
 
 use std::cell::RefCell;
 
@@ -15,7 +15,7 @@ use codespan_reporting::{
     term::{emit, termcolor::WriteColor, Config},
 };
 use itertools::Itertools;
-use num::{BigUint, Num};
+use num::{BigUint, Num, ToPrimitive};
 
 use bytecode_source_map::source_map::SourceMap;
 use move_core_types::{account_address::AccountAddress, language_storage, value::MoveValue};
@@ -34,7 +34,10 @@ use vm::{
 };
 
 use crate::{
-    ast::{ModuleName, PropertyBag, Spec, SpecBlockInfo, SpecFunDecl, SpecVarDecl, Value},
+    ast::{
+        GlobalInvariant, ModuleName, PropertyBag, Spec, SpecBlockInfo, SpecFunDecl, SpecVarDecl,
+        Value,
+    },
     symbol::{Symbol, SymbolPool},
     ty::{PrimitiveType, Type},
 };
@@ -56,9 +59,17 @@ pub const SCRIPT_BYTECODE_FUN_NAME: &str = "<SELF>";
 /// Pragma indicating whether verification should be performed for a function.
 pub const VERIFY_PRAGMA: &str = "verify";
 
+/// Pragma indicating an estimate how long verification takes. Verification
+/// is skipped if the timeout is smaller than this.
+pub const VERIFY_DURATION_ESTIMATE: &str = "verify_duration_estimate";
+
 /// Pragma indicating whether implementation of function should be ignored and
 /// instead treated to be like a native function.
 pub const INTRINSIC_PRAGMA: &str = "intrinsic";
+
+/// Pragma indicating whether implementation of function should be ignored and
+/// instead interpreted by its pre and post conditions only.
+pub const OPAQUE_PRAGMA: &str = "opaque";
 
 /// Pragma indicating whether aborts_if specification should be considered partial.
 pub const ABORTS_IF_IS_PARTIAL_PRAGMA: &str = "aborts_if_is_partial";
@@ -72,6 +83,38 @@ pub const REQUIRES_IF_ABORTS: &str = "requires_if_aborts";
 
 /// Pragma indicating that the function will run smoke tests
 pub const ALWAYS_ABORTS_TEST_PRAGMA: &str = "always_aborts_test";
+
+/// Pragma indicating that adding u64 or u128 values should not be checked
+/// for overflow.
+pub const ADDITION_OVERFLOW_UNCHECKED_PRAGMA: &str = "addition_overflow_unchecked";
+
+/// Pragma indicating that aborts from this function shall be ignored.
+pub const ASSUME_NO_ABORT_FROM_HERE_PRAGMA: &str = "assume_no_abort_from_here";
+
+/// Internal property attached to conditions if they are injected via an apply or a module
+/// invariant.
+pub const CONDITION_INJECTED_PROP: &str = "$injected";
+
+/// Property which can be attached to conditions to make them exported into the VC context
+/// even if they are injected.
+pub const CONDITION_EXPORT_PROP: &str = "export";
+
+/// Property which can be attached to a module invariant to make it global.
+pub const CONDITION_GLOBAL_PROP: &str = "global";
+
+/// Abstract property which can be used together with an opaque specification. An abstract
+/// property is not verified against the implementation, but will be used for the
+/// function's behavior in the application context. This allows to "override" the specification
+/// with a more abstract version. In general we would need to prover the abstraction is
+/// subsumed by the implementation, but this is currently not done.
+pub const CONDITION_ABSTRACT_PROP: &str = "abstract";
+
+/// Opposite to the abstract property.
+pub const CONDITION_CONCRETE_PROP: &str = "concrete";
+
+/// Pragma which indicates that the functions aborts and ensure conditions shall be exported
+/// to the verification context even if the implementation of the function is inlined.
+pub const EXPORT_ENSURES_PRAGMA: &str = "export_ensures";
 
 // =================================================================================================
 /// # Locations
@@ -157,6 +200,10 @@ pub struct FunId(Symbol);
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
 pub struct SchemaId(Symbol);
 
+/// Identifier for a constant.
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
+pub struct ConstId(Symbol);
+
 /// Identifier for a specification function, relative to module.
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
 pub struct SpecFunId(RawIndex);
@@ -173,6 +220,13 @@ pub struct NodeId(RawIndex);
 /// A global id. Instances of this type represent unique identifiers relative to `GlobalEnv`.
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
 pub struct GlobalId(usize);
+
+// Some identifier qualified by a module.
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
+pub struct QualifiedId<Id> {
+    pub module_id: ModuleId,
+    pub id: Id,
+}
 
 impl FunId {
     pub fn new(sym: Symbol) -> Self {
@@ -205,6 +259,16 @@ impl StructId {
 }
 
 impl FieldId {
+    pub fn new(sym: Symbol) -> Self {
+        Self(sym)
+    }
+
+    pub fn symbol(self) -> Symbol {
+        self.0
+    }
+}
+
+impl ConstId {
     pub fn new(sym: Symbol) -> Self {
         Self(sym)
     }
@@ -261,6 +325,15 @@ impl GlobalId {
 
     pub fn as_usize(self) -> usize {
         self.0
+    }
+}
+
+impl ModuleId {
+    pub fn qualified<Id>(self, id: Id) -> QualifiedId<Id> {
+        QualifiedId {
+            module_id: self,
+            id,
+        }
     }
 }
 
@@ -325,6 +398,12 @@ pub struct GlobalEnv {
     module_data: Vec<ModuleData>,
     /// A counter for issuing global ids.
     global_id_counter: RefCell<usize>,
+    /// A map of global invariants.
+    global_invariants: BTreeMap<GlobalId, GlobalInvariant>,
+    /// A map from spec vars to global invariants which refer to them.
+    global_invariants_for_spec_var: BTreeMap<QualifiedId<SpecVarId>, BTreeSet<GlobalId>>,
+    /// A map from global memories to global invariants which refer to them.
+    global_invariants_for_memory: BTreeMap<QualifiedId<StructId>, BTreeSet<GlobalId>>,
 }
 
 /// Information about a verification condition stored in the environment.
@@ -389,6 +468,9 @@ impl GlobalEnv {
             symbol_pool: SymbolPool::new(),
             module_data: vec![],
             global_id_counter: RefCell::new(0),
+            global_invariants: Default::default(),
+            global_invariants_for_memory: Default::default(),
+            global_invariants_for_spec_var: Default::default(),
         }
     }
 
@@ -557,6 +639,37 @@ impl GlobalEnv {
         {
             emit(writer, &Config::default(), &self.source_files, diag).expect("emit must not fail");
         }
+    }
+
+    /// Adds a global invariant to this environment.
+    pub fn add_global_invariant(&mut self, inv: GlobalInvariant) {
+        let id = inv.id;
+        for spec_var in &inv.spec_var_usage {
+            self.global_invariants_for_spec_var
+                .entry(*spec_var)
+                .or_insert_with(BTreeSet::new)
+                .insert(id);
+        }
+        for memory in &inv.mem_usage {
+            self.global_invariants_for_memory
+                .entry(*memory)
+                .or_insert_with(BTreeSet::new)
+                .insert(id);
+        }
+        self.global_invariants.insert(id, inv);
+    }
+
+    /// Get global invariant by id.
+    pub fn get_global_invariant(&self, id: GlobalId) -> Option<&GlobalInvariant> {
+        self.global_invariants.get(&id)
+    }
+
+    /// Return the global invariants which refer to the given memory.
+    pub fn get_global_invariants_for_memory(&self, memory: QualifiedId<StructId>) -> Vec<GlobalId> {
+        self.global_invariants_for_memory
+            .get(&memory)
+            .map(|ids| ids.iter().cloned().collect_vec())
+            .unwrap_or_else(Default::default)
     }
 
     /// Adds a new module to the environment. StructData and FunctionData need to be provided
@@ -845,6 +958,24 @@ impl GlobalEnv {
             .borrow()
             .iter()
             .for_each(|(l, i)| f(l, i))
+    }
+
+    /// Returns true if the boolean property is true.
+    pub fn is_property_true(&self, properties: &PropertyBag, name: &str) -> Option<bool> {
+        let sym = &self.symbol_pool().make(name);
+        if let Some(Value::Bool(b)) = properties.get(sym) {
+            return Some(*b);
+        }
+        None
+    }
+
+    /// Returns the value of a number property.
+    pub fn get_num_property(&self, properties: &PropertyBag, name: &str) -> Option<usize> {
+        let sym = &self.symbol_pool().make(name);
+        if let Some(Value::Number(n)) = properties.get(sym) {
+            return n.to_usize();
+        }
+        None
     }
 }
 
@@ -1338,9 +1469,14 @@ impl<'env> StructEnv<'env> {
         &self.data.spec.properties
     }
 
-    /// Gets the definition index associated with this struct.
+    /// Gets the id associated with this struct.
     pub fn get_id(&self) -> StructId {
         StructId(self.data.name)
+    }
+
+    /// Gets the qualified id of this struct.
+    pub fn get_qualified_id(&self) -> QualifiedId<StructId> {
+        self.module_env.get_id().qualified(self.get_id())
     }
 
     /// Determines whether this struct is native.
@@ -1626,6 +1762,11 @@ impl<'env> FunctionEnv<'env> {
         FunId(self.data.name)
     }
 
+    /// Gets the qualified id of this function.
+    pub fn get_qualified_id(&self) -> QualifiedId<FunId> {
+        self.module_env.get_id().qualified(self.get_id())
+    }
+
     /// Get documentation associated with this function.
     pub fn get_doc(&self) -> &str {
         self.module_env.env.get_doc(&self.data.loc)
@@ -1680,12 +1821,12 @@ impl<'env> FunctionEnv<'env> {
     /// pragma in this function, then the enclosing module, and finally uses the provided default.
     /// value
     pub fn is_pragma_true(&self, name: &str, default: impl FnOnce() -> bool) -> bool {
-        let name = &self.symbol_pool().make(name);
-        if let Some(Value::Bool(b)) = self.get_spec().properties.get(name) {
-            return *b;
+        let env = self.module_env.env;
+        if let Some(b) = env.is_property_true(&self.get_spec().properties, name) {
+            return b;
         }
-        if let Some(Value::Bool(b)) = self.module_env.get_spec().properties.get(name) {
-            return *b;
+        if let Some(b) = env.is_property_true(&self.module_env.get_spec().properties, name) {
+            return b;
         }
         default()
     }

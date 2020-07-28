@@ -44,8 +44,10 @@ fun main(account: &signer) {
     SharedEd25519PublicKey::publish(account, invalid_pubkey)
 }
 }
+// TODO(status_migration) remove duplicate check
 // check: ABORTED
-// check: 9003
+// check: ABORTED
+// check: 0
 
 // publishing a key with a bad length should fail
 //! new-transaction
@@ -57,8 +59,10 @@ fun main(account: &signer) {
     SharedEd25519PublicKey::publish(account, invalid_pubkey)
 }
 }
+// TODO(status_migration) remove duplicate check
 // check: ABORTED
-// check: 9003
+// check: ABORTED
+// check: 0
 
 
 // rotating to a key with a bad length should fail
@@ -75,8 +79,10 @@ fun main(account: &signer) {
     SharedEd25519PublicKey::rotate_key(account, invalid_pubkey)
 }
 }
+// TODO(status_migration) remove duplicate check
 // check: ABORTED
-// check: 9003
+// check: ABORTED
+// check: 0
 
 // rotating to a key with a good length but bad contents should fail
 //! new-transaction
@@ -91,5 +97,6 @@ fun main(account: &signer) {
     SharedEd25519PublicKey::rotate_key(account, invalid_pubkey)
 }
 }
+// TODO(status_migration) remove duplicate check
 // check: ABORTED
-// check: 9003
+// check: 0

@@ -4,7 +4,7 @@
 //! proposer: vivian
 //! block-time: 1000000
 
-// check: EventKey([19, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10, 85, 12, 24])
+// check: EventKey([20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10, 85, 12, 24])
 // check: NewBlockEvent
 // check: 1000000
 
@@ -37,8 +37,10 @@ fun main(account: &signer) {
     LibraBlock::block_prologue(account, 1, 10, Vector::empty<address>(), {{vivian}});
 }
 }
+// TODO(status_migration) remove duplicate check
 // check: ABORTED
-// check: 33
+// check: ABORTED
+// check: 2
 
 //! new-transaction
 //! sender: vivian
@@ -49,5 +51,7 @@ fun main(account: &signer) {
     LibraTimestamp::update_global_time(account, {{vivian}}, 20);
 }
 }
+// TODO(status_migration) remove duplicate check
 // check: ABORTED
-// check: 33
+// check: ABORTED
+// check: 2

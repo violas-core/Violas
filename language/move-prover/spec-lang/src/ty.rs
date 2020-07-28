@@ -131,6 +131,15 @@ impl Type {
         }
     }
 
+    /// Require this to be a struct, if so extracts its content.
+    pub fn require_struct(&self) -> (ModuleId, StructId, &[Type]) {
+        if let Type::Struct(mid, sid, targs) = self {
+            (*mid, *sid, targs.as_slice())
+        } else {
+            panic!("expected a Type::Struct")
+        }
+    }
+
     /// Instantiates type parameters in this type.
     pub fn instantiate(&self, params: &[Type]) -> Type {
         if params.is_empty() {
@@ -153,12 +162,12 @@ impl Type {
             }
             Type::Var(i) => {
                 if let Some(s) = subs {
-                    if let Some(s) = s.subs.get(i) {
+                    if let Some(t) = s.subs.get(i) {
                         // Recursively call replacement again here, in case the substitution s
                         // refers to type variables.
                         // TODO: a more efficient approach is to maintain that type assignments
                         // are always fully specialized w.r.t. to the substitution.
-                        s.replace(params, subs)
+                        t.replace(params, subs)
                     } else {
                         self.clone()
                     }
@@ -176,7 +185,7 @@ impl Type {
             Type::Tuple(args) => Type::Tuple(replace_vec(args)),
             Type::Vector(et) => Type::Vector(Box::new(et.replace(params, subs))),
             Type::TypeDomain(et) => Type::TypeDomain(Box::new(et.replace(params, subs))),
-            _ => self.clone(),
+            Type::Primitive(..) | Type::TypeLocal(..) | Type::Error => self.clone(),
         }
     }
 
@@ -209,7 +218,9 @@ impl Type {
             Fun(ts, r) => ts.iter().any(|t| t.is_incomplete()) || r.is_incomplete(),
             Struct(_, _, ts) => ts.iter().any(|t| t.is_incomplete()),
             Vector(et) => et.is_incomplete(),
-            _ => false,
+            Reference(_, bt) => bt.is_incomplete(),
+            TypeDomain(bt) => bt.is_incomplete(),
+            Error | Primitive(..) | TypeParameter(..) | TypeLocal(..) => false,
         }
     }
 }

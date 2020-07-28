@@ -10,7 +10,8 @@
 //! supported over that messaging protocol. On receipt, both ends will determine the highest
 //! intersecting messaging protocol version and use that for the remainder of the session.
 
-use libra_config::{chain_id::ChainId, network_id::NetworkId};
+use libra_config::network_id::NetworkId;
+use libra_types::chain_id::ChainId;
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, convert::TryInto, fmt, iter::Iterator};
 
@@ -28,8 +29,6 @@ pub enum ProtocolId {
     StateSynchronizerDirectSend = 3,
     DiscoveryDirectSend = 4,
     HealthCheckerRpc = 5,
-    IdentityDirectSend = 6,
-    OnchainDiscoveryRpc = 7,
 }
 
 impl ProtocolId {
@@ -42,8 +41,6 @@ impl ProtocolId {
             StateSynchronizerDirectSend => "StateSynchronizerDirectSend",
             DiscoveryDirectSend => "DiscoveryDirectSend",
             HealthCheckerRpc => "HealthCheckerRpc",
-            IdentityDirectSend => "IdentityDirectSend",
-            OnchainDiscoveryRpc => "OnchainDiscoveryRpc",
         }
     }
 }

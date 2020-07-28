@@ -2,15 +2,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::Result;
-use bytecode_verifier::{VerifiedModule, VerifiedScript};
+use bytecode_verifier::{verify_module, verify_script};
 use compiled_stdlib::{stdlib_modules, StdLibOptions};
 use ir_to_bytecode::{
     compiler::{compile_module, compile_script},
     parser::{parse_module, parse_script},
 };
-use libra_types::{account_address::AccountAddress, vm_error::VMStatus};
+use libra_types::account_address::AccountAddress;
 use vm::{
     access::ScriptAccess,
+    errors::{Location, VMError},
     file_format::{CompiledModule, CompiledScript},
 };
 
@@ -33,20 +34,21 @@ macro_rules! instr_count {
 fn compile_script_string_impl(
     code: &str,
     deps: Vec<CompiledModule>,
-) -> Result<(CompiledScript, Option<VMStatus>)> {
+) -> Result<(CompiledScript, Option<VMError>)> {
     let parsed_script = parse_script("file_name", code).unwrap();
     let compiled_script = compile_script(None, parsed_script, &deps)?.0;
 
     let mut serialized_script = Vec::<u8>::new();
     compiled_script.serialize(&mut serialized_script)?;
-    let deserialized_script = CompiledScript::deserialize(&serialized_script)?;
+    let deserialized_script = CompiledScript::deserialize(&serialized_script)
+        .map_err(|e| e.finish(Location::Undefined).into_vm_status())?;
     assert_eq!(compiled_script, deserialized_script);
 
     // Always return a CompiledScript because some callers explicitly care about unverified
     // modules.
-    Ok(match VerifiedScript::new(compiled_script) {
-        Ok(script) => (script.into_inner(), None),
-        Err((script, error)) => (script, Some(error)),
+    Ok(match verify_script(&compiled_script) {
+        Ok(_) => (compiled_script, None),
+        Err(error) => (compiled_script, Some(error)),
     })
 }
 
@@ -84,21 +86,22 @@ pub fn compile_script_string_and_assert_error(
 fn compile_module_string_impl(
     code: &str,
     deps: Vec<CompiledModule>,
-) -> Result<(CompiledModule, Option<VMStatus>)> {
+) -> Result<(CompiledModule, Option<VMError>)> {
     let address = AccountAddress::ZERO;
     let module = parse_module("file_name", code).unwrap();
     let compiled_module = compile_module(address, module, &deps)?.0;
 
     let mut serialized_module = Vec::<u8>::new();
     compiled_module.serialize(&mut serialized_module)?;
-    let deserialized_module = CompiledModule::deserialize(&serialized_module)?;
+    let deserialized_module = CompiledModule::deserialize(&serialized_module)
+        .map_err(|e| e.finish(Location::Undefined).into_vm_status())?;
     assert_eq!(compiled_module, deserialized_module);
 
     // Always return a CompiledModule because some callers explicitly care about unverified
     // modules.
-    Ok(match VerifiedModule::new(compiled_module) {
-        Ok(module) => (module.into_inner(), None),
-        Err((module, error)) => (module, Some(error)),
+    Ok(match verify_module(&compiled_module) {
+        Ok(_) => (compiled_module, None),
+        Err(error) => (compiled_module, Some(error)),
     })
 }
 
@@ -146,8 +149,5 @@ pub fn compile_script_string_with_stdlib(code: &str) -> Result<CompiledScript> {
 }
 
 fn stdlib() -> Vec<CompiledModule> {
-    stdlib_modules(StdLibOptions::Compiled)
-        .iter()
-        .map(|m| m.clone().into_inner())
-        .collect()
+    stdlib_modules(StdLibOptions::Compiled).to_vec()
 }

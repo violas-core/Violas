@@ -10,15 +10,74 @@ use std::sync::Arc;
 define_counters![
     "libra_safety_rules",
     (
-        requested_sign_timeout: Counter,
-        "counts requests to sign_timeouts"
+        consensus_state_error: Counter,
+        "The number of unsuccessful requests to consensus_state"
     ),
     (
-        sign_proposal: Counter,
-        "sign_proposal counter counts sign_proposals"
+        consensus_state_request: Counter,
+        "The number of requests to consensus_state"
     ),
-    (sign_timeout: Counter, "counts successful sign_timeouts"),
-    (some_gauge_counter: Gauge, "example help for a gauge metric"),
+    (
+        consensus_state_success: Counter,
+        "The number of successful requests to consensus_state"
+    ),
+    (
+        construct_and_sign_vote_error: Counter,
+        "The number of unsuccessful requests to construct_and_sign_vote"
+    ),
+    (
+        construct_and_sign_vote_request: Counter,
+        "The number of requests to construct_and_sign_vote"
+    ),
+    (
+        construct_and_sign_vote_success: Counter,
+        "The number of successful requests to construct_and_sign_vote"
+    ),
+    (epoch: Gauge, "The current epoch"),
+    (
+        initialize_error: Counter,
+        "The number of unsuccessful requests to sign_proposal"
+    ),
+    (
+        initialize_request: Counter,
+        "The number of requests to sign_proposal"
+    ),
+    (
+        initialize_success: Counter,
+        "The number of successful requests to sign_proposal"
+    ),
+    (
+        last_voted_round: Gauge,
+        "The round of the highest voted block"
+    ),
+    (
+        preferred_round: Gauge,
+        "The round of the highest 2-chain head"
+    ),
+    (
+        sign_proposal_error: Counter,
+        "The number of unsuccessful requests to sign_proposal"
+    ),
+    (
+        sign_proposal_request: Counter,
+        "The number of requests to sign_proposal"
+    ),
+    (
+        sign_proposal_success: Counter,
+        "The number of successful requests to sign_proposal"
+    ),
+    (
+        sign_timeout_error: Counter,
+        "The number of unsuccessful requests to sign_timeout"
+    ),
+    (
+        sign_timeout_request: Counter,
+        "The number of requests to sign_timeout"
+    ),
+    (
+        sign_timeout_success: Counter,
+        "The number of successful requests to sign_timeout"
+    ),
 ];
 
 pub static COUNTERS: Lazy<Arc<Counters>> = Lazy::new(|| Arc::new(Counters::new()));

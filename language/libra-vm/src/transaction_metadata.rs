@@ -4,12 +4,13 @@
 use libra_crypto::{ed25519::Ed25519PrivateKey, PrivateKey};
 use libra_types::{
     account_address::AccountAddress,
+    chain_id::ChainId,
     transaction::{authenticator::AuthenticationKeyPreimage, SignedTransaction},
 };
 use move_core_types::gas_schedule::{
     AbstractMemorySize, GasAlgebra, GasCarrier, GasPrice, GasUnits,
 };
-use std::{convert::TryFrom, time::Duration};
+use std::convert::TryFrom;
 
 pub struct TransactionMetadata {
     pub sender: AccountAddress,
@@ -18,7 +19,8 @@ pub struct TransactionMetadata {
     pub max_gas_amount: GasUnits<GasCarrier>,
     pub gas_unit_price: GasPrice<GasCarrier>,
     pub transaction_size: AbstractMemorySize<GasCarrier>,
-    pub expiration_time: Duration,
+    pub expiration_timestamp_secs: u64,
+    pub chain_id: ChainId,
 }
 
 impl TransactionMetadata {
@@ -33,7 +35,8 @@ impl TransactionMetadata {
             max_gas_amount: GasUnits::new(txn.max_gas_amount()),
             gas_unit_price: GasPrice::new(txn.gas_unit_price()),
             transaction_size: AbstractMemorySize::new(txn.raw_txn_bytes_len() as u64),
-            expiration_time: txn.expiration_time(),
+            expiration_timestamp_secs: txn.expiration_timestamp_secs(),
+            chain_id: txn.chain_id(),
         }
     }
 
@@ -61,8 +64,12 @@ impl TransactionMetadata {
         self.transaction_size
     }
 
-    pub fn expiration_time(&self) -> u64 {
-        self.expiration_time.as_secs()
+    pub fn expiration_timestamp_secs(&self) -> u64 {
+        self.expiration_timestamp_secs
+    }
+
+    pub fn chain_id(&self) -> ChainId {
+        self.chain_id
     }
 }
 
@@ -78,7 +85,8 @@ impl Default for TransactionMetadata {
             max_gas_amount: GasUnits::new(100_000_000),
             gas_unit_price: GasPrice::new(0),
             transaction_size: AbstractMemorySize::new(0),
-            expiration_time: Duration::new(0, 0),
+            expiration_timestamp_secs: 0,
+            chain_id: ChainId::test(),
         }
     }
 }

@@ -8,32 +8,28 @@ use crate::{
     trace,
 };
 use libra_logger::prelude::*;
-use libra_types::{
-    access_path::AccessPath,
+use move_core_types::{
     account_address::AccountAddress,
-    vm_error::{StatusCode, StatusType, VMStatus},
+    gas_schedule::{AbstractMemorySize, GasAlgebra, GasCarrier},
+    vm_status::{StatusCode, StatusType},
 };
-use move_core_types::gas_schedule::{AbstractMemorySize, GasAlgebra, GasCarrier};
 use move_vm_types::{
     data_store::DataStore,
     gas_schedule::CostStrategy,
-    loaded_data::{runtime_types::Type, types::FatStructType},
+    loaded_data::runtime_types::Type,
     values::{self, IntegerValue, Locals, Reference, Struct, StructRef, VMValueCast, Value},
 };
 use std::{cmp::min, collections::VecDeque, fmt::Write, sync::Arc};
 use vm::{
     errors::*,
-    file_format::{
-        Bytecode, FunctionHandleIndex, FunctionInstantiationIndex, StructDefInstantiationIndex,
-        StructDefinitionIndex,
-    },
+    file_format::{Bytecode, FunctionHandleIndex, FunctionInstantiationIndex, Signature},
     file_format_common::Opcodes,
 };
 
 macro_rules! debug_write {
     ($($toks: tt)*) => {
         write!($($toks)*).map_err(|_|
-            VMStatus::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
+            PartialVMError::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
                 .with_message("failed to write to buffer".to_string())
         )
     };
@@ -42,7 +38,7 @@ macro_rules! debug_write {
 macro_rules! debug_writeln {
     ($($toks: tt)*) => {
         writeln!($($toks)*).map_err(|_|
-            VMStatus::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
+            PartialVMError::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
                 .with_message("failed to write to buffer".to_string())
         )
     };
@@ -117,21 +113,27 @@ impl Interpreter {
         ty_args: Vec<Type>,
         args: Vec<Value>,
     ) -> VMResult<()> {
+        verify_args(function.parameters(), &ty_args, &args).map_err(|e| self.set_location(e))?;
         let mut locals = Locals::new(function.local_count());
-        // TODO: assert consistency of args and function formals
         for (i, value) in args.into_iter().enumerate() {
-            locals.store_loc(i, value)?;
+            locals
+                .store_loc(i, value)
+                .map_err(|e| self.set_location(e))?;
         }
+
         let mut current_frame = Frame::new(function, ty_args, locals);
         loop {
             let resolver = current_frame.resolver(loader);
             let exit_code =
                 current_frame //self
                     .execute_code(&resolver, self, data_store, cost_strategy)
-                    .or_else(|err| Err(self.maybe_core_dump(err, &current_frame)))?;
+                    .map_err(|err| self.maybe_core_dump(err, &current_frame))?;
             match exit_code {
                 ExitCode::Return => {
-                    current_frame.locals.check_resources_for_return()?;
+                    current_frame
+                        .locals
+                        .check_resources_for_return()
+                        .map_err(|e| self.set_location(e))?;
                     if let Some(frame) = self.call_stack.pop() {
                         current_frame = frame;
                     } else {
@@ -139,46 +141,52 @@ impl Interpreter {
                     }
                 }
                 ExitCode::Call(fh_idx) => {
-                    cost_strategy.charge_instr_with_size(
-                        Opcodes::CALL,
-                        AbstractMemorySize::new(1 as GasCarrier),
-                    )?;
-                    let func = resolver.function_at(fh_idx);
+                    cost_strategy
+                        .charge_instr_with_size(
+                            Opcodes::CALL,
+                            AbstractMemorySize::new(1 as GasCarrier),
+                        )
+                        .map_err(|e| self.set_location(e))?;
+                    let func = resolver.function_from_handle(fh_idx);
                     if func.is_native() {
                         self.call_native(&resolver, data_store, cost_strategy, func, vec![])?;
                         continue;
                     }
-                    // TODO: when a native function is executed, the current frame has not yet
-                    // been pushed onto the call stack. Fix it.
                     let frame = self
                         .make_call_frame(func, vec![])
-                        .or_else(|err| Err(self.maybe_core_dump(err, &current_frame)))?;
-                    self.call_stack.push(current_frame).or_else(|frame| {
-                        let err = VMStatus::new(StatusCode::CALL_STACK_OVERFLOW);
-                        Err(self.maybe_core_dump(err, &frame))
+                        .map_err(|err| self.maybe_core_dump(err, &current_frame))?;
+                    self.call_stack.push(current_frame).map_err(|frame| {
+                        let err = PartialVMError::new(StatusCode::CALL_STACK_OVERFLOW);
+                        let err = self.set_location(err);
+                        self.maybe_core_dump(err, &frame)
                     })?;
                     current_frame = frame;
                 }
                 ExitCode::CallGeneric(idx) => {
-                    let func_inst = resolver.function_instantiation_at(idx);
-                    cost_strategy.charge_instr_with_size(
-                        Opcodes::CALL_GENERIC,
-                        AbstractMemorySize::new((func_inst.instantiation_size() + 1) as GasCarrier),
-                    )?;
-                    let func = loader.function_at(func_inst.handle());
-                    let ty_args = func_inst.materialize(current_frame.ty_args())?;
+                    resolver
+                        .type_params_count(idx)
+                        .and_then(|arity| {
+                            cost_strategy.charge_instr_with_size(
+                                Opcodes::CALL_GENERIC,
+                                AbstractMemorySize::new((arity + 1) as GasCarrier),
+                            )
+                        })
+                        .map_err(|e| self.set_location(e))?;
+                    let ty_args = resolver
+                        .instantiate_generic_function(idx, current_frame.ty_args())
+                        .map_err(|e| self.set_location(e))?;
+                    let func = resolver.function_from_instantiation(idx);
                     if func.is_native() {
                         self.call_native(&resolver, data_store, cost_strategy, func, ty_args)?;
                         continue;
                     }
-                    // TODO: when a native function is executed, the current frame has not yet
-                    // been pushed onto the call stack. Fix it.
                     let frame = self
                         .make_call_frame(func, ty_args)
-                        .or_else(|err| Err(self.maybe_core_dump(err, &current_frame)))?;
-                    self.call_stack.push(current_frame).or_else(|frame| {
-                        let err = VMStatus::new(StatusCode::CALL_STACK_OVERFLOW);
-                        Err(self.maybe_core_dump(err, &frame))
+                        .map_err(|err| self.maybe_core_dump(err, &current_frame))?;
+                    self.call_stack.push(current_frame).map_err(|frame| {
+                        let err = PartialVMError::new(StatusCode::CALL_STACK_OVERFLOW);
+                        let err = self.set_location(err);
+                        self.maybe_core_dump(err, &frame)
                     })?;
                     current_frame = frame;
                 }
@@ -195,7 +203,12 @@ impl Interpreter {
         let mut locals = Locals::new(func.local_count());
         let arg_count = func.arg_count();
         for i in 0..arg_count {
-            locals.store_loc(arg_count - i - 1, self.operand_stack.pop()?)?;
+            locals
+                .store_loc(
+                    arg_count - i - 1,
+                    self.operand_stack.pop().map_err(|e| self.set_location(e))?,
+                )
+                .map_err(|e| self.set_location(e))?;
         }
         Ok(Frame::new(func, ty_args, locals))
     }
@@ -209,6 +222,34 @@ impl Interpreter {
         function: Arc<Function>,
         ty_args: Vec<Type>,
     ) -> VMResult<()> {
+        // Note: refactor if native functions push a frame on the stack
+        self.call_native_impl(
+            resolver,
+            data_store,
+            cost_strategy,
+            function.clone(),
+            ty_args,
+        )
+        .map_err(|e| match function.module_id() {
+            Some(id) => e
+                .at_code_offset(function.index(), 0)
+                .finish(Location::Module(id.clone())),
+            None => {
+                let err = PartialVMError::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
+                    .with_message("Unexpected native function not located in a module".to_owned());
+                self.set_location(err)
+            }
+        })
+    }
+
+    fn call_native_impl(
+        &mut self,
+        resolver: &Resolver,
+        data_store: &mut dyn DataStore,
+        cost_strategy: &mut CostStrategy,
+        function: Arc<Function>,
+        ty_args: Vec<Type>,
+    ) -> PartialVMResult<()> {
         let mut arguments = VecDeque::new();
         let expected_args = function.arg_count();
         for _ in 0..expected_args {
@@ -218,19 +259,20 @@ impl Interpreter {
         let native_function = function.get_native()?;
         let result = native_function.dispatch(&mut native_context, ty_args, arguments)?;
         cost_strategy.deduct_gas(result.cost)?;
-        result.result.and_then(|values| {
-            for value in values {
-                self.operand_stack.push(value)?;
-            }
-            Ok(())
-        })
+        let values = result
+            .result
+            .map_err(|code| PartialVMError::new(StatusCode::ABORTED).with_sub_status(code))?;
+        for value in values {
+            self.operand_stack.push(value)?;
+        }
+        Ok(())
     }
 
     /// Perform a binary operation to two values at the top of the stack.
-    fn binop<F, T>(&mut self, f: F) -> VMResult<()>
+    fn binop<F, T>(&mut self, f: F) -> PartialVMResult<()>
     where
         Value: VMValueCast<T>,
-        F: FnOnce(T, T) -> VMResult<Value>,
+        F: FnOnce(T, T) -> PartialVMResult<Value>,
     {
         let rhs = self.operand_stack.pop_as::<T>()?;
         let lhs = self.operand_stack.pop_as::<T>()?;
@@ -239,9 +281,9 @@ impl Interpreter {
     }
 
     /// Perform a binary operation for integer values.
-    fn binop_int<F>(&mut self, f: F) -> VMResult<()>
+    fn binop_int<F>(&mut self, f: F) -> PartialVMResult<()>
     where
-        F: FnOnce(IntegerValue, IntegerValue) -> VMResult<IntegerValue>,
+        F: FnOnce(IntegerValue, IntegerValue) -> PartialVMResult<IntegerValue>,
     {
         self.binop(|lhs, rhs| {
             Ok(match f(lhs, rhs)? {
@@ -253,86 +295,22 @@ impl Interpreter {
     }
 
     /// Perform a binary operation for boolean values.
-    fn binop_bool<F, T>(&mut self, f: F) -> VMResult<()>
+    fn binop_bool<F, T>(&mut self, f: F) -> PartialVMResult<()>
     where
         Value: VMValueCast<T>,
-        F: FnOnce(T, T) -> VMResult<bool>,
+        F: FnOnce(T, T) -> PartialVMResult<bool>,
     {
         self.binop(|lhs, rhs| Ok(Value::bool(f(lhs, rhs)?)))
-    }
-
-    /// Entry point for all global store operations (effectively opcodes).
-    ///
-    /// This performs common operation on the data store and then executes the specific
-    /// opcode.
-    fn global_data_op<F>(
-        &mut self,
-        resolver: &Resolver,
-        data_store: &mut dyn DataStore,
-        address: AccountAddress,
-        idx: StructDefinitionIndex,
-        op: F,
-    ) -> VMResult<AbstractMemorySize<GasCarrier>>
-    where
-        F: FnOnce(
-            &mut Self,
-            &mut dyn DataStore,
-            AccessPath,
-            &FatStructType,
-        ) -> VMResult<AbstractMemorySize<GasCarrier>>,
-    {
-        let struct_type = resolver.struct_at(idx);
-        let libra_type = resolver.get_libra_type_info(
-            &struct_type.module,
-            struct_type.name.as_ident_str(),
-            &[],
-            data_store,
-        )?;
-        let ap = AccessPath::new(address, libra_type.resource_key().to_vec());
-        op(self, data_store, ap, libra_type.fat_type())
-    }
-
-    fn global_data_op_generic<F>(
-        &mut self,
-        resolver: &Resolver,
-        data_store: &mut dyn DataStore,
-        address: AccountAddress,
-        idx: StructDefInstantiationIndex,
-        frame: &Frame,
-        op: F,
-    ) -> VMResult<AbstractMemorySize<GasCarrier>>
-    where
-        F: FnOnce(
-            &mut Self,
-            &mut dyn DataStore,
-            AccessPath,
-            &FatStructType,
-        ) -> VMResult<AbstractMemorySize<GasCarrier>>,
-    {
-        let struct_inst = resolver.struct_instantiation_at(idx);
-        let mut instantiation = vec![];
-        for inst in struct_inst.get_instantiation() {
-            instantiation.push(inst.subst(frame.ty_args())?);
-        }
-        let struct_type = resolver.struct_type_at(struct_inst.get_def_idx());
-        let libra_type = resolver.get_libra_type_info(
-            &struct_type.module,
-            struct_type.name.as_ident_str(),
-            &instantiation,
-            data_store,
-        )?;
-        let ap = AccessPath::new(address, libra_type.resource_key().to_vec());
-        op(self, data_store, ap, libra_type.fat_type())
     }
 
     /// BorrowGlobal (mutable and not) opcode.
     fn borrow_global(
         &mut self,
         data_store: &mut dyn DataStore,
-        ap: AccessPath,
-        struct_ty: &FatStructType,
-    ) -> VMResult<AbstractMemorySize<GasCarrier>> {
-        let g = borrow_global(data_store, &ap, struct_ty)?;
+        addr: AccountAddress,
+        ty: &Type,
+    ) -> PartialVMResult<AbstractMemorySize<GasCarrier>> {
+        let g = borrow_global(data_store, addr, ty)?;
         let size = g.size();
         self.operand_stack.push(g.borrow_global()?)?;
         Ok(size)
@@ -342,10 +320,10 @@ impl Interpreter {
     fn exists(
         &mut self,
         data_store: &mut dyn DataStore,
-        ap: AccessPath,
-        struct_ty: &FatStructType,
-    ) -> VMResult<AbstractMemorySize<GasCarrier>> {
-        let (exists, mem_size) = resource_exists(data_store, &ap, struct_ty)?;
+        addr: AccountAddress,
+        ty: &Type,
+    ) -> PartialVMResult<AbstractMemorySize<GasCarrier>> {
+        let (exists, mem_size) = resource_exists(data_store, addr, ty)?;
         self.operand_stack.push(Value::bool(exists))?;
         Ok(mem_size)
     }
@@ -354,10 +332,10 @@ impl Interpreter {
     fn move_from(
         &mut self,
         data_store: &mut dyn DataStore,
-        ap: AccessPath,
-        struct_ty: &FatStructType,
-    ) -> VMResult<AbstractMemorySize<GasCarrier>> {
-        let resource = move_resource_from(data_store, &ap, struct_ty)?;
+        addr: AccountAddress,
+        ty: &Type,
+    ) -> PartialVMResult<AbstractMemorySize<GasCarrier>> {
+        let resource = move_resource_from(data_store, addr, ty)?;
         let size = resource.size();
         self.operand_stack.push(resource)?;
         Ok(size)
@@ -369,12 +347,12 @@ impl Interpreter {
     ) -> impl FnOnce(
         &mut Interpreter,
         &mut dyn DataStore,
-        AccessPath,
-        &FatStructType,
-    ) -> VMResult<AbstractMemorySize<GasCarrier>> {
-        |_interpreter, data_store, ap, struct_ty| {
+        AccountAddress,
+        Type,
+    ) -> PartialVMResult<AbstractMemorySize<GasCarrier>> {
+        |_interpreter, data_store, addr, ty| {
             let size = resource.size();
-            move_resource_to(data_store, &ap, struct_ty, resource)?;
+            move_resource_to(data_store, addr, ty, resource)?;
             Ok(size)
         }
     }
@@ -384,15 +362,18 @@ impl Interpreter {
     //
 
     /// Given an `VMStatus` generate a core dump if the error is an `InvariantViolation`.
-    fn maybe_core_dump(&self, mut err: VMStatus, current_frame: &Frame) -> VMStatus {
+    fn maybe_core_dump(&self, mut err: VMError, current_frame: &Frame) -> VMError {
         // a verification error cannot happen at runtime so change it into an invariant violation.
         if err.status_type() == StatusType::Verification {
             crit!("Verification error during runtime: {:?}", err);
-            let mut new_err = VMStatus::new(StatusCode::VERIFICATION_ERROR);
-            new_err.message = err.message;
-            err = new_err;
+            let new_err = PartialVMError::new(StatusCode::VERIFICATION_ERROR);
+            let new_err = match err.message() {
+                None => new_err,
+                Some(msg) => new_err.with_message(msg.to_owned()),
+            };
+            err = new_err.finish(err.location().clone())
         }
-        if err.is(StatusType::InvariantViolation) {
+        if err.status_type() == StatusType::InvariantViolation {
             let state = self.get_internal_state(current_frame);
             crit!(
                 "Error: {:?}\nCORE DUMP: >>>>>>>>>>>>\n{}\n<<<<<<<<<<<<\n",
@@ -410,7 +391,7 @@ impl Interpreter {
         resolver: &Resolver,
         idx: usize,
         frame: &Frame,
-    ) -> VMResult<()> {
+    ) -> PartialVMResult<()> {
         // Print out the function name with type arguments.
         let func = &frame.function;
 
@@ -420,18 +401,18 @@ impl Interpreter {
         }
         debug_write!(buf, "{}", func.name())?;
         let ty_args = frame.ty_args();
-        let mut fat_ty_args = vec![];
+        let mut ty_tags = vec![];
         for ty in ty_args {
-            fat_ty_args.push(resolver.type_to_fat_type(ty)?);
+            ty_tags.push(resolver.type_to_type_tag(ty)?);
         }
-        if !fat_ty_args.is_empty() {
+        if !ty_tags.is_empty() {
             debug_write!(buf, "<")?;
-            let mut it = fat_ty_args.iter();
-            if let Some(ty) = it.next() {
-                ty.debug_print(buf)?;
-                for ty in it {
+            let mut it = ty_tags.iter();
+            if let Some(tag) = it.next() {
+                debug_write!(buf, "{}", tag)?;
+                for tag in it {
                     debug_write!(buf, ", ")?;
-                    ty.debug_print(buf)?;
+                    debug_write!(buf, "{}", tag)?;
                 }
             }
             debug_write!(buf, ">")?;
@@ -459,9 +440,9 @@ impl Interpreter {
         if func.local_count() > 0 {
             let mut tys = vec![];
             for local in &func.locals().0 {
-                tys.push(resolver.make_fat_type(local, ty_args)?);
+                tys.push(resolver.make_type(local, ty_args)?);
             }
-            values::debug::print_locals(buf, &tys, &frame.locals)?;
+            values::debug::print_locals(buf, &frame.locals)?;
             debug_writeln!(buf)?;
         } else {
             debug_writeln!(buf, "            (none)")?;
@@ -476,7 +457,7 @@ impl Interpreter {
         &self,
         buf: &mut B,
         resolver: &Resolver,
-    ) -> VMResult<()> {
+    ) -> PartialVMResult<()> {
         debug_writeln!(buf, "Call Stack:")?;
         for (i, frame) in self.call_stack.0.iter().enumerate() {
             self.debug_print_frame(buf, resolver, i, frame)?;
@@ -485,7 +466,9 @@ impl Interpreter {
         for (idx, val) in self.operand_stack.0.iter().enumerate() {
             // TODO: Currently we do not know the types of the values on the operand stack.
             // Revisit.
-            debug_writeln!(buf, "    [{}] {}", idx, val)?;
+            debug_write!(buf, "    [{}] ", idx)?;
+            values::debug::print_value(buf, val)?;
+            debug_writeln!(buf)?;
         }
         Ok(())
     }
@@ -535,6 +518,10 @@ impl Interpreter {
         }
         internal_state
     }
+
+    fn set_location(&self, err: PartialVMError) -> VMError {
+        err.finish(self.call_stack.current_location())
+    }
 }
 
 // TODO Determine stack size limits based on gas limit
@@ -552,25 +539,25 @@ impl Stack {
 
     /// Push a `Value` on the stack if the max stack size has not been reached. Abort execution
     /// otherwise.
-    fn push(&mut self, value: Value) -> VMResult<()> {
+    fn push(&mut self, value: Value) -> PartialVMResult<()> {
         if self.0.len() < OPERAND_STACK_SIZE_LIMIT {
             self.0.push(value);
             Ok(())
         } else {
-            Err(VMStatus::new(StatusCode::EXECUTION_STACK_OVERFLOW))
+            Err(PartialVMError::new(StatusCode::EXECUTION_STACK_OVERFLOW))
         }
     }
 
     /// Pop a `Value` off the stack or abort execution if the stack is empty.
-    fn pop(&mut self) -> VMResult<Value> {
+    fn pop(&mut self) -> PartialVMResult<Value> {
         self.0
             .pop()
-            .ok_or_else(|| VMStatus::new(StatusCode::EMPTY_VALUE_STACK))
+            .ok_or_else(|| PartialVMError::new(StatusCode::EMPTY_VALUE_STACK))
     }
 
     /// Pop a `Value` of a given type off the stack. Abort if the value is not of the given
     /// type or if the stack is empty.
-    fn pop_as<T>(&mut self) -> VMResult<T>
+    fn pop_as<T>(&mut self) -> PartialVMResult<T>
     where
         Value: VMValueCast<T>,
     {
@@ -578,12 +565,12 @@ impl Stack {
     }
 
     /// Pop n values off the stack.
-    fn popn(&mut self, n: u16) -> VMResult<Vec<Value>> {
+    fn popn(&mut self, n: u16) -> PartialVMResult<Vec<Value>> {
         let remaining_stack_size = self
             .0
             .len()
             .checked_sub(n as usize)
-            .ok_or_else(|| VMStatus::new(StatusCode::EMPTY_VALUE_STACK))?;
+            .ok_or_else(|| PartialVMError::new(StatusCode::EMPTY_VALUE_STACK))?;
         let args = self.0.split_off(remaining_stack_size);
         Ok(args)
     }
@@ -612,6 +599,11 @@ impl CallStack {
     /// Pop a `Frame` off the call stack.
     fn pop(&mut self) -> Option<Frame> {
         self.0.pop()
+    }
+
+    fn current_location(&self) -> Location {
+        let location_opt = self.0.last().map(|frame| frame.location());
+        location_opt.unwrap_or(Location::Undefined)
     }
 }
 
@@ -654,6 +646,20 @@ impl Frame {
         data_store: &mut dyn DataStore,
         cost_strategy: &mut CostStrategy,
     ) -> VMResult<ExitCode> {
+        self.execute_code_impl(resolver, interpreter, data_store, cost_strategy)
+            .map_err(|e| {
+                e.at_code_offset(self.function.index(), self.pc)
+                    .finish(self.location())
+            })
+    }
+
+    fn execute_code_impl(
+        &mut self,
+        resolver: &Resolver,
+        interpreter: &mut Interpreter,
+        data_store: &mut dyn DataStore,
+        cost_strategy: &mut CostStrategy,
+    ) -> PartialVMResult<ExitCode> {
         let code = self.function.code();
         loop {
             for instruction in &code[self.pc as usize..] {
@@ -708,7 +714,7 @@ impl Frame {
                         )?;
                         interpreter.operand_stack.push(
                             Value::deserialize_constant(constant).ok_or_else(|| {
-                                VMStatus::new(StatusCode::VERIFIER_INVARIANT_VIOLATION)
+                                PartialVMError::new(StatusCode::VERIFIER_INVARIANT_VIOLATION)
                                     .with_message(
                                     "Verifier failed to verify the deserialization of constants"
                                         .to_owned(),
@@ -790,7 +796,7 @@ impl Frame {
                             |acc, v| acc.add(v.size()),
                         );
                         cost_strategy.charge_instr_with_size(Opcodes::PACK, size)?;
-                        let is_resource = resolver.struct_at(*sd_idx).is_resource;
+                        let is_resource = resolver.struct_from_definition(*sd_idx).is_resource;
                         interpreter
                             .operand_stack
                             .push(Value::struct_(Struct::pack(args, is_resource)))?;
@@ -803,22 +809,8 @@ impl Frame {
                             |acc, v| acc.add(v.size()),
                         );
                         cost_strategy.charge_instr_with_size(Opcodes::PACK_GENERIC, size)?;
-                        let struct_def = resolver.struct_instantiation_at(*si_idx);
-                        let struct_ty = resolver.struct_type_at(struct_def.get_def_idx());
-                        let is_nominal_resource = struct_ty.is_resource;
-
-                        let is_resource = if is_nominal_resource {
-                            true
-                        } else {
-                            let mut is_resource = false;
-                            for ty in struct_def.get_instantiation() {
-                                if resolver.is_resource(&ty.subst(self.ty_args())?)? {
-                                    is_resource = true;
-                                }
-                            }
-                            is_resource
-                        };
-
+                        let is_resource =
+                            resolver.instantiation_is_resource(*si_idx, self.ty_args())?;
                         interpreter
                             .operand_stack
                             .push(Value::struct_(Struct::pack(args, is_resource)))?;
@@ -963,7 +955,7 @@ impl Frame {
                     Bytecode::Abort => {
                         cost_strategy.charge_instr(Opcodes::ABORT)?;
                         let error_code = interpreter.operand_stack.pop_as::<u64>()?;
-                        return Err(VMStatus::new(StatusCode::ABORTED)
+                        return Err(PartialVMError::new(StatusCode::ABORTED)
                             .with_sub_status(error_code)
                             .with_message(format!(
                                 "{} at offset {}",
@@ -989,99 +981,47 @@ impl Frame {
                             .operand_stack
                             .push(Value::bool(!lhs.equals(&rhs)?))?;
                     }
-                    Bytecode::GetTxnSenderAddress => {
-                        return Err(VMStatus::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
-                            .with_message(
-                                "GetTxnSenderAddress is deprecated and will be removed soon"
-                                    .to_string(),
-                            ));
-                    }
                     Bytecode::MutBorrowGlobal(sd_idx) | Bytecode::ImmBorrowGlobal(sd_idx) => {
                         let addr = interpreter.operand_stack.pop_as::<AccountAddress>()?;
-                        let size = interpreter.global_data_op(
-                            resolver,
-                            data_store,
-                            addr,
-                            *sd_idx,
-                            Interpreter::borrow_global,
-                        )?;
+                        let ty = resolver.get_struct_type(*sd_idx);
+                        let size = interpreter.borrow_global(data_store, addr, &ty)?;
                         cost_strategy.charge_instr_with_size(Opcodes::MUT_BORROW_GLOBAL, size)?;
                     }
                     Bytecode::MutBorrowGlobalGeneric(si_idx)
                     | Bytecode::ImmBorrowGlobalGeneric(si_idx) => {
                         let addr = interpreter.operand_stack.pop_as::<AccountAddress>()?;
-                        let size = interpreter.global_data_op_generic(
-                            resolver,
-                            data_store,
-                            addr,
-                            *si_idx,
-                            self,
-                            Interpreter::borrow_global,
-                        )?;
+                        let ty = resolver.instantiate_generic_type(*si_idx, self.ty_args())?;
+                        let size = interpreter.borrow_global(data_store, addr, &ty)?;
                         cost_strategy
                             .charge_instr_with_size(Opcodes::MUT_BORROW_GLOBAL_GENERIC, size)?;
                     }
                     Bytecode::Exists(sd_idx) => {
                         let addr = interpreter.operand_stack.pop_as::<AccountAddress>()?;
-                        let size = interpreter.global_data_op(
-                            resolver,
-                            data_store,
-                            addr,
-                            *sd_idx,
-                            Interpreter::exists,
-                        )?;
+                        let ty = resolver.get_struct_type(*sd_idx);
+                        let size = interpreter.exists(data_store, addr, &ty)?;
                         cost_strategy.charge_instr_with_size(Opcodes::EXISTS, size)?;
                     }
                     Bytecode::ExistsGeneric(si_idx) => {
                         let addr = interpreter.operand_stack.pop_as::<AccountAddress>()?;
-                        let size = interpreter.global_data_op_generic(
-                            resolver,
-                            data_store,
-                            addr,
-                            *si_idx,
-                            self,
-                            Interpreter::exists,
-                        )?;
+                        let ty = resolver.instantiate_generic_type(*si_idx, self.ty_args())?;
+                        let size = interpreter.exists(data_store, addr, &ty)?;
                         cost_strategy.charge_instr_with_size(Opcodes::EXISTS_GENERIC, size)?;
                     }
                     Bytecode::MoveFrom(sd_idx) => {
                         let addr = interpreter.operand_stack.pop_as::<AccountAddress>()?;
-                        let size = interpreter.global_data_op(
-                            resolver,
-                            data_store,
-                            addr,
-                            *sd_idx,
-                            Interpreter::move_from,
-                        )?;
+                        let ty = resolver.get_struct_type(*sd_idx);
+                        let size = interpreter.move_from(data_store, addr, &ty)?;
                         // TODO: Have this calculate before pulling in the data based upon
                         // the size of the data that we are about to read in.
                         cost_strategy.charge_instr_with_size(Opcodes::MOVE_FROM, size)?;
                     }
                     Bytecode::MoveFromGeneric(si_idx) => {
                         let addr = interpreter.operand_stack.pop_as::<AccountAddress>()?;
-                        let size = interpreter.global_data_op_generic(
-                            resolver,
-                            data_store,
-                            addr,
-                            *si_idx,
-                            self,
-                            Interpreter::move_from,
-                        )?;
+                        let ty = resolver.instantiate_generic_type(*si_idx, self.ty_args())?;
+                        let size = interpreter.move_from(data_store, addr, &ty)?;
                         // TODO: Have this calculate before pulling in the data based upon
                         // the size of the data that we are about to read in.
                         cost_strategy.charge_instr_with_size(Opcodes::MOVE_FROM_GENERIC, size)?;
-                    }
-                    Bytecode::MoveToSender(_) => {
-                        return Err(VMStatus::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
-                            .with_message(
-                                "MoveToSender is deprecated and will be removed soon".to_string(),
-                            ));
-                    }
-                    Bytecode::MoveToSenderGeneric(_) => {
-                        return Err(VMStatus::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
-                            .with_message(
-                                "MoveToSender is deprecated and will be removed soon".to_string(),
-                            ));
                     }
                     Bytecode::MoveTo(sd_idx) => {
                         let resource = interpreter.operand_stack.pop_as::<Struct>()?;
@@ -1091,13 +1031,10 @@ impl Frame {
                             .value_as::<Reference>()?
                             .read_ref()?
                             .value_as::<AccountAddress>()?;
-                        let size = interpreter.global_data_op(
-                            resolver,
-                            data_store,
-                            addr,
-                            *sd_idx,
-                            Interpreter::move_to(resource),
-                        )?;
+                        let ty = resolver.get_struct_type(*sd_idx);
+                        // REVIEW: Can we simplify Interpreter::move_to?
+                        let size =
+                            Interpreter::move_to(resource)(interpreter, data_store, addr, ty)?;
                         cost_strategy.charge_instr_with_size(Opcodes::MOVE_TO, size)?;
                     }
                     Bytecode::MoveToGeneric(si_idx) => {
@@ -1108,14 +1045,9 @@ impl Frame {
                             .value_as::<Reference>()?
                             .read_ref()?
                             .value_as::<AccountAddress>()?;
-                        let size = interpreter.global_data_op_generic(
-                            resolver,
-                            data_store,
-                            addr,
-                            *si_idx,
-                            self,
-                            Interpreter::move_to(resource),
-                        )?;
+                        let ty = resolver.instantiate_generic_type(*si_idx, self.ty_args())?;
+                        let size =
+                            Interpreter::move_to(resource)(interpreter, data_store, addr, ty)?;
                         cost_strategy.charge_instr_with_size(Opcodes::MOVE_TO_GENERIC, size)?;
                     }
                     Bytecode::FreezeRef => {
@@ -1142,7 +1074,7 @@ impl Frame {
                     // locals.
                     return Ok(ExitCode::Return);
                 } else {
-                    return Err(VMStatus::new(StatusCode::PC_OVERFLOW));
+                    return Err(PartialVMError::new(StatusCode::PC_OVERFLOW));
                 }
             }
         }
@@ -1155,4 +1087,33 @@ impl Frame {
     fn resolver<'a>(&self, loader: &'a Loader) -> Resolver<'a> {
         self.function.get_resolver(loader)
     }
+
+    fn location(&self) -> Location {
+        match self.function.module_id() {
+            None => Location::Script,
+            Some(id) => Location::Module(id.clone()),
+        }
+    }
+}
+
+// Verify the the type of the arguments in input from the outside is restricted (`is_valid_arg()`)
+// and it honors the signature of the function invoked.
+// TODO: we need to check the instantiation, once we expose signatures with generic argument
+fn verify_args(signature: &Signature, _ty_args: &[Type], args: &[Value]) -> PartialVMResult<()> {
+    if signature.len() != args.len() {
+        return Err(
+            PartialVMError::new(StatusCode::TYPE_MISMATCH).with_message(format!(
+                "argument length mismatch: expected {} got {}",
+                signature.len(),
+                args.len()
+            )),
+        );
+    }
+    for (tok, val) in signature.0.iter().zip(args) {
+        if !val.is_valid_arg(tok) {
+            return Err(PartialVMError::new(StatusCode::TYPE_MISMATCH)
+                .with_message(format!("unexpected type: {:?}, arg: {:?}", tok, val)));
+        }
+    }
+    Ok(())
 }

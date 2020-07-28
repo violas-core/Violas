@@ -8,6 +8,7 @@ use serde_json::Value;
 use std::{
     collections::HashMap,
     env,
+    fmt::Display,
     fs::{File, OpenOptions},
     io,
     io::Write as IoWrite,
@@ -41,27 +42,39 @@ const SEVERITY_WARNING: usize = 2;
 
 #[derive(Default, Serialize)]
 pub struct StructuredLogEntry {
+    /// log message set by macros like info!
     #[serde(skip_serializing_if = "Option::is_none")]
     log: Option<String>,
+    /// description of the log
     #[serde(skip_serializing_if = "Option::is_none")]
     pattern: Option<&'static str>,
+    /// category of the event
+    #[serde(skip_serializing_if = "Option::is_none")]
+    category: Option<&'static str>,
+    /// name of the event
     #[serde(skip_serializing_if = "Option::is_none")]
     name: Option<&'static str>,
+    /// rust module (e.g. consensus::round_manager)
     #[serde(skip_serializing_if = "Option::is_none")]
     module: Option<&'static str>,
+    /// filename + line (e.g. consensus/src/round_manager.rs:678)
     #[serde(skip_serializing_if = "Option::is_none")]
     location: Option<&'static str>,
+    /// git revision
     #[serde(skip_serializing_if = "Option::is_none")]
     git_rev: Option<&'static str>,
+    /// time of the log
     #[serde(skip_serializing_if = "Option::is_none")]
     timestamp: Option<String>,
+    /// warning or critical
     #[serde(skip_serializing_if = "Option::is_none")]
     severity: Option<usize>,
+    /// arbitrary data that can be logged
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     data: HashMap<&'static str, Value>,
 }
 
-#[must_use = "use StructuredLogEntry::send to send structured log"]
+#[must_use = "use send_struct_log! macro to send structured log"]
 impl StructuredLogEntry {
     pub fn new_unnamed() -> Self {
         let mut ret = Self::default();
@@ -69,8 +82,9 @@ impl StructuredLogEntry {
         ret
     }
 
-    pub fn new_named(name: &'static str) -> Self {
+    pub fn new_named(category: &'static str, name: &'static str) -> Self {
         let mut ret = Self::default();
+        ret.category = Some(category);
         ret.name = Some(name);
         ret.timestamp = Some(Utc::now().format("%F %T").to_string());
         ret
@@ -97,6 +111,11 @@ impl StructuredLogEntry {
             serde_json::to_value(value).expect("Failed to serialize StructuredLogEntry key"),
         );
         self
+    }
+
+    /// Used for errors and other types that don't serialize well
+    pub fn data_display<D: Display>(self, key: &'static str, value: D) -> Self {
+        self.data(key, value.to_string())
     }
 
     pub fn field<D: Serialize>(self, field: &LoggingField<D>, value: D) -> Self {

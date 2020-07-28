@@ -9,7 +9,8 @@ use libra_state_view::StateView;
 use libra_types::{
     access_path::AccessPath,
     account_address::AccountAddress,
-    account_config::{association_address, validator_set_address, LBR_NAME},
+    account_config::{libra_root_address, validator_set_address, LBR_NAME},
+    chain_id::ChainId,
     contract_event::ContractEvent,
     event::EventKey,
     on_chain_config::{
@@ -19,7 +20,7 @@ use libra_types::{
         RawTransaction, Script, SignedTransaction, Transaction, TransactionArgument,
         TransactionOutput, TransactionPayload, TransactionStatus,
     },
-    vm_error::{StatusCode, VMStatus},
+    vm_status::{KeptVMStatus, StatusCode, VMStatus},
     write_set::{WriteOp, WriteSet, WriteSetMut},
 };
 use libra_vm::VMExecutor;
@@ -42,12 +43,11 @@ enum MockVMTransaction {
 }
 
 pub static KEEP_STATUS: Lazy<TransactionStatus> =
-    Lazy::new(|| TransactionStatus::Keep(VMStatus::new(StatusCode::EXECUTED)));
+    Lazy::new(|| TransactionStatus::Keep(KeptVMStatus::Executed));
 
 // We use 10 as the assertion error code for insufficient balance within the Libra coin contract.
-pub static DISCARD_STATUS: Lazy<TransactionStatus> = Lazy::new(|| {
-    TransactionStatus::Discard(VMStatus::new(StatusCode::ABORTED).with_sub_status(10))
-});
+pub static DISCARD_STATUS: Lazy<TransactionStatus> =
+    Lazy::new(|| TransactionStatus::Discard(StatusCode::INSUFFICIENT_BALANCE_FOR_TRANSACTION_FEE));
 
 pub struct MockVM;
 
@@ -140,12 +140,12 @@ impl VMExecutor for MockVM {
                         write_set,
                         events,
                         0,
-                        TransactionStatus::Keep(VMStatus::new(StatusCode::EXECUTED)),
+                        TransactionStatus::Keep(KeptVMStatus::Executed),
                     ));
                 }
                 MockVMTransaction::Reconfiguration => {
                     read_balance_from_storage(state_view, &balance_ap(validator_set_address()));
-                    read_balance_from_storage(state_view, &balance_ap(association_address()));
+                    read_balance_from_storage(state_view, &balance_ap(libra_root_address()));
                     outputs.push(TransactionOutput::new(
                         // WriteSet cannot be empty so use genesis writeset only for testing.
                         gen_genesis_writeset(),
@@ -314,7 +314,8 @@ fn encode_transaction(sender: AccountAddress, program: Script) -> Transaction {
         0,
         0,
         LBR_NAME.to_owned(),
-        std::time::Duration::from_secs(0),
+        0,
+        ChainId::test(),
     );
 
     let privkey = Ed25519PrivateKey::generate_for_testing();
@@ -327,7 +328,8 @@ fn encode_transaction(sender: AccountAddress, program: Script) -> Transaction {
 }
 
 pub fn encode_reconfiguration_transaction(sender: AccountAddress) -> Transaction {
-    let raw_transaction = RawTransaction::new_write_set(sender, 0, WriteSet::default());
+    let raw_transaction =
+        RawTransaction::new_write_set(sender, 0, WriteSet::default(), ChainId::test());
 
     let privkey = Ed25519PrivateKey::generate_for_testing();
     Transaction::UserTransaction(

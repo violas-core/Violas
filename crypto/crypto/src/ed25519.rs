@@ -9,29 +9,34 @@
 //! # Examples
 //!
 //! ```
-//! use libra_crypto::hash::{CryptoHasher, TestOnlyHasher};
+//! use libra_crypto_derive::{CryptoHasher, LCSCryptoHash};
 //! use libra_crypto::{
 //!     ed25519::*,
 //!     traits::{Signature, SigningKey, Uniform},
 //! };
 //! use rand::{rngs::StdRng, SeedableRng};
+//! use serde::{Serialize, Deserialize};
 //!
-//! let mut hasher = TestOnlyHasher::default();
-//! hasher.update("Test message".as_bytes());
-//! let hashed_message = hasher.finish();
+//! #[derive(Serialize, Deserialize, CryptoHasher, LCSCryptoHash)]
+//! pub struct TestCryptoDocTest(String);
+//! let message = TestCryptoDocTest("Test message".to_string());
 //!
 //! let mut rng: StdRng = SeedableRng::from_seed([0; 32]);
 //! let private_key = Ed25519PrivateKey::generate(&mut rng);
 //! let public_key: Ed25519PublicKey = (&private_key).into();
-//! let signature = private_key.sign_message(&hashed_message);
-//! assert!(signature.verify(&hashed_message, &public_key).is_ok());
+//! let signature = private_key.sign(&message);
+//! assert!(signature.verify(&message, &public_key).is_ok());
 //! ```
 //! **Note**: The above example generates a private key using a private function intended only for
 //! testing purposes. Production code should find an alternate means for secure key generation.
+#[cfg(feature = "vanilla")]
+use vanilla_curve25519_dalek as curve25519_dalek;
+#[cfg(feature = "vanilla")]
+use vanilla_ed25519_dalek as ed25519_dalek;
+
 use crate::{
     hash::{CryptoHash, CryptoHasher},
     traits::*,
-    HashValue,
 };
 use anyhow::{anyhow, Result};
 use core::convert::TryFrom;
@@ -218,21 +223,12 @@ impl SigningKey for Ed25519PrivateKey {
     type VerifyingKeyMaterial = Ed25519PublicKey;
     type SignatureMaterial = Ed25519Signature;
 
-    fn sign<T: CryptoHash + Serialize>(
-        &self,
-        message: &T,
-    ) -> Result<Ed25519Signature, CryptoMaterialError> {
+    fn sign<T: CryptoHash + Serialize>(&self, message: &T) -> Ed25519Signature {
         let mut bytes = <T::Hasher as CryptoHasher>::seed().to_vec();
         lcs::serialize_into(&mut bytes, &message)
-            .map_err(|_| CryptoMaterialError::SerializationError)?;
-        Ok(Ed25519PrivateKey::sign_arbitrary_message(
-            &self,
-            bytes.as_ref(),
-        ))
-    }
-
-    fn sign_message(&self, message: &HashValue) -> Ed25519Signature {
-        Ed25519PrivateKey::sign_arbitrary_message(&self, message.as_ref())
+            .map_err(|_| CryptoMaterialError::SerializationError)
+            .expect("Serialization of signable material should not fail.");
+        Ed25519PrivateKey::sign_arbitrary_message(&self, bytes.as_ref())
     }
 
     #[cfg(any(test, feature = "fuzzing"))]
@@ -400,12 +396,10 @@ impl Signature for Ed25519Signature {
     type VerifyingKeyMaterial = Ed25519PublicKey;
     type SigningKeyMaterial = Ed25519PrivateKey;
 
-    /// Checks that `self` is valid for `message` using `public_key`.
-    fn verify(&self, message: &HashValue, public_key: &Ed25519PublicKey) -> Result<()> {
-        self.verify_arbitrary_msg(message.as_ref(), public_key)
-    }
-
-    fn verify_struct_msg<T: CryptoHash + Serialize>(
+    /// Verifies that the provided signature is valid for the provided
+    /// message, according to the RFC8032 algorithm. This strict verification performs the
+    /// recommended check of 5.1.7 §3, on top of the required RFC8032 verifications.
+    fn verify<T: CryptoHash + Serialize>(
         &self,
         message: &T,
         public_key: &Ed25519PublicKey,
@@ -424,7 +418,7 @@ impl Signature for Ed25519Signature {
 
         public_key
             .0
-            .verify(message, &self.0)
+            .verify_strict(message, &self.0)
             .map_err(|e| anyhow!("{}", e))
             .and(Ok(()))
     }
@@ -433,22 +427,26 @@ impl Signature for Ed25519Signature {
         self.0.to_bytes().to_vec()
     }
 
-    #[cfg(feature = "batch")]
     /// Batch signature verification as described in the original EdDSA article
     /// by Bernstein et al. "High-speed high-security signatures". Current implementation works for
     /// signatures on the same message and it checks for malleability.
-    fn batch_verify_signatures(
-        message: &HashValue,
+    #[cfg(all(feature = "batch", not(feature = "vanilla")))] // see https://github.com/dalek-cryptography/ed25519-dalek/issues/126
+    fn batch_verify<T: CryptoHash + Serialize>(
+        message: &T,
         keys_and_signatures: Vec<(Self::VerifyingKeyMaterial, Self)>,
     ) -> Result<()> {
         for (_, sig) in keys_and_signatures.iter() {
             Ed25519Signature::check_malleability(&sig.to_bytes())?
         }
+        let mut message_bytes = <T::Hasher as CryptoHasher>::seed().to_vec();
+        lcs::serialize_into(&mut message_bytes, &message)
+            .map_err(|_| CryptoMaterialError::SerializationError)?;
+
         let batch_argument = keys_and_signatures
             .iter()
             .map(|(key, signature)| (key.0, signature.0));
         let (dalek_public_keys, dalek_signatures): (Vec<_>, Vec<_>) = batch_argument.unzip();
-        let message_ref = &message.as_ref()[..];
+        let message_ref = &(&message_bytes)[..];
         // The original batching algorithm works for different messages and it expects as many
         // messages as the number of signatures. In our case, we just populate the same
         // message to meet dalek's api requirements.

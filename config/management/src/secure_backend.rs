@@ -10,17 +10,12 @@ use std::{
     path::PathBuf,
     str::FromStr,
 };
+use structopt::StructOpt;
 
 pub const DISK: &str = "disk";
 pub const GITHUB: &str = "github";
 pub const MEMORY: &str = "memory";
 pub const VAULT: &str = "vault";
-
-#[derive(Copy, Clone, Debug)]
-pub enum StorageLocation {
-    LocalStorage,
-    RemoteStorage,
-}
 
 /// SecureBackend is a parameter that is stored as set of semi-colon separated key/value pairs. The
 /// only expected key is backend which defines which of the SecureBackends the parameters refer to.
@@ -40,13 +35,11 @@ impl SecureBackend {
 
     /// Creates and returns a new Storage instance using the SecureBackend.
     /// This method ensures the storage instance is available before returning.
-    pub fn create_storage(self, location: StorageLocation) -> Result<Storage, Error> {
-        let storage: Storage = self.try_into()?;
-        storage.available().map_err(|e| match location {
-            StorageLocation::LocalStorage => Error::LocalStorageUnavailable(e.to_string()),
-            StorageLocation::RemoteStorage => Error::RemoteStorageUnavailable(e.to_string()),
-        })?;
-
+    pub fn create_storage(&self, name: &'static str) -> Result<Storage, Error> {
+        let storage: Storage = self.clone().try_into()?;
+        storage
+            .available()
+            .map_err(|e| Error::StorageUnavailable(name, e.to_string()))?;
         Ok(storage)
     }
 
@@ -161,6 +154,64 @@ impl TryInto<Storage> for SecureBackend {
         Ok((&config).into())
     }
 }
+
+macro_rules! secure_backend {
+    ($struct_name:ident, $field_name:ident, $struct_type:ty, $purpose:literal) => {
+        #[derive(Clone, Debug, StructOpt)]
+        pub struct $struct_name {
+            #[structopt(long,
+                help = concat!("Backend for ", $purpose),
+                long_help = concat!("Backend for ", $purpose, r#"
+
+Secure backends are represented as a semi-colon deliminted key value
+pair: "k0=v0;k1=v1;...".  The current supported formats are:
+    Vault: "backend=vault;server=URL;token=PATH_TO_TOKEN"
+        an optional namespace: "namespace=NAMESPACE"
+        an optional server certificate: "ca_certificate=PATH_TO_CERT"
+    GitHub: "backend=github;repository_owner=REPOSITORY_OWNER;repository=REPOSITORY;token=PATH_TO_TOKEN"
+        an optional namespace: "namespace=NAMESPACE"
+    InMemory: "backend=memory"
+    OnDisk: "backend=disk;path=LOCAL_PATH"
+                "#)
+            )]
+            pub $field_name: $struct_type,
+        }
+
+        impl $struct_name {
+            pub fn name(&self) -> &'static str {
+                stringify!(struct_name)
+            }
+        }
+    }
+}
+
+secure_backend!(
+    ValidatorBackend,
+    validator_backend,
+    SecureBackend,
+    "validator configuration"
+);
+
+secure_backend!(
+    SharedBackend,
+    shared_backend,
+    SecureBackend,
+    "shared information"
+);
+
+secure_backend!(
+    OptionalValidatorBackend,
+    validator_backend,
+    Option<SecureBackend>,
+    "validator configuration"
+);
+
+secure_backend!(
+    OptionalSharedBackend,
+    shared_backend,
+    Option<SecureBackend>,
+    "shared information"
+);
 
 #[allow(dead_code)]
 #[cfg(test)]

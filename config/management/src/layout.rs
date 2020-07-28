@@ -1,9 +1,7 @@
 // Copyright (c) The Libra Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::{
-    constants, error::Error, secure_backend::StorageLocation::RemoteStorage, SingleBackend,
-};
+use crate::{constants, error::Error, secure_backend::SharedBackend};
 use libra_secure_storage::{KVStorage, Value};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -20,7 +18,7 @@ use structopt::StructOpt;
 pub struct Layout {
     pub operators: Vec<String>,
     pub owners: Vec<String>,
-    pub association: Vec<String>,
+    pub libra_root: Vec<String>,
 }
 
 impl Layout {
@@ -52,7 +50,7 @@ pub struct SetLayout {
     #[structopt(long)]
     path: PathBuf,
     #[structopt(flatten)]
-    backend: SingleBackend,
+    backend: SharedBackend,
 }
 
 impl SetLayout {
@@ -60,10 +58,15 @@ impl SetLayout {
         let layout = Layout::from_disk(&self.path)?;
         let data = layout.to_toml()?;
 
-        let mut remote_storage = self.backend.backend.create_storage(RemoteStorage)?;
+        let mut remote_storage = self
+            .backend
+            .shared_backend
+            .create_storage(self.backend.name())?;
         remote_storage
             .set(constants::LAYOUT, Value::String(data))
-            .map_err(|e| Error::RemoteStorageWriteError(constants::LAYOUT, e.to_string()))?;
+            .map_err(|e| {
+                Error::StorageWriteError(self.backend.name(), constants::LAYOUT, e.to_string())
+            })?;
 
         Ok(layout)
     }
@@ -78,7 +81,7 @@ mod tests {
         let contents = "\
             operators = [\"alice\", \"bob\"]\n\
             owners = [\"carol\"]\n\
-            association = [\"dave\"]\n\
+            libra_root = [\"dave\"]\n\
         ";
 
         let layout = Layout::parse(contents).unwrap();
@@ -87,6 +90,6 @@ mod tests {
             vec!["alice".to_string(), "bob".to_string()]
         );
         assert_eq!(layout.owners, vec!["carol".to_string()]);
-        assert_eq!(layout.association, vec!["dave".to_string()]);
+        assert_eq!(layout.libra_root, vec!["dave".to_string()]);
     }
 }

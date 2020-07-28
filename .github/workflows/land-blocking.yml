@@ -61,13 +61,17 @@ jobs:
             --tag ${TEST_TAG} \
             -E RUST_LOG=debug \
             --report report.json \
-            --run bench
+            --suite land_blocking
+          ret=$?
+          echo "::set-env name=CTI_EXIT_CODE::$ret"
           if [ -s "report.json" ]; then
             echo "report.json start"
             cat report.json
             echo "report.json end"
           else
             echo "report.json is empty or not found."
+          fi
+          if [ $ret -ne 0 ]; then
             jq -n \
               --arg msg "*${{ github.job }}* job in ${{ github.workflow }} workflow failed.
           $(tail -5 $CTI_OUTPUT_LOG)" \
@@ -120,12 +124,18 @@ jobs:
             ${result.text}
             \`\`\`
             `;
-              let tps = result.metrics.find(m => m.experiment == "all up" && m.metric == "avg_tps").value;
-              let min_tps = 900;
-              if (tps < min_tps) {
-                body += "\n :exclamation: Performance regression is detected on this PR";
-                body += "\n TPS with PR: " + tps + ", this is lower then minimum allowed " + min_tps + " TPS.";
+              // Check CTI exit code for errors
+              if (parseInt(env_vars.CTI_EXIT_CODE) != 0) {
+                body += "\n :exclamation: Cluster Test failed - non-zero exit code for `cti` \n"
                 should_fail = true;
+              } else {
+                let tps = result.metrics.find(m => m.experiment == "all up" && m.metric == "avg_tps").value;
+                let min_tps = 900;
+                if (tps < min_tps) {
+                  body += "\n :exclamation: Performance regression is detected on this PR";
+                  body += "\n TPS with PR: " + tps + ", this is lower then minimum allowed " + min_tps + " TPS.";
+                  should_fail = true;
+                }
               }
             } catch (err) {
               if (err.code === 'ENOENT') {
@@ -149,7 +159,7 @@ jobs:
                   console.error("Failed to check infra error in CT output log.\n", err);
                 }
               } else {
-                body = "Cluster Test failed - test report processing failed.";
+                body += "\n Cluster Test failed - test report processing failed.";
                 console.error(err);
               }
               body += " See https://github.com/libra/libra/actions/runs/${{github.run_id}}";

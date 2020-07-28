@@ -1,17 +1,8 @@
-//! account: default, 0LBR
-
-//! new-transaction
-//! sender: blessed
-import 0x1.LBR;
-import 0x1.LibraAccount;
-import 0x1.Libra;
-main(blessed: &signer) {
-    LibraAccount.deposit<LBR.LBR>(copy(blessed), {{default}}, LBR.mint(move(blessed), 100000));
-    return;
-}
+//! account: default, 100000Coin1
 
 //! new-transaction
 //! gas-price: 1
+//! gas-currency: Coin1
 //! max-gas: 10000
 //! sender: default
 main() {
@@ -19,21 +10,22 @@ main() {
     return;
 }
 
+// TODO(status_migration) Test fails if OUT_OF_GAS is last of the 3
+// check: OUT_OF_GAS
 // check: gas_used
 // check: 10000
-// check: OUT_OF_GAS
 
 
 //! new-transaction
 //! sender: default
 import 0x1.LibraAccount;
-import 0x1.LBR;
+import 0x1.Coin1;
 import 0x1.Signer;
 
 main(account: &signer) {
     let sender: address;
     sender = Signer.address_of(move(account));
-    assert(LibraAccount.balance<LBR.LBR>(move(sender)) == 90000, 42);
+    assert(LibraAccount.balance<Coin1.Coin1>(move(sender)) == 90000, 42);
     return;
 }
 

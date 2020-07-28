@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{
+    constants,
     peer::DisconnectReason,
     peer_manager::{
         conn_notifs_channel, error::PeerManagerError, ConnectionNotification, ConnectionRequest,
@@ -105,9 +106,10 @@ fn build_test_peer_manager(
         connection_reqs_rx,
         HashMap::from_iter([(TEST_PROTOCOL, hello_tx)].iter().cloned()),
         vec![conn_status_tx],
-        1024, /* max concurrent network requests */
-        1024, /* max concurrent network notifications */
-        1024, /* channel size */
+        constants::NETWORK_CHANNEL_SIZE,
+        constants::MAX_CONCURRENT_NETWORK_REQS,
+        constants::MAX_CONCURRENT_NETWORK_NOTIFS,
+        constants::MAX_FRAME_SIZE,
     );
 
     (
@@ -586,7 +588,7 @@ fn test_dial_disconnect() {
         let conn_notif = conn_status_rx.next().await.unwrap();
         assert!(matches!(
             conn_notif,
-            ConnectionNotification::NewPeer(_, _, _)
+            ConnectionNotification::NewPeer(_, _, _, _)
         ));
 
         // Send DisconnectPeer request to PeerManager.
@@ -616,7 +618,7 @@ fn test_dial_disconnect() {
         let conn_notif = conn_status_rx.next().await.unwrap();
         assert!(matches!(
             conn_notif,
-            ConnectionNotification::LostPeer(_, _, _)
+            ConnectionNotification::LostPeer(_, _, _, _)
         ));
 
         // Sender of disconnect request should receive acknowledgement once connection is closed.

@@ -38,6 +38,7 @@ use libra_types::account_address::AccountAddress;
     } else {
         r#"
 use libra_types::{AccountAddress, TypeTag, Script, TransactionArgument};
+use serde_bytes::ByteBuf;
 "#
     };
     writeln!(out, "{}", preamble)
@@ -66,19 +67,19 @@ fn output_builder(out: &mut dyn Write, abi: &ScriptABI, local_types: bool) -> Re
     )"#,
             quote_code(abi.code()),
             quote_type_arguments(abi.ty_args()),
-            quote_arguments(abi.args()),
+            quote_arguments(abi.args(), local_types),
         )?;
     } else {
         writeln!(
             out,
             r#"    Script {{
-        code: {},
+        code: ByteBuf::from({}),
         ty_args: vec![{}],
         args: vec![{}],
     }}"#,
             quote_code(abi.code()),
             quote_type_arguments(abi.ty_args()),
-            quote_arguments(abi.args()),
+            quote_arguments(abi.args(), local_types),
         )?;
     }
     writeln!(out, "}}")?;
@@ -122,9 +123,9 @@ fn quote_type_arguments(ty_args: &[TypeArgumentABI]) -> String {
         .join(", ")
 }
 
-fn quote_arguments(args: &[ArgumentABI]) -> String {
+fn quote_arguments(args: &[ArgumentABI], local_types: bool) -> String {
     args.iter()
-        .map(|arg| make_transaction_argument(arg.type_tag(), arg.name()))
+        .map(|arg| make_transaction_argument(arg.type_tag(), arg.name(), local_types))
         .collect::<Vec<_>>()
         .join(", ")
 }
@@ -146,7 +147,7 @@ fn quote_type(type_tag: &TypeTag) -> String {
     }
 }
 
-fn make_transaction_argument(type_tag: &TypeTag, name: &str) -> String {
+fn make_transaction_argument(type_tag: &TypeTag, name: &str, local_types: bool) -> String {
     use TypeTag::*;
     match type_tag {
         Bool => format!("TransactionArgument::Bool({})", name),
@@ -155,7 +156,13 @@ fn make_transaction_argument(type_tag: &TypeTag, name: &str) -> String {
         U128 => format!("TransactionArgument::U128({})", name),
         Address => format!("TransactionArgument::Address({})", name),
         Vector(type_tag) => match type_tag.as_ref() {
-            U8 => format!("TransactionArgument::U8Vector({})", name),
+            U8 => {
+                if local_types {
+                    format!("TransactionArgument::U8Vector({})", name)
+                } else {
+                    format!("TransactionArgument::U8Vector(ByteBuf::from({}))", name)
+                }
+            }
             _ => type_not_allowed(type_tag),
         },
 
@@ -182,24 +189,33 @@ impl crate::SourceInstaller for Installer {
 
     fn install_transaction_builders(
         &self,
-        name: &str,
+        public_name: &str,
         abis: &[ScriptABI],
     ) -> std::result::Result<(), Self::Error> {
-        let dir_path = self.install_dir.join(name);
+        let (name, version) = {
+            let parts = public_name.splitn(2, ':').collect::<Vec<_>>();
+            if parts.len() >= 2 {
+                (parts[0].to_string(), parts[1].to_string())
+            } else {
+                (parts[0].to_string(), "0.1.0".to_string())
+            }
+        };
+        let dir_path = self.install_dir.join(&name);
         std::fs::create_dir_all(&dir_path)?;
         let mut cargo = std::fs::File::create(&dir_path.join("Cargo.toml"))?;
         write!(
             cargo,
             r#"[package]
 name = "{}"
-version = "0.1.0"
+version = "{}"
 edition = "2018"
 
 [dependencies]
 serde = {{ version = "1.0", features = ["derive"] }}
-libra_types = "{}"
+serde_bytes = "0.11"
+libra-types = {{ path = "../libra-types", version = "{}" }}
 "#,
-            name, self.libra_types_version,
+            name, version, self.libra_types_version,
         )?;
         std::fs::create_dir(dir_path.join("src"))?;
         let source_path = dir_path.join("src/lib.rs");

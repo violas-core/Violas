@@ -3,7 +3,7 @@
 
 #![forbid(unsafe_code)]
 
-use crate::instance::Instance;
+use crate::instance::{Instance, ValidatorGroup};
 use config_builder::ValidatorConfig;
 use libra_crypto::{
     ed25519::{Ed25519PrivateKey, Ed25519PublicKey},
@@ -18,6 +18,8 @@ pub struct Cluster {
     // guaranteed non-empty
     validator_instances: Vec<Instance>,
     fullnode_instances: Vec<Instance>,
+    lsr_instances: Vec<Instance>,
+    vault_instances: Vec<Instance>,
     mint_key_pair: KeyPair<Ed25519PrivateKey, Ed25519PublicKey>,
 }
 
@@ -41,6 +43,8 @@ impl Cluster {
         Self {
             validator_instances: instances,
             fullnode_instances: vec![],
+            lsr_instances: vec![],
+            vault_instances: vec![],
             mint_key_pair,
         }
     }
@@ -51,32 +55,66 @@ impl Cluster {
         let seed = seed[..32].try_into().expect("Invalid seed");
         let mut validator_config = ValidatorConfig::new();
         validator_config.seed = seed;
-        let (mint_key, _) = validator_config.build_faucet_key();
+        let (mint_key, _) = validator_config.build_libra_root_key();
         KeyPair::from(mint_key)
     }
 
-    pub fn new(validator_instances: Vec<Instance>, fullnode_instances: Vec<Instance>) -> Self {
+    pub fn new(
+        validator_instances: Vec<Instance>,
+        fullnode_instances: Vec<Instance>,
+        lsr_instances: Vec<Instance>,
+        vault_instances: Vec<Instance>,
+    ) -> Self {
         Self {
             validator_instances,
             fullnode_instances,
+            lsr_instances,
+            vault_instances,
             mint_key_pair: Self::get_mint_key_pair(),
         }
     }
 
     pub fn random_validator_instance(&self) -> Instance {
         let mut rnd = rand::thread_rng();
-        self.validator_instances.choose(&mut rnd).unwrap().clone()
+        self.validator_instances
+            .choose(&mut rnd)
+            .expect("random_validator_instance requires non-empty validator_instances")
+            .clone()
     }
 
     pub fn validator_instances(&self) -> &[Instance] {
         &self.validator_instances
     }
 
+    pub fn random_fullnode_instance(&self) -> Instance {
+        let mut rnd = rand::thread_rng();
+        self.fullnode_instances
+            .choose(&mut rnd)
+            .expect("random_full_node_instance requires non-empty fullnode_instances")
+            .clone()
+    }
+
     pub fn fullnode_instances(&self) -> &[Instance] {
         &self.fullnode_instances
     }
 
+    pub fn lsr_instances(&self) -> &[Instance] {
+        &self.lsr_instances
+    }
+
+    pub fn vault_instances(&self) -> &[Instance] {
+        &self.vault_instances
+    }
+
     pub fn all_instances(&self) -> impl Iterator<Item = &Instance> {
+        self.validator_instances
+            .iter()
+            .chain(self.fullnode_instances.iter())
+            .chain(self.lsr_instances.iter())
+            .chain(self.vault_instances.iter())
+    }
+
+    pub fn validator_and_fullnode_instances(&self) -> impl Iterator<Item = &Instance> {
         self.validator_instances
             .iter()
             .chain(self.fullnode_instances.iter())
@@ -88,6 +126,14 @@ impl Cluster {
 
     pub fn into_fullnode_instances(self) -> Vec<Instance> {
         self.fullnode_instances
+    }
+
+    pub fn into_lsr_instances(self) -> Vec<Instance> {
+        self.lsr_instances
+    }
+
+    pub fn into_vault_instances(self) -> Vec<Instance> {
+        self.vault_instances
     }
 
     pub fn mint_key_pair(&self) -> &KeyPair<Ed25519PrivateKey, Ed25519PublicKey> {
@@ -141,6 +187,8 @@ impl Cluster {
         Cluster {
             validator_instances: instances,
             fullnode_instances: vec![],
+            lsr_instances: vec![],
+            vault_instances: vec![],
             mint_key_pair: self.mint_key_pair.clone(),
         }
     }
@@ -149,6 +197,8 @@ impl Cluster {
         Cluster {
             validator_instances: vec![],
             fullnode_instances: instances,
+            lsr_instances: vec![],
+            vault_instances: vec![],
             mint_key_pair: self.mint_key_pair.clone(),
         }
     }
@@ -167,6 +217,15 @@ impl Cluster {
     }
 
     pub fn find_instance_by_pod(&self, pod: &str) -> Option<&Instance> {
-        self.all_instances().find(|i| i.peer_name() == pod)
+        self.validator_and_fullnode_instances()
+            .find(|i| i.peer_name() == pod)
+    }
+
+    pub fn instances_for_group(
+        &self,
+        validator_group: ValidatorGroup,
+    ) -> impl Iterator<Item = &Instance> {
+        self.all_instances()
+            .filter(move |v| v.validator_group() == validator_group)
     }
 }

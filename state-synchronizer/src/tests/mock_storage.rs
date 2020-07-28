@@ -4,7 +4,7 @@
 use crate::SynchronizerState;
 use anyhow::{anyhow, bail, Result};
 use executor_types::ExecutedTrees;
-use libra_crypto::{hash::CryptoHash, HashValue};
+use libra_crypto::HashValue;
 use libra_types::{
     account_address::AccountAddress,
     account_config::lbr_type_tag,
@@ -17,9 +17,10 @@ use libra_types::{
     validator_signer::ValidatorSigner,
 };
 use std::collections::{BTreeMap, HashMap};
-use transaction_builder::encode_transfer_with_metadata_script;
+use transaction_builder::encode_peer_to_peer_with_metadata_script;
 use vm_genesis::GENESIS_KEYPAIR;
 
+#[derive(Clone)]
 pub struct MockStorage {
     // some mock transactions in the storage
     transactions: Vec<Transaction>,
@@ -54,7 +55,7 @@ impl MockStorage {
 
     fn add_txns(&mut self, txns: &mut Vec<Transaction>) {
         self.transactions.append(txns);
-        let num_leaves = self.transactions.len();
+        let num_leaves = self.transactions.len() + 1;
         let frozen_subtree_roots = vec![HashValue::zero(); num_leaves.count_ones() as usize];
         self.synced_trees = ExecutedTrees::new(
             HashValue::zero(), /* dummy_state_root */
@@ -128,13 +129,17 @@ impl MockStorage {
         if verified_target_li.ledger_info().epoch() != self.epoch_num() {
             return;
         }
-        self.ledger_infos.insert(
-            verified_target_li.ledger_info().epoch(),
-            verified_target_li.clone(),
-        );
-        if let Some(next_epoch_state) = verified_target_li.ledger_info().next_epoch_state() {
-            self.epoch_num = next_epoch_state.epoch;
-            self.epoch_state = next_epoch_state.clone();
+
+        // store ledger info only if version matches last tx
+        if verified_target_li.ledger_info().version() == self.version() {
+            self.ledger_infos.insert(
+                verified_target_li.ledger_info().epoch(),
+                verified_target_li.clone(),
+            );
+            if let Some(next_epoch_state) = verified_target_li.ledger_info().next_epoch_state() {
+                self.epoch_num = next_epoch_state.epoch;
+                self.epoch_state = next_epoch_state.clone();
+            }
         }
     }
 
@@ -158,7 +163,7 @@ impl MockStorage {
     fn gen_mock_user_txn() -> Transaction {
         let sender = AccountAddress::random();
         let receiver = AuthenticationKey::random();
-        let program = encode_transfer_with_metadata_script(
+        let program = encode_peer_to_peer_with_metadata_script(
             lbr_type_tag(),
             receiver.derived_address(),
             1,
@@ -192,7 +197,7 @@ impl MockStorage {
             ),
             HashValue::zero(),
         );
-        let signature = self.signer.sign_message(ledger_info.hash());
+        let signature = self.signer.sign(&ledger_info);
         let mut signatures = BTreeMap::new();
         signatures.insert(self.signer.author(), signature);
         self.ledger_infos.insert(

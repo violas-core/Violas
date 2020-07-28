@@ -1,27 +1,47 @@
 //! account: alice, 1000000, 0, validator
+//! account: bob
 //! account: vivian, 1000000, 0, validator
 //! account: viola, 1000000, 0, validator
+//! account: dave
 
 //! block-prologue
 //! proposer: vivian
 //! block-time: 2
 
+//! sender: alice
+script {
+    use 0x1::ValidatorConfig;
+    fun main(account: &signer) {
+        // set bob to be alice's operator
+        ValidatorConfig::set_operator(account, {{bob}});
+    }
+}
+
 // check: EXECUTED
 
 //! new-transaction
-//! sender: association
+//! sender: viola
+script {
+    use 0x1::ValidatorConfig;
+    fun main(account: &signer) {
+        // set dave to be viola's operator
+        ValidatorConfig::set_operator(account, {{dave}});
+    }
+}
+
+// check: EXECUTED
+
+//! new-transaction
+//! sender: libraroot
 script{
     use 0x1::LibraSystem;
-    use 0x1::Roles::{Self, AssociationRootRole};
     // Decertify two validators to make sure we can remove both
     // from the set and trigger reconfiguration
     fun main(account: &signer) {
         assert(LibraSystem::is_validator({{alice}}) == true, 98);
         assert(LibraSystem::is_validator({{vivian}}) == true, 99);
         assert(LibraSystem::is_validator({{viola}}) == true, 100);
-        let assoc_root_role = Roles::extract_privilege_to_capability<AssociationRootRole>(account);
-        LibraSystem::remove_validator(&assoc_root_role, {{vivian}});
-        Roles::restore_capability_to_privilege(account, assoc_root_role);
+        LibraSystem::remove_validator(account, {{vivian}});
         assert(LibraSystem::is_validator({{alice}}) == true, 101);
         assert(LibraSystem::is_validator({{vivian}}) == false, 102);
         assert(LibraSystem::is_validator({{viola}}) == true, 103);
@@ -38,28 +58,27 @@ script{
 // check: EXECUTED
 
 //! new-transaction
-//! sender: viola
+//! sender: dave
 script{
+    use 0x1::LibraSystem;
     use 0x1::ValidatorConfig;
     // Two reconfigurations cannot happen in the same block
     fun main(account: &signer) {
+        // the local validator's key was the same as the key in the validator set
+        assert(ValidatorConfig::get_consensus_pubkey(&LibraSystem::get_validator_config({{viola}})) ==
+               ValidatorConfig::get_consensus_pubkey(&ValidatorConfig::get_config({{viola}})), 99);
         ValidatorConfig::set_config(account, {{viola}},
                                     x"d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
                                     x"", x"", x"", x"");
-    }
-}
-
-// check: EXECUTED
-
-//! new-transaction
-//! sender: association
-script{
-    use 0x1::LibraSystem;
-    use 0x1::Roles::{Self, AssociationRootRole};
-    fun main(account: &signer) {
-        let assoc_root_role = Roles::extract_privilege_to_capability<AssociationRootRole>(account);
-        LibraSystem::update_and_reconfigure(&assoc_root_role);
-        Roles::restore_capability_to_privilege(account, assoc_root_role);
+        // the local validator's key is now different from the one in the validator set
+        assert(ValidatorConfig::get_consensus_pubkey(&LibraSystem::get_validator_config({{viola}})) !=
+               ValidatorConfig::get_consensus_pubkey(&ValidatorConfig::get_config({{viola}})), 99);
+        let old_num_validators = LibraSystem::validator_set_size();
+        LibraSystem::update_config_and_reconfigure(account, {{viola}});
+        assert(old_num_validators == LibraSystem::validator_set_size(), 98);
+        // the local validator's key is now the same as the key in the validator set
+        assert(ValidatorConfig::get_consensus_pubkey(&LibraSystem::get_validator_config({{viola}})) ==
+               ValidatorConfig::get_consensus_pubkey(&ValidatorConfig::get_config({{viola}})), 99);
     }
 }
 
@@ -67,29 +86,33 @@ script{
 // check: EXECUTED
 
 //! new-transaction
-//! sender: viola
+//! sender: dave
 script{
+    use 0x1::LibraSystem;
     use 0x1::ValidatorConfig;
     fun main(account: &signer) {
         ValidatorConfig::set_config(account, {{viola}},
                                     x"3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
                                     x"", x"", x"", x"");
+        let old_num_validators = LibraSystem::validator_set_size();
+        LibraSystem::update_config_and_reconfigure(account, {{viola}});
+        assert(old_num_validators == LibraSystem::validator_set_size(), 98);
     }
 }
 
-// check: EXECUTED
+// check: ABORTED
+// check: 6
 
 //! new-transaction
-//! sender: association
-script{
+//! sender: blessed
+// freezing does not cause changes to the set
+script {
     use 0x1::LibraSystem;
-    use 0x1::Roles::{Self, AssociationRootRole};
-    fun main(account: &signer) {
-        let assoc_root_role = Roles::extract_privilege_to_capability<AssociationRootRole>(account);
-        LibraSystem::update_and_reconfigure(&assoc_root_role);
-        Roles::restore_capability_to_privilege(account, assoc_root_role);
+    use 0x1::AccountFreezing;
+    fun main(tc_account: &signer) {
+        assert(LibraSystem::is_validator({{alice}}) == true, 101);
+        AccountFreezing::freeze_account(tc_account, {{alice}});
+        assert(AccountFreezing::account_is_frozen({{alice}}), 1);
+        assert(LibraSystem::is_validator({{alice}}) == true, 102);
     }
 }
-
-// check: ABORT
-// check: 23

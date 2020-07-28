@@ -1,10 +1,13 @@
 // Copyright (c) The Libra Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::{account, account::AccountData, executor::FakeExecutor, gas_costs};
+use crate::{account, account::AccountData, executor::FakeExecutor};
 use libra_types::{
-    account_address::AccountAddress, account_config, on_chain_config::VMPublishingOption,
-    transaction::TransactionStatus, vm_error::StatusCode,
+    account_address::AccountAddress,
+    account_config,
+    on_chain_config::VMPublishingOption,
+    transaction::{Script, TransactionStatus},
+    vm_status::KeptVMStatus,
 };
 use move_core_types::identifier::Identifier;
 use vm::file_format::{
@@ -14,7 +17,7 @@ use vm::file_format::{
 
 #[test]
 fn script_code_unverifiable() {
-    let mut executor = FakeExecutor::from_genesis_with_options(VMPublishingOption::Open);
+    let mut executor = FakeExecutor::from_genesis_with_options(VMPublishingOption::open());
     // create and publish sender
     let sender = AccountData::new(1_000_000, 10);
     executor.add_account_data(&sender);
@@ -24,16 +27,13 @@ fn script_code_unverifiable() {
     script.code.code = vec![Bytecode::LdU8(0), Bytecode::Add, Bytecode::Ret];
     let mut blob = vec![];
     script.serialize(&mut blob).expect("script must serialize");
-    let txn = sender.account().create_signed_txn_with_args(
-        blob,
-        vec![],
-        vec![],
-        10,
-        gas_costs::TXN_RESERVED,
-        1,
-        account_config::LBR_NAME.to_owned(),
-    );
-
+    let txn = sender
+        .account()
+        .transaction()
+        .script(Script::new(blob, vec![], vec![]))
+        .sequence_number(10)
+        .gas_unit_price(1)
+        .sign();
     // execute transaction
     let output = &executor.execute_transaction(txn);
     let status = output.status();
@@ -42,8 +42,9 @@ fn script_code_unverifiable() {
         _ => panic!("TransactionStatus must be Keep"),
     }
     assert_eq!(
-        status.vm_status().major_status,
-        StatusCode::NEGATIVE_STACK_SIZE_WITHIN_BLOCK,
+        status.status(),
+        // StatusCode::NEGATIVE_STACK_SIZE_WITHIN_BLOCK
+        Ok(KeptVMStatus::VerificationError)
     );
     executor.apply_write_set(output.write_set());
 
@@ -62,7 +63,7 @@ fn script_code_unverifiable() {
 
 #[test]
 fn script_none_existing_module_dep() {
-    let mut executor = FakeExecutor::from_genesis_with_options(VMPublishingOption::Open);
+    let mut executor = FakeExecutor::from_genesis_with_options(VMPublishingOption::open());
     // create and publish sender
     let sender = AccountData::new(1_000_000, 10);
     executor.add_account_data(&sender);
@@ -99,15 +100,13 @@ fn script_none_existing_module_dep() {
     ];
     let mut blob = vec![];
     script.serialize(&mut blob).expect("script must serialize");
-    let txn = sender.account().create_signed_txn_with_args(
-        blob,
-        vec![],
-        vec![],
-        10,
-        gas_costs::TXN_RESERVED,
-        1,
-        account_config::LBR_NAME.to_owned(),
-    );
+    let txn = sender
+        .account()
+        .transaction()
+        .script(Script::new(blob, vec![], vec![]))
+        .sequence_number(10)
+        .gas_unit_price(1)
+        .sign();
 
     // execute transaction
     let output = &executor.execute_transaction(txn);
@@ -116,7 +115,11 @@ fn script_none_existing_module_dep() {
         TransactionStatus::Keep(_) => (),
         _ => panic!("TransactionStatus must be Keep"),
     }
-    assert_eq!(status.vm_status().major_status, StatusCode::LINKER_ERROR,);
+    assert_eq!(
+        status.status(),
+        //StatusCode::LINKER_ERROR
+        Ok(KeptVMStatus::VerificationError)
+    );
     executor.apply_write_set(output.write_set());
 
     // Check that numbers in store are correct.
@@ -134,7 +137,7 @@ fn script_none_existing_module_dep() {
 
 #[test]
 fn script_non_existing_function_dep() {
-    let mut executor = FakeExecutor::from_genesis_with_options(VMPublishingOption::Open);
+    let mut executor = FakeExecutor::from_genesis_with_options(VMPublishingOption::open());
     // create and publish sender
     let sender = AccountData::new(1_000_000, 10);
     executor.add_account_data(&sender);
@@ -171,15 +174,13 @@ fn script_non_existing_function_dep() {
     ];
     let mut blob = vec![];
     script.serialize(&mut blob).expect("script must serialize");
-    let txn = sender.account().create_signed_txn_with_args(
-        blob,
-        vec![],
-        vec![],
-        10,
-        gas_costs::TXN_RESERVED,
-        1,
-        account_config::LBR_NAME.to_owned(),
-    );
+    let txn = sender
+        .account()
+        .transaction()
+        .script(Script::new(blob, vec![], vec![]))
+        .sequence_number(10)
+        .gas_unit_price(1)
+        .sign();
 
     // execute transaction
     let output = &executor.execute_transaction(txn);
@@ -188,7 +189,11 @@ fn script_non_existing_function_dep() {
         TransactionStatus::Keep(_) => (),
         _ => panic!("TransactionStatus must be Keep"),
     }
-    assert_eq!(status.vm_status().major_status, StatusCode::LOOKUP_FAILED,);
+    assert_eq!(
+        status.status(),
+        // StatusCode::LOOKUP_FAILED
+        Ok(KeptVMStatus::VerificationError)
+    );
     executor.apply_write_set(output.write_set());
 
     // Check that numbers in store are correct.
@@ -206,7 +211,7 @@ fn script_non_existing_function_dep() {
 
 #[test]
 fn script_bad_sig_function_dep() {
-    let mut executor = FakeExecutor::from_genesis_with_options(VMPublishingOption::Open);
+    let mut executor = FakeExecutor::from_genesis_with_options(VMPublishingOption::open());
     // create and publish sender
     let sender = AccountData::new(1_000_000, 10);
     executor.add_account_data(&sender);
@@ -245,16 +250,13 @@ fn script_bad_sig_function_dep() {
     ];
     let mut blob = vec![];
     script.serialize(&mut blob).expect("script must serialize");
-    let txn = sender.account().create_signed_txn_with_args(
-        blob,
-        vec![],
-        vec![],
-        10,
-        gas_costs::TXN_RESERVED,
-        1,
-        account_config::LBR_NAME.to_owned(),
-    );
-
+    let txn = sender
+        .account()
+        .transaction()
+        .script(Script::new(blob, vec![], vec![]))
+        .sequence_number(10)
+        .gas_unit_price(1)
+        .sign();
     // execute transaction
     let output = &executor.execute_transaction(txn);
     let status = output.status();
@@ -262,7 +264,11 @@ fn script_bad_sig_function_dep() {
         TransactionStatus::Keep(_) => (),
         _ => panic!("TransactionStatus must be Keep"),
     }
-    assert_eq!(status.vm_status().major_status, StatusCode::TYPE_MISMATCH,);
+    assert_eq!(
+        status.status(),
+        // StatusCode::TYPE_MISMATCH
+        Ok(KeptVMStatus::VerificationError)
+    );
     executor.apply_write_set(output.write_set());
 
     // Check that numbers in store are correct.

@@ -37,12 +37,12 @@ use futures::{
 use libra_config::network_id::NetworkContext;
 use libra_logger::prelude::*;
 use libra_metrics::IntCounterVec;
-use libra_security_logger::{security_log, SecurityEvent};
 use libra_types::PeerId;
 use rand::{rngs::SmallRng, seq::SliceRandom, Rng, SeedableRng};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
+pub mod builder;
 #[cfg(test)]
 mod test;
 
@@ -187,33 +187,35 @@ where
             futures::select! {
                 event = self.network_rx.select_next_some() => {
                     match event {
-                        Ok(Event::NewPeer(peer_id)) => {
+                        Ok(Event::NewPeer(peer_id, _origin)) => {
                             self.connected.insert(peer_id, (self.round, 0));
                         },
-                        Ok(Event::LostPeer(peer_id)) => {
+                        Ok(Event::LostPeer(peer_id, _origin)) => {
                             self.connected.remove(&peer_id);
                         },
                         Ok(Event::RpcRequest((peer_id, msg, res_tx))) => {
                             match msg {
                             HealthCheckerMsg::Ping(ping) => self.handle_ping_request(peer_id, ping, res_tx),
-                            _ => security_log(SecurityEvent::InvalidHealthCheckerMsg)
-                                .error("Unexpected rpc message")
-                                    .data(&msg)
-                                    .data(&peer_id)
-                                    .log(),
+                            _ => {
+                                send_struct_log!(security_log(security_events::INVALID_HEALTHCHECKER_MSG)
+                                    .data("error", "Unexpected rpc message")
+                                    .data("message", &msg)
+                                    .data("peer_id", &peer_id)
+                                );
+                            },
                             };
                         }
-                        Ok(Event::Message(_)) => {
-                            security_log(SecurityEvent::InvalidNetworkEventHC)
-                                .error("Unexpected network event")
-                                .data(&event)
-                                .log();
+                        Ok(Event::Message(msg)) => {
+                            send_struct_log!(security_log(security_events::INVALID_NETWORK_EVENT_HC)
+                                .data("error", "Unexpected network event")
+                                .data("event_message", &msg)
+                            );
                             debug_assert!(false, "Unexpected network event");
                         },
                         Err(err) => {
-                            security_log(SecurityEvent::InvalidNetworkEventHC)
-                                .error(&err)
-                                .log();
+                            send_struct_log!(security_log(security_events::INVALID_NETWORK_EVENT_HC)
+                            .data_display("error", &err));
+
                             debug_assert!(false, "Unexpected network error");
                         }
                     }
@@ -307,12 +309,11 @@ where
                             }
                         });
                 } else {
-                    security_log(SecurityEvent::InvalidHealthCheckerMsg)
-                        .error("Pong nonce doesn't match our challenge Ping nonce")
-                        .data(&peer_id)
-                        .data(req_nonce)
-                        .data(pong.0)
-                        .log();
+                    send_struct_log!(security_log(security_events::INVALID_HEALTHCHECKER_MSG)
+                        .data("error", "Pong nonce doesn't match our challenge Ping nonce")
+                        .data("req_nonce", &req_nonce)
+                        .data("peer_id", &peer_id)
+                        .data("pong", pong.0));
                     debug_assert!(false, "Pong nonce doesn't match our challenge Ping nonce");
                 }
             }

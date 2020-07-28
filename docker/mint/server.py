@@ -24,12 +24,14 @@ def create_client():
         ac_port = os.environ['AC_PORT']
         url = "http://{}:{}".format(ac_host, ac_port)
         waypoint = open("/opt/libra/etc/waypoint.txt", "r").readline()
+        chain_id = os.environ['CFG_CHAIN_ID']
 
         print("Connecting to ac on: {}".format(url))
-        cmd = "/opt/libra/bin/cli --url {} -m {} --waypoint {}".format(
+        cmd = "/opt/libra/bin/cli --url {} -m {} --waypoint {} --chain-id {}".format(
             url,
             "/opt/libra/etc/mint.key",
-            waypoint)
+            waypoint,
+            chain_id)
 
         application.client = pexpect.spawn(cmd)
         application.client.delaybeforesend = 0.1
@@ -66,7 +68,7 @@ def send_transaction():
             "a m {} {} {} use_base_units".format(auth_key, amount, currency_code))
         application.client.expect("Mint request submitted", timeout=2)
 
-        application.client.sendline("a la")
+        application.client.sendline("q as 000000000000000000000000000000dd")
         application.client.expect(r"sequence_number: ([0-9]+)", timeout=1)
         application.client.terminate(True)
     except pexpect.exceptions.ExceptionPexpect:

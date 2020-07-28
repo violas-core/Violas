@@ -4,7 +4,7 @@
 use crate::{
     access_path::AccessPath,
     account_config::constants::{
-        association_address, type_tag_for_currency_code, CORE_CODE_ADDRESS,
+        libra_root_address, type_tag_for_currency_code, CORE_CODE_ADDRESS,
     },
     event::EventHandle,
 };
@@ -76,7 +76,7 @@ impl CurrencyInfoResource {
 
     pub fn resource_path_for(currency_code: Identifier) -> AccessPath {
         let resource_key = ResourceKey::new(
-            association_address(),
+            libra_root_address(),
             CurrencyInfoResource::struct_tag_for(currency_code),
         );
         AccessPath::resource_access_path(&resource_key)
@@ -92,5 +92,25 @@ impl CurrencyInfoResource {
 
     pub fn preburn_value(&self) -> u64 {
         self.preburn_value
+    }
+
+    pub fn mint_events(&self) -> &EventHandle {
+        &self.mint_events
+    }
+
+    pub fn burn_events(&self) -> &EventHandle {
+        &self.burn_events
+    }
+
+    pub fn preburn_events(&self) -> &EventHandle {
+        &self.preburn_events
+    }
+
+    pub fn cancel_burn_events(&self) -> &EventHandle {
+        &self.cancel_burn_events
+    }
+
+    pub fn exchange_rate_update_events(&self) -> &EventHandle {
+        &self.exchange_rate_update_events
     }
 }

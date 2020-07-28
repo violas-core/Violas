@@ -3,8 +3,7 @@ AccessPath:
   STRUCT:
     - address:
         TYPENAME: AccountAddress
-    - path:
-        SEQ: U8
+    - path: BYTES
 AccountAddress:
   NEWTYPESTRUCT:
     TUPLEARRAY:
@@ -84,6 +83,8 @@ BlockType:
       NilBlock: UNIT
     2:
       Genesis: UNIT
+ChainId:
+  NEWTYPESTRUCT: U8
 ChangeSet:
   STRUCT:
     - write_set:
@@ -134,8 +135,7 @@ ContractEventV0:
     - sequence_number: U64
     - type_tag:
         TYPENAME: TypeTag
-    - event_data:
-        SEQ: U8
+    - event_data: BYTES
 Ed25519PublicKey:
   NEWTYPESTRUCT: BYTES
 Ed25519Signature:
@@ -185,8 +185,7 @@ LedgerInfoWithV0:
             TYPENAME: Ed25519Signature
 Module:
   STRUCT:
-    - code:
-        SEQ: U8
+    - code: BYTES
 MultiEd25519PublicKey:
   NEWTYPESTRUCT: BYTES
 MultiEd25519Signature:
@@ -213,11 +212,12 @@ RawTransaction:
     - max_gas_amount: U64
     - gas_unit_price: U64
     - gas_currency_code: STR
-    - expiration_time: U64
+    - expiration_timestamp_secs: U64
+    - chain_id:
+        TYPENAME: ChainId
 Script:
   STRUCT:
-    - code:
-        SEQ: U8
+    - code: BYTES
     - ty_args:
         SEQ:
           TYPENAME: TypeTag
@@ -296,8 +296,7 @@ TransactionArgument:
           TYPENAME: AccountAddress
     4:
       U8Vector:
-        NEWTYPE:
-          SEQ: U8
+        NEWTYPE: BYTES
     5:
       Bool:
         NEWTYPE: BOOL
@@ -322,7 +321,7 @@ TransactionPayload:
     0:
       WriteSet:
         NEWTYPE:
-          TYPENAME: ChangeSet
+          TYPENAME: WriteSetPayload
     1:
       Script:
         NEWTYPE:
@@ -399,8 +398,7 @@ WriteOp:
       Deletion: UNIT
     1:
       Value:
-        NEWTYPE:
-          SEQ: U8
+        NEWTYPE: BYTES
 WriteSet:
   NEWTYPESTRUCT:
     TYPENAME: WriteSetMut
@@ -411,3 +409,16 @@ WriteSetMut:
           TUPLE:
             - TYPENAME: AccessPath
             - TYPENAME: WriteOp
+WriteSetPayload:
+  ENUM:
+    0:
+      Direct:
+        NEWTYPE:
+          TYPENAME: ChangeSet
+    1:
+      Script:
+        STRUCT:
+          - execute_as:
+              TYPENAME: AccountAddress
+          - script:
+              TYPENAME: Script

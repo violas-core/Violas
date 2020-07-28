@@ -6,34 +6,34 @@
 //! - All forward jumps do not enter into the middle of a loop
 //! - All "breaks" (forward, loop-exiting jumps) go to the "end" of the loop
 //! - All "continues" (back jumps in a loop) are only to the current loop
-use libra_types::vm_error::{StatusCode, VMStatus};
+use libra_types::vm_status::StatusCode;
 use std::{collections::HashSet, convert::TryInto};
 use vm::{
-    errors::{err_at_offset, VMResult},
-    file_format::{Bytecode, CodeOffset, CompiledModule, FunctionDefinition},
+    errors::{PartialVMError, PartialVMResult},
+    file_format::{Bytecode, CodeOffset, CodeUnit, FunctionDefinitionIndex},
 };
 
-pub fn verify(_module: &CompiledModule, function_definition: &FunctionDefinition) -> VMResult<()> {
-    let code = match &function_definition.code {
-        Some(code) => &code.code,
-        None => return Ok(()),
-    };
-
-    // check fall trhough
+pub fn verify(
+    current_function_opt: Option<FunctionDefinitionIndex>,
+    code: &CodeUnit,
+) -> PartialVMResult<()> {
+    let current_function = current_function_opt.unwrap_or(FunctionDefinitionIndex(0));
+    // check fall through
     // Check to make sure that the bytecode vector ends with a branching instruction.
-    match code.last() {
-        None => return Err(VMStatus::new(StatusCode::EMPTY_CODE_UNIT)),
+    match code.code.last() {
+        None => return Err(PartialVMError::new(StatusCode::EMPTY_CODE_UNIT)),
         Some(last) if !last.is_unconditional_branch() => {
-            return Err(err_at_offset(
-                StatusCode::INVALID_FALL_THROUGH,
-                code.len() - 1,
-            ))
+            return Err(PartialVMError::new(StatusCode::INVALID_FALL_THROUGH)
+                .at_code_offset(current_function, (code.code.len() - 1) as CodeOffset))
         }
         Some(_) => (),
     }
 
     // check jumps
-    let context = &ControlFlowVerifier { code };
+    let context = &ControlFlowVerifier {
+        current_function,
+        code: &code.code,
+    };
     let labels = instruction_labels(context);
     check_jumps(context, labels)
 }
@@ -45,6 +45,7 @@ enum Label {
 }
 
 struct ControlFlowVerifier<'a> {
+    current_function: FunctionDefinitionIndex,
     code: &'a Vec<Bytecode>,
 }
 
@@ -63,6 +64,10 @@ impl<'a> ControlFlowVerifier<'a> {
         self.code()
             .zip(labels)
             .map(|((i, instr), lbl)| (i, instr, lbl))
+    }
+
+    fn error(&self, status: StatusCode, offset: CodeOffset) -> PartialVMError {
+        PartialVMError::new(status).at_code_offset(self.current_function, offset)
     }
 }
 
@@ -89,7 +94,7 @@ fn instruction_labels(context: &ControlFlowVerifier) -> Vec<Label> {
 //   - All forward jumps do not enter into the middle of a loop
 //   - All "breaks" go to the "end" of the loop
 //   - All back jumps are only to the current loop
-fn check_jumps(context: &ControlFlowVerifier, labels: Vec<Label>) -> VMResult<()> {
+fn check_jumps(context: &ControlFlowVerifier, labels: Vec<Label>) -> PartialVMResult<()> {
     // All back jumps are only to the current loop
     check_continues(context, &labels)?;
     // All "breaks" go to the "end" of the loop
@@ -98,11 +103,13 @@ fn check_jumps(context: &ControlFlowVerifier, labels: Vec<Label>) -> VMResult<()
     check_no_loop_splits(context, &labels)
 }
 
-fn check_code<F: FnMut(&Vec<(CodeOffset, CodeOffset)>, CodeOffset, &Bytecode) -> VMResult<()>>(
+fn check_code<
+    F: FnMut(&Vec<(CodeOffset, CodeOffset)>, CodeOffset, &Bytecode) -> PartialVMResult<()>,
+>(
     context: &ControlFlowVerifier,
     labels: &[Label],
     mut check: F,
-) -> VMResult<()> {
+) -> PartialVMResult<()> {
     let mut loop_stack: Vec<(CodeOffset, CodeOffset)> = vec![];
     for (i, instr, label) in context.labeled_code(labels) {
         // Add loop to stack
@@ -128,7 +135,7 @@ fn check_code<F: FnMut(&Vec<(CodeOffset, CodeOffset)>, CodeOffset, &Bytecode) ->
 }
 
 // All back jumps are only to the current loop
-fn check_continues(context: &ControlFlowVerifier, labels: &[Label]) -> VMResult<()> {
+fn check_continues(context: &ControlFlowVerifier, labels: &[Label]) -> PartialVMResult<()> {
     check_code(context, labels, |loop_stack, i, instr| {
         match instr {
             // Back jump/"continue"
@@ -137,7 +144,7 @@ fn check_continues(context: &ControlFlowVerifier, labels: &[Label]) -> VMResult<
                 let is_continue = *j <= i;
                 if is_continue && j != cur_loop {
                     // Invalid back jump. Cannot back jump outside of the current loop
-                    Err(err_at_offset(StatusCode::INVALID_LOOP_CONTINUE, i as usize))
+                    Err(context.error(StatusCode::INVALID_LOOP_CONTINUE, i))
                 } else {
                     Ok(())
                 }
@@ -147,7 +154,7 @@ fn check_continues(context: &ControlFlowVerifier, labels: &[Label]) -> VMResult<
     })
 }
 
-fn check_breaks(context: &ControlFlowVerifier, labels: &[Label]) -> VMResult<()> {
+fn check_breaks(context: &ControlFlowVerifier, labels: &[Label]) -> PartialVMResult<()> {
     check_code(context, labels, |loop_stack, i, instr| {
         match instr {
             // Forward jump/"break"
@@ -158,7 +165,7 @@ fn check_breaks(context: &ControlFlowVerifier, labels: &[Label]) -> VMResult<()>
                     {
                         // Invalid loop break. Must break immediately to the instruction after
                         // the last continue
-                        Err(err_at_offset(StatusCode::INVALID_LOOP_BREAK, i as usize))
+                        Err(context.error(StatusCode::INVALID_LOOP_BREAK, i))
                     }
                     _ => Ok(()),
                 }
@@ -168,7 +175,7 @@ fn check_breaks(context: &ControlFlowVerifier, labels: &[Label]) -> VMResult<()>
     })
 }
 
-fn check_no_loop_splits(context: &ControlFlowVerifier, labels: &[Label]) -> VMResult<()> {
+fn check_no_loop_splits(context: &ControlFlowVerifier, labels: &[Label]) -> PartialVMResult<()> {
     let is_break = |loop_stack: &Vec<(CodeOffset, CodeOffset)>, jump_target: CodeOffset| -> bool {
         match loop_stack.last() {
             None => false,
@@ -190,7 +197,7 @@ fn check_no_loop_splits(context: &ControlFlowVerifier, labels: &[Label]) -> VMRe
                 };
                 if before_depth != after_depth {
                     // Invalid forward jump. Entered the middle of a loop
-                    Err(err_at_offset(StatusCode::INVALID_LOOP_SPLIT, i as usize))
+                    Err(context.error(StatusCode::INVALID_LOOP_SPLIT, i))
                 } else {
                     Ok(())
                 }

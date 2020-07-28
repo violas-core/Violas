@@ -6,9 +6,7 @@ use crate::{
     config::{global::Config as GlobalConfig, transaction::Config as TransactionConfig},
     errors::*,
 };
-use bytecode_verifier::verifier::{
-    verify_module_dependencies, verify_script_dependencies, VerifiedModule, VerifiedScript,
-};
+use bytecode_verifier::DependencyChecker;
 use compiled_stdlib::{stdlib_modules, StdLibOptions};
 use language_e2e_tests::executor::FakeExecutor;
 use libra_crypto::ed25519::{Ed25519PrivateKey, Ed25519PublicKey};
@@ -19,12 +17,13 @@ use libra_types::{
     account_config,
     account_config::LBR_NAME,
     block_metadata::BlockMetadata,
+    chain_id::ChainId,
     on_chain_config::VMPublishingOption,
     transaction::{
         Module as TransactionModule, RawTransaction, Script as TransactionScript,
         SignedTransaction, Transaction as LibraTransaction, TransactionOutput, TransactionStatus,
     },
-    vm_error::{StatusCode, VMStatus},
+    vm_status::KeptVMStatus,
 };
 use mirai_annotations::checked_verify;
 use move_core_types::{
@@ -34,9 +33,9 @@ use move_core_types::{
 use std::{
     fmt::{self, Debug},
     str::FromStr,
-    time::Duration,
 };
 use vm::{
+    errors::{Location, VMError},
     file_format::{CompiledModule, CompiledScript},
     views::ModuleView,
 };
@@ -199,7 +198,7 @@ impl fmt::Display for EvaluationLog {
 fn fetch_script_dependencies(
     exec: &mut FakeExecutor,
     script: &CompiledScript,
-) -> Vec<VerifiedModule> {
+) -> Vec<CompiledModule> {
     let inner = script.as_inner();
     let idents = inner.module_handles.iter().map(|handle| {
         ModuleId::new(
@@ -213,7 +212,7 @@ fn fetch_script_dependencies(
 fn fetch_module_dependencies(
     exec: &mut FakeExecutor,
     module: &CompiledModule,
-) -> Vec<VerifiedModule> {
+) -> Vec<CompiledModule> {
     let idents = ModuleView::new(module)
         .module_handles()
         .map(|handle_view| handle_view.module_id());
@@ -223,38 +222,41 @@ fn fetch_module_dependencies(
 fn fetch_dependencies(
     exec: &mut FakeExecutor,
     idents: impl Iterator<Item = ModuleId>,
-) -> Vec<VerifiedModule> {
+) -> Vec<CompiledModule> {
     // idents.into_inner().
     idents
         .flat_map(|ident| fetch_dependency(exec, ident))
         .collect()
 }
 
-fn fetch_dependency(exec: &mut FakeExecutor, ident: ModuleId) -> Option<VerifiedModule> {
+fn fetch_dependency(exec: &mut FakeExecutor, ident: ModuleId) -> Option<CompiledModule> {
     let ap = AccessPath::from(&ident);
     let blob: Vec<u8> = exec.get_state_view().get(&ap).ok().flatten()?;
     let compiled: CompiledModule = CompiledModule::deserialize(&blob).ok()?;
-    VerifiedModule::new(compiled).ok()
+    match bytecode_verifier::verify_module(&compiled) {
+        Ok(_) => Some(compiled),
+        Err(_) => None,
+    }
 }
 
 /// Verify a script with its dependencies.
 pub fn verify_script(
     script: CompiledScript,
-    deps: &[VerifiedModule],
-) -> std::result::Result<VerifiedScript, VMStatus> {
-    let verified_script = VerifiedScript::new(script).map_err(|(_, e)| e)?;
-    verify_script_dependencies(&verified_script, deps)?;
-    Ok(verified_script)
+    deps: &[CompiledModule],
+) -> std::result::Result<CompiledScript, VMError> {
+    bytecode_verifier::verify_script(&script)?;
+    DependencyChecker::verify_script(&script, deps)?;
+    Ok(script)
 }
 
 /// Verify a module with its dependencies.
 pub fn verify_module(
     module: CompiledModule,
-    deps: &[VerifiedModule],
-) -> std::result::Result<VerifiedModule, VMStatus> {
-    let verified_module = VerifiedModule::new(module).map_err(|(_, e)| e)?;
-    verify_module_dependencies(&verified_module, deps)?;
-    Ok(verified_module)
+    deps: &[CompiledModule],
+) -> std::result::Result<CompiledModule, VMError> {
+    bytecode_verifier::verify_module(&module)?;
+    DependencyChecker::verify_module(&module, deps)?;
+    Ok(module)
 }
 
 /// A set of common parameters required to create transactions.
@@ -266,7 +268,7 @@ struct TransactionParameters<'a> {
     pub max_gas_amount: u64,
     pub gas_unit_price: u64,
     pub gas_currency_code: String,
-    pub expiration_time: Duration,
+    pub expiration_timestamp_secs: u64,
 }
 
 /// Gets the transaction parameters from the current execution environment and the config.
@@ -314,9 +316,7 @@ fn get_transaction_parameters<'a>(
         gas_unit_price,
         gas_currency_code,
         // TTL is 86400s. Initial time was set to 0.
-        expiration_time: config
-            .expiration_time
-            .unwrap_or_else(|| Duration::from_secs(40000)),
+        expiration_timestamp_secs: config.expiration_timestamp_secs.unwrap_or_else(|| 40000),
     }
 }
 
@@ -338,7 +338,8 @@ fn make_script_transaction(
         params.max_gas_amount,
         params.gas_unit_price,
         params.gas_currency_code,
-        params.expiration_time,
+        params.expiration_timestamp_secs,
+        ChainId::test(),
     )
     .sign(params.privkey, params.pubkey.clone())?
     .into_inner())
@@ -362,7 +363,8 @@ fn make_module_transaction(
         params.max_gas_amount,
         params.gas_unit_price,
         params.gas_currency_code,
-        params.expiration_time,
+        params.expiration_timestamp_secs,
+        ChainId::test(),
     )
     .sign(params.privkey, params.pubkey.clone())?
     .into_inner())
@@ -373,21 +375,23 @@ fn run_transaction(
     exec: &mut FakeExecutor,
     transaction: SignedTransaction,
 ) -> Result<TransactionOutput> {
-    let mut outputs = exec.execute_block(vec![transaction]).unwrap();
+    let mut outputs = exec
+        .execute_block_and_keep_vm_status(vec![transaction])
+        .unwrap();
     if outputs.len() == 1 {
-        let output = outputs.pop().unwrap();
-        match output.status() {
+        let (vm_status, txn_output) = outputs.pop().unwrap();
+        match txn_output.status() {
             TransactionStatus::Keep(status) => {
-                exec.apply_write_set(output.write_set());
-                if status.major_status == StatusCode::EXECUTED {
-                    Ok(output)
+                exec.apply_write_set(txn_output.write_set());
+                if status == &KeptVMStatus::Executed {
+                    Ok(txn_output)
                 } else {
-                    Err(ErrorKind::VMExecutionFailure(output).into())
+                    Err(ErrorKind::VMExecutionFailure(vm_status, txn_output).into())
                 }
             }
             TransactionStatus::Discard(_) | TransactionStatus::Retry => {
-                checked_verify!(output.write_set().is_empty());
-                Err(ErrorKind::DiscardedTransaction(output).into())
+                checked_verify!(txn_output.write_set().is_empty());
+                Err(ErrorKind::DiscardedTransaction(txn_output).into())
             }
         }
     } else {
@@ -399,7 +403,8 @@ fn run_transaction(
 fn serialize_and_deserialize_script(script: &CompiledScript) -> Result<()> {
     let mut script_blob = vec![];
     script.serialize(&mut script_blob)?;
-    let deserialized_script = CompiledScript::deserialize(&script_blob)?;
+    let deserialized_script = CompiledScript::deserialize(&script_blob)
+        .map_err(|e| e.finish(Location::Undefined).into_vm_status())?;
 
     if *script != deserialized_script {
         return Err(ErrorKind::Other(
@@ -415,7 +420,8 @@ fn serialize_and_deserialize_script(script: &CompiledScript) -> Result<()> {
 fn serialize_and_deserialize_module(module: &CompiledModule) -> Result<()> {
     let mut module_blob = vec![];
     module.serialize(&mut module_blob)?;
-    let deserialized_module = CompiledModule::deserialize(&module_blob)?;
+    let deserialized_module = CompiledModule::deserialize(&module_blob)
+        .map_err(|e| e.finish(Location::Undefined).into_vm_status())?;
 
     if *module != deserialized_module {
         return Err(ErrorKind::Other(
@@ -475,9 +481,9 @@ fn eval_transaction<TComp: Compiler>(
             log.append(EvaluationOutput::Stage(Stage::Verifier));
             let deps = fetch_script_dependencies(exec, &compiled_script);
             let compiled_script = match verify_script(compiled_script, &deps) {
-                Ok(script) => script.into_inner(),
+                Ok(script) => script,
                 Err(err) => {
-                    let err: Error = ErrorKind::VerificationError(err).into();
+                    let err: Error = ErrorKind::VerificationError(err.into_vm_status()).into();
                     log.append(EvaluationOutput::Error(Box::new(err)));
                     return Ok(Status::Failure);
                 }
@@ -513,9 +519,9 @@ fn eval_transaction<TComp: Compiler>(
             log.append(EvaluationOutput::Stage(Stage::Verifier));
             let deps = fetch_module_dependencies(exec, &compiled_module);
             let compiled_module = match verify_module(compiled_module, &deps) {
-                Ok(module) => module.into_inner(),
+                Ok(module) => module,
                 Err(err) => {
-                    let err: Error = ErrorKind::VerificationError(err).into();
+                    let err: Error = ErrorKind::VerificationError(err.into_vm_status()).into();
                     log.append(EvaluationOutput::Error(Box::new(err)));
                     return Ok(Status::Failure);
                 }
@@ -596,7 +602,7 @@ pub fn eval<TComp: Compiler>(
             })
             .to_vec(),
             Some(config.validator_accounts),
-            VMPublishingOption::Open,
+            VMPublishingOption::open(),
         )
     };
     for data in config.accounts.values() {

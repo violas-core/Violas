@@ -1,9 +1,34 @@
 //! account: alice, 1000000, 0, validator
+//! account: bob
 //! account: vivian, 1000000, 0, validator
+//! account: dave
 //! account: viola, 1000000, 0, validator
 
-//! new-transaction
 //! sender: alice
+script {
+    use 0x1::ValidatorConfig;
+    fun main(account: &signer) {
+        // set bob to change alice's key
+        ValidatorConfig::set_operator(account, {{bob}});
+    }
+}
+
+// check: EXECUTED
+
+//! new-transaction
+//! sender: vivian
+script {
+    use 0x1::ValidatorConfig;
+    fun main(account: &signer) {
+        // set dave to change vivian's key
+        ValidatorConfig::set_operator(account, {{dave}});
+    }
+}
+
+// check: EXECUTED
+
+//! new-transaction
+//! sender: bob
 script{
     use 0x1::ValidatorConfig;
     // rotate alice's pubkey
@@ -25,35 +50,21 @@ script{
 // check: EXECUTED
 
 //! new-transaction
-//! sender: vivian
+//! sender: dave
 script{
+    use 0x1::LibraSystem;
     use 0x1::ValidatorConfig;
-
     // rotate vivian's pubkey and then run the block prologue. Now, reconfiguration should be triggered.
     fun main(account: &signer) {
+        assert(*ValidatorConfig::get_consensus_pubkey(&LibraSystem::get_validator_config({{vivian}})) !=
+               x"d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a", 98);
         ValidatorConfig::set_config(account, {{vivian}},
                                     x"d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
                                     x"", x"", x"", x"");
-    }
-}
-
-// check: EXECUTED
-
-//! new-transaction
-//! sender: association
-script{
-    use 0x1::LibraSystem;
-    use 0x1::Roles::{Self, AssociationRootRole};
-    use 0x1::ValidatorConfig;
-
-    // rotate vivian's pubkey and then run the block prologue. Now, reconfiguration should be triggered.
-    fun main(account: &signer) {
-        let assoc_root_role = Roles::extract_privilege_to_capability<AssociationRootRole>(account);
-        LibraSystem::update_and_reconfigure(&assoc_root_role);
-        Roles::restore_capability_to_privilege(account, assoc_root_role);
+        LibraSystem::update_config_and_reconfigure(account, {{vivian}});
         // check that the validator set contains Vivian's new key after reconfiguration
         assert(*ValidatorConfig::get_consensus_pubkey(&LibraSystem::get_validator_config({{vivian}})) ==
-               x"d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a", 98);
+               x"d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a", 99);
     }
 }
 
@@ -67,32 +78,16 @@ script{
 // check: EXECUTED
 
 //! new-transaction
-//! sender: vivian
+//! sender: dave
 script{
+    use 0x1::LibraSystem;
     use 0x1::ValidatorConfig;
-    // rotate vivian's pubkey to the same value.
+    // rotate vivian's pubkey to the same value does not trigger the reconfiguration.
     fun main(account: &signer) {
         ValidatorConfig::set_config(account, {{vivian}},
                                     x"d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
                                     x"", x"", x"", x"");
-    }
-}
-
-// not: NewEpochEvent
-// check: EXECUTED
-
-//! new-transaction
-//! sender: association
-script{
-    use 0x1::LibraSystem;
-    use 0x1::Roles::{Self, AssociationRootRole};
-    // No reconfiguration should be
-    // triggered. the not "NewEpochEvent" check part tests this because reconfiguration always emits a
-    // NewEpoch event.
-    fun main(account: &signer) {
-        let assoc_root_role = Roles::extract_privilege_to_capability<AssociationRootRole>(account);
-        LibraSystem::update_and_reconfigure(&assoc_root_role);
-        Roles::restore_capability_to_privilege(account, assoc_root_role);
+        LibraSystem::update_config_and_reconfigure(account, {{vivian}});
     }
 }
 

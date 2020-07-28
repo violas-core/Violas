@@ -11,7 +11,10 @@ edition = "2018"
 [dependencies]
 anyhow = "1.0.31"
 structopt = "0.3.15"
-textwrap = "0.11"
+textwrap = "0.12.1"
+serde-reflection = "0.3.1"
+serde-generate = "0.7.1"
+serde_yaml = "0.8.13"
 
 libra-types = { path = "../../types", version = "0.1.0" }
 libra-workspace-hack = { path = "../../common/workspace-hack", version = "0.1.0" }
@@ -19,15 +22,12 @@ move-core-types = { path = "../move-core/types", version = "0.1.0" }
 lcs = { path = "../../common/lcs", version = "0.1.0", package = "libra-canonical-serialization" }
 
 [dev-dependencies]
-serde_yaml = "0.8"
-serde-generate = "0.2"
-serde-reflection = "0.3"
-tempfile = "3.1"
+tempfile = "3.1.0"
 
 [features]
 default = []
 
 [[bin]]
-name = "transaction-builder-generator"
+name = "generate-transaction-builders"
 path = "src/generate.rs"
 test = false

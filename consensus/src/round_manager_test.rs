@@ -13,7 +13,7 @@ use crate::{
     network::{IncomingBlockRetrievalRequest, NetworkSender},
     network_interface::{ConsensusMsg, ConsensusNetworkEvents, ConsensusNetworkSender},
     network_tests::{NetworkPlayground, TwinId},
-    persistent_liveness_storage::{PersistentLivenessStorage, RecoveryData},
+    persistent_liveness_storage::RecoveryData,
     round_manager::RoundManager,
     test_utils::{
         consensus_runtime, timed_block_on, MockStateComputer, MockStorage, MockTransactionManager,
@@ -41,20 +41,20 @@ use futures::{
     stream::select,
     Stream, StreamExt, TryStreamExt,
 };
-use libra_crypto::{ed25519::Ed25519PrivateKey, hash::CryptoHash, HashValue, Uniform};
+use libra_crypto::{ed25519::Ed25519PrivateKey, HashValue, Uniform};
 use libra_secure_storage::Storage;
 use libra_types::{
     epoch_state::EpochState,
     ledger_info::{LedgerInfo, LedgerInfoWithSignatures},
     validator_signer::ValidatorSigner,
-    validator_verifier::{random_validator_verifier, ValidatorVerifier},
+    validator_verifier::random_validator_verifier,
     waypoint::Waypoint,
 };
 use network::{
     peer_manager::{conn_notifs_channel, ConnectionRequestSender, PeerManagerRequestSender},
     protocols::network::{Event, NewNetworkEvents, NewNetworkSender},
 };
-use safety_rules::{ConsensusState, PersistentSafetyStorage, SafetyRulesManager, TSafetyRules};
+use safety_rules::{ConsensusState, PersistentSafetyStorage, SafetyRulesManager};
 use std::{num::NonZeroUsize, sync::Arc, time::Duration};
 use tokio::runtime::Handle;
 
@@ -65,11 +65,10 @@ pub struct NodeSetup {
     storage: Arc<MockStorage>,
     signer: ValidatorSigner,
     proposer_author: Author,
-    validators: ValidatorVerifier,
     safety_rules_manager: SafetyRulesManager,
     all_events: Box<dyn Stream<Item = anyhow::Result<Event<ConsensusMsg>>> + Send + Unpin>,
     commit_cb_receiver: mpsc::UnboundedReceiver<LedgerInfoWithSignatures>,
-    state_sync_receiver: mpsc::UnboundedReceiver<Payload>,
+    _state_sync_receiver: mpsc::UnboundedReceiver<Payload>,
     id: usize,
 }
 
@@ -159,13 +158,13 @@ impl NodeSetup {
         playground.add_node(twin_id, consensus_tx, network_reqs_rx, conn_mgr_reqs_rx);
 
         let (self_sender, self_receiver) = channel::new_test(1000);
-        let network = NetworkSender::new(author, network_sender, self_sender, validators.clone());
+        let network = NetworkSender::new(author, network_sender, self_sender, validators);
 
         let all_events = Box::new(select(network_events, self_receiver));
 
         let last_vote_sent = initial_data.last_vote();
         let (commit_cb_sender, commit_cb_receiver) = mpsc::unbounded::<LedgerInfoWithSignatures>();
-        let (state_sync_client, state_sync_receiver) = mpsc::unbounded();
+        let (state_sync_client, _state_sync_receiver) = mpsc::unbounded();
         let state_computer = Arc::new(MockStateComputer::new(
             state_sync_client,
             commit_cb_sender,
@@ -191,9 +190,9 @@ impl NodeSetup {
 
         let round_state = Self::create_round_state(time_service);
         let proposer_election = Self::create_proposer_election(proposer_author);
-        let mut safety_rules = MetricsSafetyRules::new(safety_rules_manager.client());
-        let proof = storage.retrieve_epoch_change_proof(0).unwrap();
-        safety_rules.initialize(&proof).unwrap();
+        let mut safety_rules =
+            MetricsSafetyRules::new(safety_rules_manager.client(), storage.clone());
+        safety_rules.perform_initialize().unwrap();
 
         let mut round_manager = RoundManager::new(
             epoch_state,
@@ -213,11 +212,10 @@ impl NodeSetup {
             storage,
             signer,
             proposer_author,
-            validators,
             safety_rules_manager,
             all_events,
             commit_cb_receiver,
-            state_sync_receiver,
+            _state_sync_receiver,
             id,
         }
     }
@@ -265,6 +263,13 @@ impl NodeSetup {
                 ConsensusMsg::SyncInfo(s) => *s,
                 msg => panic!("Unexpected Consensus Message: {:?}", msg),
             },
+            _ => panic!("Unexpected Network Event"),
+        }
+    }
+
+    pub async fn next_message(&mut self) -> ConsensusMsg {
+        match self.all_events.next().await.unwrap().unwrap() {
+            Event::Message((_, msg)) => msg,
             _ => panic!("Unexpected Network Event"),
         }
     }
@@ -634,10 +639,7 @@ fn recover_on_restart() {
         let proposal = inserter.create_block_with_qc(genesis_qc.clone(), i, i, vec![]);
         let timeout = Timeout::new(1, i - 1);
         let mut tc = TimeoutCertificate::new(timeout.clone());
-        tc.add_signature(
-            inserter.signer().author(),
-            inserter.signer().sign_message(timeout.hash()),
-        );
+        tc.add_signature(inserter.signer().author(), inserter.signer().sign(&timeout));
         data.push((proposal, tc));
     }
 
@@ -835,6 +837,65 @@ fn sync_on_partial_newer_sync_info() {
         // QuorumCert added
         assert_eq!(*node.block_store.highest_quorum_cert(), block_4_qc);
         // Help remote message sent
-        let _ = node.next_sync_info().await;
+        // Due to the asynchronous channel, the order of the sync info and next proposal is not fixed.
+        // We assert one of them is the sync info we expect.
+        let m1 = node.next_message().await;
+        let m2 = node.next_message().await;
+        assert!(matches!(m1, ConsensusMsg::SyncInfo(_)) || matches!(m2, ConsensusMsg::SyncInfo(_)));
+    });
+}
+
+#[test]
+fn safety_rules_crash() {
+    let mut runtime = consensus_runtime();
+    let mut playground = NetworkPlayground::new(runtime.handle().clone());
+    let mut nodes = NodeSetup::create_nodes(&mut playground, runtime.handle().clone(), 1);
+    let mut node = nodes.pop().unwrap();
+    runtime.spawn(playground.start());
+
+    fn reset_safety_rules(node: &mut NodeSetup) {
+        let safety_storage = PersistentSafetyStorage::initialize(
+            Storage::from(libra_secure_storage::InMemoryStorage::new()),
+            node.signer.author(),
+            node.signer.private_key().clone(),
+            Ed25519PrivateKey::generate_for_testing(),
+            node.round_manager.consensus_state().waypoint(),
+        );
+
+        node.safety_rules_manager = SafetyRulesManager::new_local(safety_storage, false);
+        let safety_rules =
+            MetricsSafetyRules::new(node.safety_rules_manager.client(), node.storage.clone());
+        node.round_manager.set_safety_rules(safety_rules);
+    };
+
+    timed_block_on(&mut runtime, async {
+        for _ in 0..2 {
+            let proposal_msg = node.next_proposal().await;
+
+            reset_safety_rules(&mut node);
+            // construct_and_sign_vote
+            node.round_manager
+                .process_proposal_msg(proposal_msg)
+                .await
+                .unwrap();
+
+            let vote_msg = node.next_vote().await;
+
+            // sign_timeout
+            reset_safety_rules(&mut node);
+            let round = vote_msg.vote().vote_data().proposed().round();
+            node.round_manager
+                .process_local_timeout(round)
+                .await
+                .unwrap();
+            let vote_msg = node.next_vote().await;
+
+            // sign proposal
+            reset_safety_rules(&mut node);
+            node.round_manager.process_vote_msg(vote_msg).await.unwrap();
+        }
+
+        // verify the last sign proposal happened
+        node.next_proposal().await;
     });
 }

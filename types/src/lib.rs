@@ -10,6 +10,7 @@ pub mod account_state;
 pub mod account_state_blob;
 pub mod block_info;
 pub mod block_metadata;
+pub mod chain_id;
 pub mod contract_event;
 pub mod epoch_change;
 pub mod epoch_state;
@@ -30,7 +31,7 @@ pub mod validator_config;
 pub mod validator_info;
 pub mod validator_signer;
 pub mod validator_verifier;
-pub mod vm_error;
+pub mod vm_status;
 pub mod waypoint;
 pub mod write_set;
 

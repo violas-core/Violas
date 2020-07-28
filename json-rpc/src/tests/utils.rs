@@ -9,6 +9,7 @@ use libra_types::{
     account_address::AccountAddress,
     account_state_blob::{AccountStateBlob, AccountStateWithProof},
     block_info::BlockInfo,
+    chain_id::ChainId,
     contract_event::ContractEvent,
     epoch_change::EpochChangeProof,
     event::EventKey,
@@ -20,7 +21,7 @@ use libra_types::{
     transaction::{
         Transaction, TransactionInfo, TransactionListWithProof, TransactionWithProof, Version,
     },
-    vm_error::StatusCode,
+    vm_status::KeptVMStatus,
 };
 use std::{collections::BTreeMap, net::SocketAddr, sync::Arc};
 use storage_interface::{DbReader, StartupInfo, TreeState};
@@ -33,18 +34,24 @@ pub fn test_bootstrap(
     libra_db: Arc<dyn DbReader>,
     mp_sender: MempoolClientSender,
 ) -> Runtime {
-    crate::bootstrap(address, libra_db, mp_sender, RoleType::Validator)
+    crate::bootstrap(
+        address,
+        libra_db,
+        mp_sender,
+        RoleType::Validator,
+        ChainId::test(),
+    )
 }
 
 /// Lightweight mock of LibraDB
 #[derive(Clone)]
 pub(crate) struct MockLibraDB {
     pub version: u64,
-    pub timestamp: u64,
     pub all_accounts: BTreeMap<AccountAddress, AccountStateBlob>,
-    pub all_txns: Vec<(Transaction, StatusCode)>,
+    pub all_txns: Vec<(Transaction, KeptVMStatus)>,
     pub events: Vec<(u64, ContractEvent)>,
     pub account_state_with_proof: Vec<AccountStateWithProof>,
+    pub timestamps: Vec<u64>,
 }
 
 impl DbReader for MockLibraDB {
@@ -68,7 +75,7 @@ impl DbReader for MockLibraDB {
                     HashValue::zero(),
                     HashValue::zero(),
                     self.version,
-                    self.timestamp,
+                    *self.timestamps.last().expect("must have"),
                     None,
                 ),
                 HashValue::zero(),
@@ -117,7 +124,7 @@ impl DbReader for MockLibraDB {
                         Default::default(),
                         Default::default(),
                         0,
-                        *status,
+                        status.clone(),
                     ),
                 ),
             }))
@@ -143,7 +150,7 @@ impl DbReader for MockLibraDB {
                     Default::default(),
                     Default::default(),
                     0,
-                    *status,
+                    status.clone(),
                 ));
             });
         let first_transaction_version = transactions.first().map(|_| start_version);
@@ -262,5 +269,9 @@ impl DbReader for MockLibraDB {
 
     fn get_epoch_ending_ledger_info(&self, _: u64) -> Result<LedgerInfoWithSignatures> {
         unimplemented!()
+    }
+
+    fn get_block_timestamp(&self, version: u64) -> Result<u64> {
+        Ok(self.timestamps[version as usize])
     }
 }

@@ -47,6 +47,8 @@ This module defines the Option type and its methods to represent and handle an o
 
 ## Struct `Option`
 
+Abstraction of a value that may or may not be present. Implemented with a vector of size
+zero or one because Move bytecode does not have ADTs.
 
 
 <pre><code><b>struct</b> <a href="#0x1_Option">Option</a>&lt;Element&gt;
@@ -75,6 +77,8 @@ This module defines the Option type and its methods to represent and handle an o
 
 ## Function `none`
 
+Return an empty
+<code><a href="#0x1_Option">Option</a></code>
 
 
 <pre><code><b>public</b> <b>fun</b> <a href="#0x1_Option_none">none</a>&lt;Element&gt;(): <a href="#0x1_Option_Option">Option::Option</a>&lt;Element&gt;
@@ -99,6 +103,9 @@ This module defines the Option type and its methods to represent and handle an o
 
 ## Function `some`
 
+Return an
+<code><a href="#0x1_Option">Option</a></code> containing
+<code>e</code>
 
 
 <pre><code><b>public</b> <b>fun</b> <a href="#0x1_Option_some">some</a>&lt;Element&gt;(e: Element): <a href="#0x1_Option_Option">Option::Option</a>&lt;Element&gt;
@@ -123,6 +130,8 @@ This module defines the Option type and its methods to represent and handle an o
 
 ## Function `is_none`
 
+Return true if
+<code>t</code> does not hold a value
 
 
 <pre><code><b>public</b> <b>fun</b> <a href="#0x1_Option_is_none">is_none</a>&lt;Element&gt;(t: &<a href="#0x1_Option_Option">Option::Option</a>&lt;Element&gt;): bool
@@ -147,6 +156,8 @@ This module defines the Option type and its methods to represent and handle an o
 
 ## Function `is_some`
 
+Return true if
+<code>t</code> holds a value
 
 
 <pre><code><b>public</b> <b>fun</b> <a href="#0x1_Option_is_some">is_some</a>&lt;Element&gt;(t: &<a href="#0x1_Option_Option">Option::Option</a>&lt;Element&gt;): bool
@@ -171,6 +182,12 @@ This module defines the Option type and its methods to represent and handle an o
 
 ## Function `contains`
 
+Return true if the value in
+<code>t</code> is equal to
+<code>e_ref</code>
+Always returns
+<code><b>false</b></code> if
+<code>t</code> does not hold a value
 
 
 <pre><code><b>public</b> <b>fun</b> <a href="#0x1_Option_contains">contains</a>&lt;Element&gt;(t: &<a href="#0x1_Option_Option">Option::Option</a>&lt;Element&gt;, e_ref: &Element): bool
@@ -195,6 +212,10 @@ This module defines the Option type and its methods to represent and handle an o
 
 ## Function `borrow`
 
+Return an immutable reference to the value inside
+<code>t</code>
+Aborts if
+<code>t</code> does not hold a value
 
 
 <pre><code><b>public</b> <b>fun</b> <a href="#0x1_Option_borrow">borrow</a>&lt;Element&gt;(t: &<a href="#0x1_Option_Option">Option::Option</a>&lt;Element&gt;): &Element
@@ -219,6 +240,11 @@ This module defines the Option type and its methods to represent and handle an o
 
 ## Function `borrow_with_default`
 
+Return a reference to the value inside
+<code>t</code> if it holds one
+Return
+<code>default_ref</code> if
+<code>t</code> does not hold a value
 
 
 <pre><code><b>public</b> <b>fun</b> <a href="#0x1_Option_borrow_with_default">borrow_with_default</a>&lt;Element&gt;(t: &<a href="#0x1_Option_Option">Option::Option</a>&lt;Element&gt;, default_ref: &Element): &Element
@@ -245,6 +271,11 @@ This module defines the Option type and its methods to represent and handle an o
 
 ## Function `get_with_default`
 
+Return the value inside
+<code>t</code> if it holds one
+Return
+<code>default</code> if
+<code>t</code> does not hold a value
 
 
 <pre><code><b>public</b> <b>fun</b> <a href="#0x1_Option_get_with_default">get_with_default</a>&lt;Element: <b>copyable</b>&gt;(t: &<a href="#0x1_Option_Option">Option::Option</a>&lt;Element&gt;, default: Element): Element
@@ -271,6 +302,11 @@ This module defines the Option type and its methods to represent and handle an o
 
 ## Function `fill`
 
+Convert the none option
+<code>t</code> to a some option by adding
+<code>e</code>.
+Aborts if
+<code>t</code> already holds a value
 
 
 <pre><code><b>public</b> <b>fun</b> <a href="#0x1_Option_fill">fill</a>&lt;Element&gt;(t: &<b>mut</b> <a href="#0x1_Option_Option">Option::Option</a>&lt;Element&gt;, e: Element)
@@ -285,7 +321,7 @@ This module defines the Option type and its methods to represent and handle an o
 <pre><code><b>public</b> <b>fun</b> <a href="#0x1_Option_fill">fill</a>&lt;Element&gt;(t: &<b>mut</b> <a href="#0x1_Option">Option</a>&lt;Element&gt;, e: Element) {
     <b>let</b> vec_ref = &<b>mut</b> t.vec;
     <b>if</b> (<a href="Vector.md#0x1_Vector_is_empty">Vector::is_empty</a>(vec_ref)) <a href="Vector.md#0x1_Vector_push_back">Vector::push_back</a>(vec_ref, e)
-    <b>else</b> <b>abort</b>(99)
+    <b>else</b> <b>abort</b> EOPTION_ALREADY_FILLED
 }
 </code></pre>
 
@@ -297,6 +333,12 @@ This module defines the Option type and its methods to represent and handle an o
 
 ## Function `extract`
 
+Convert a
+<code>some</code> option to a
+<code>none</code> by removing and returning the value stored inside
+<code>t</code>
+Aborts if
+<code>t</code> does not hold a value
 
 
 <pre><code><b>public</b> <b>fun</b> <a href="#0x1_Option_extract">extract</a>&lt;Element&gt;(t: &<b>mut</b> <a href="#0x1_Option_Option">Option::Option</a>&lt;Element&gt;): Element
@@ -321,6 +363,10 @@ This module defines the Option type and its methods to represent and handle an o
 
 ## Function `borrow_mut`
 
+Return a mutable reference to the value inside
+<code>t</code>
+Aborts if
+<code>t</code> does not hold a value
 
 
 <pre><code><b>public</b> <b>fun</b> <a href="#0x1_Option_borrow_mut">borrow_mut</a>&lt;Element&gt;(t: &<b>mut</b> <a href="#0x1_Option_Option">Option::Option</a>&lt;Element&gt;): &<b>mut</b> Element
@@ -345,6 +391,11 @@ This module defines the Option type and its methods to represent and handle an o
 
 ## Function `swap`
 
+Swap the old value inside
+<code>t</code> with
+<code>e</code> and return the old value
+Aborts if
+<code>t</code> does not hold a value
 
 
 <pre><code><b>public</b> <b>fun</b> <a href="#0x1_Option_swap">swap</a>&lt;Element&gt;(t: &<b>mut</b> <a href="#0x1_Option_Option">Option::Option</a>&lt;Element&gt;, e: Element): Element
@@ -372,6 +423,10 @@ This module defines the Option type and its methods to represent and handle an o
 
 ## Function `destroy_with_default`
 
+Destroys
+<code>t.</code> If
+<code>t</code> holds a value, return it. Returns
+<code>default</code> otherwise
 
 
 <pre><code><b>public</b> <b>fun</b> <a href="#0x1_Option_destroy_with_default">destroy_with_default</a>&lt;Element: <b>copyable</b>&gt;(t: <a href="#0x1_Option_Option">Option::Option</a>&lt;Element&gt;, default: Element): Element
@@ -398,6 +453,10 @@ This module defines the Option type and its methods to represent and handle an o
 
 ## Function `destroy_some`
 
+Unpack
+<code>t</code> and return its contents
+Aborts if
+<code>t</code> does not hold a value
 
 
 <pre><code><b>public</b> <b>fun</b> <a href="#0x1_Option_destroy_some">destroy_some</a>&lt;Element&gt;(t: <a href="#0x1_Option_Option">Option::Option</a>&lt;Element&gt;): Element
@@ -425,6 +484,10 @@ This module defines the Option type and its methods to represent and handle an o
 
 ## Function `destroy_none`
 
+Unpack
+<code>t</code>
+Aborts if
+<code>t</code> holds a value
 
 
 <pre><code><b>public</b> <b>fun</b> <a href="#0x1_Option_destroy_none">destroy_none</a>&lt;Element&gt;(t: <a href="#0x1_Option_Option">Option::Option</a>&lt;Element&gt;)
@@ -449,6 +512,12 @@ This module defines the Option type and its methods to represent and handle an o
 <a name="0x1_Option_Specification"></a>
 
 ## Specification
+
+
+
+<pre><code>pragma verify;
+</code></pre>
+
 
 
 <a name="0x1_Option_Specification_Option"></a>
@@ -481,43 +550,6 @@ because it's 0 for "none" or 1 for "some".
 
 
 
-Return true iff t contains none.
-
-
-<a name="0x1_Option_is_none_spec"></a>
-
-
-<pre><code><b>define</b> <a href="#0x1_Option_is_none_spec">is_none_spec</a>&lt;Element&gt;(t: <a href="#0x1_Option">Option</a>&lt;Element&gt;): bool {
-    len(t.vec) == 0
-}
-</code></pre>
-
-
-Return true iff t contains some.
-
-
-<a name="0x1_Option_is_some_spec"></a>
-
-
-<pre><code><b>define</b> <a href="#0x1_Option_is_some_spec">is_some_spec</a>&lt;Element&gt;(t: <a href="#0x1_Option">Option</a>&lt;Element&gt;): bool {
-    !<a href="#0x1_Option_is_none_spec">is_none_spec</a>(t)
-}
-</code></pre>
-
-
-Return the value inside of t.
-
-
-<a name="0x1_Option_value_inside"></a>
-
-
-<pre><code><b>define</b> <a href="#0x1_Option_value_inside">value_inside</a>&lt;Element&gt;(t: <a href="#0x1_Option">Option</a>&lt;Element&gt;): Element {
-    t.vec[0]
-}
-</code></pre>
-
-
-
 <a name="0x1_Option_Specification_none"></a>
 
 ### Function `none`
@@ -529,8 +561,20 @@ Return the value inside of t.
 
 
 
-<pre><code><b>aborts_if</b> <b>false</b>;
-<b>ensures</b> <a href="#0x1_Option_is_none_spec">is_none_spec</a>(result);
+<pre><code>pragma opaque = <b>true</b>;
+<b>aborts_if</b> <b>false</b>;
+<b>ensures</b> result == <a href="#0x1_Option_spec_none">spec_none</a>&lt;Element&gt;();
+</code></pre>
+
+
+
+
+<a name="0x1_Option_spec_none"></a>
+
+
+<pre><code><b>define</b> <a href="#0x1_Option_spec_none">spec_none</a>&lt;Element&gt;(): <a href="#0x1_Option">Option</a>&lt;Element&gt; {
+    <a href="#0x1_Option">Option</a>{ vec: empty_vector() }
+}
 </code></pre>
 
 
@@ -547,8 +591,18 @@ Return the value inside of t.
 
 
 <pre><code><b>aborts_if</b> <b>false</b>;
-<b>ensures</b> <a href="#0x1_Option_is_some_spec">is_some_spec</a>(result);
-<b>ensures</b> <a href="#0x1_Option_value_inside">value_inside</a>(result) == e;
+<b>ensures</b> result == <a href="#0x1_Option_spec_some">spec_some</a>(e);
+</code></pre>
+
+
+
+
+<a name="0x1_Option_spec_some"></a>
+
+
+<pre><code><b>define</b> <a href="#0x1_Option_spec_some">spec_some</a>&lt;Element&gt;(e: Element): <a href="#0x1_Option">Option</a>&lt;Element&gt; {
+    <a href="#0x1_Option">Option</a>{ vec: <a href="Vector.md#0x1_Vector_spec_singleton">Vector::spec_singleton</a>(e) }
+}
 </code></pre>
 
 
@@ -564,8 +618,20 @@ Return the value inside of t.
 
 
 
-<pre><code><b>aborts_if</b> <b>false</b>;
-<b>ensures</b> result == <a href="#0x1_Option_is_none_spec">is_none_spec</a>(t);
+<pre><code>pragma opaque = <b>true</b>;
+<b>aborts_if</b> <b>false</b>;
+<b>ensures</b> result == <a href="#0x1_Option_spec_is_none">spec_is_none</a>(t);
+</code></pre>
+
+
+
+
+<a name="0x1_Option_spec_is_none"></a>
+
+
+<pre><code><b>define</b> <a href="#0x1_Option_spec_is_none">spec_is_none</a>&lt;Element&gt;(t: <a href="#0x1_Option">Option</a>&lt;Element&gt;): bool {
+    len(t.vec) == 0
+}
 </code></pre>
 
 
@@ -581,8 +647,20 @@ Return the value inside of t.
 
 
 
-<pre><code><b>aborts_if</b> <b>false</b>;
-<b>ensures</b> result == <a href="#0x1_Option_is_some_spec">is_some_spec</a>(t);
+<pre><code>pragma opaque = <b>true</b>;
+<b>aborts_if</b> <b>false</b>;
+<b>ensures</b> result == <a href="#0x1_Option_spec_is_some">spec_is_some</a>(t);
+</code></pre>
+
+
+
+
+<a name="0x1_Option_spec_is_some"></a>
+
+
+<pre><code><b>define</b> <a href="#0x1_Option_spec_is_some">spec_is_some</a>&lt;Element&gt;(t: <a href="#0x1_Option">Option</a>&lt;Element&gt;): bool {
+    !<a href="#0x1_Option_spec_is_none">spec_is_none</a>(t)
+}
 </code></pre>
 
 
@@ -598,8 +676,20 @@ Return the value inside of t.
 
 
 
-<pre><code><b>aborts_if</b> <b>false</b>;
-<b>ensures</b> result == (<a href="#0x1_Option_is_some_spec">is_some_spec</a>(t) && <a href="#0x1_Option_value_inside">value_inside</a>(t) == e_ref);
+<pre><code>pragma opaque = <b>true</b>;
+<b>aborts_if</b> <b>false</b>;
+<b>ensures</b> result == (<a href="#0x1_Option_spec_is_some">spec_is_some</a>(t) && <a href="#0x1_Option_spec_get">spec_get</a>(t) == e_ref);
+</code></pre>
+
+
+
+
+<a name="0x1_Option_spec_contains"></a>
+
+
+<pre><code><b>define</b> <a href="#0x1_Option_spec_contains">spec_contains</a>&lt;Element&gt;(t: <a href="#0x1_Option">Option</a>&lt;Element&gt;, e: Element): bool {
+    <a href="#0x1_Option_spec_is_some">spec_is_some</a>(t) && <a href="#0x1_Option_spec_get">spec_get</a>(t) == e
+}
 </code></pre>
 
 
@@ -615,8 +705,20 @@ Return the value inside of t.
 
 
 
-<pre><code><b>aborts_if</b> <a href="#0x1_Option_is_none_spec">is_none_spec</a>(t);
-<b>ensures</b> result == <a href="#0x1_Option_value_inside">value_inside</a>(t);
+<pre><code>pragma opaque = <b>true</b>;
+<b>aborts_if</b> <a href="#0x1_Option_spec_is_none">spec_is_none</a>(t);
+<b>ensures</b> result == <a href="#0x1_Option_spec_get">spec_get</a>(t);
+</code></pre>
+
+
+
+
+<a name="0x1_Option_spec_get"></a>
+
+
+<pre><code><b>define</b> <a href="#0x1_Option_spec_get">spec_get</a>&lt;Element&gt;(t: <a href="#0x1_Option">Option</a>&lt;Element&gt;): Element {
+    t.vec[0]
+}
 </code></pre>
 
 
@@ -632,9 +734,10 @@ Return the value inside of t.
 
 
 
-<pre><code><b>aborts_if</b> <b>false</b>;
-<b>ensures</b> <a href="#0x1_Option_is_none_spec">is_none_spec</a>(t) ==&gt; result == default_ref;
-<b>ensures</b> <a href="#0x1_Option_is_some_spec">is_some_spec</a>(t) ==&gt; result == <a href="#0x1_Option_value_inside">value_inside</a>(t);
+<pre><code>pragma opaque = <b>true</b>;
+<b>aborts_if</b> <b>false</b>;
+<b>ensures</b> <a href="#0x1_Option_spec_is_none">spec_is_none</a>(t) ==&gt; result == default_ref;
+<b>ensures</b> <a href="#0x1_Option_spec_is_some">spec_is_some</a>(t) ==&gt; result == <a href="#0x1_Option_spec_get">spec_get</a>(t);
 </code></pre>
 
 
@@ -650,9 +753,10 @@ Return the value inside of t.
 
 
 
-<pre><code><b>aborts_if</b> <b>false</b>;
-<b>ensures</b> <a href="#0x1_Option_is_none_spec">is_none_spec</a>(t) ==&gt; result == default;
-<b>ensures</b> <a href="#0x1_Option_is_some_spec">is_some_spec</a>(t) ==&gt; result == <a href="#0x1_Option_value_inside">value_inside</a>(t);
+<pre><code>pragma opaque = <b>true</b>;
+<b>aborts_if</b> <b>false</b>;
+<b>ensures</b> <a href="#0x1_Option_spec_is_none">spec_is_none</a>(t) ==&gt; result == default;
+<b>ensures</b> <a href="#0x1_Option_spec_is_some">spec_is_some</a>(t) ==&gt; result == <a href="#0x1_Option_spec_get">spec_get</a>(t);
 </code></pre>
 
 
@@ -668,9 +772,10 @@ Return the value inside of t.
 
 
 
-<pre><code><b>aborts_if</b> <a href="#0x1_Option_is_some_spec">is_some_spec</a>(t);
-<b>ensures</b> <a href="#0x1_Option_is_some_spec">is_some_spec</a>(t);
-<b>ensures</b> <a href="#0x1_Option_value_inside">value_inside</a>(t) == e;
+<pre><code>pragma opaque = <b>true</b>;
+<b>aborts_if</b> <a href="#0x1_Option_spec_is_some">spec_is_some</a>(t);
+<b>ensures</b> <a href="#0x1_Option_spec_is_some">spec_is_some</a>(t);
+<b>ensures</b> <a href="#0x1_Option_spec_get">spec_get</a>(t) == e;
 </code></pre>
 
 
@@ -686,9 +791,10 @@ Return the value inside of t.
 
 
 
-<pre><code><b>aborts_if</b> <a href="#0x1_Option_is_none_spec">is_none_spec</a>(t);
-<b>ensures</b> result == <a href="#0x1_Option_value_inside">value_inside</a>(<b>old</b>(t));
-<b>ensures</b> <a href="#0x1_Option_is_none_spec">is_none_spec</a>(t);
+<pre><code>pragma opaque = <b>true</b>;
+<b>aborts_if</b> <a href="#0x1_Option_spec_is_none">spec_is_none</a>(t);
+<b>ensures</b> result == <a href="#0x1_Option_spec_get">spec_get</a>(<b>old</b>(t));
+<b>ensures</b> <a href="#0x1_Option_spec_is_none">spec_is_none</a>(t);
 </code></pre>
 
 
@@ -704,8 +810,9 @@ Return the value inside of t.
 
 
 
-<pre><code><b>aborts_if</b> <a href="#0x1_Option_is_none_spec">is_none_spec</a>(t);
-<b>ensures</b> result == <a href="#0x1_Option_value_inside">value_inside</a>(t);
+<pre><code>pragma opaque = <b>true</b>;
+<b>aborts_if</b> <a href="#0x1_Option_spec_is_none">spec_is_none</a>(t);
+<b>ensures</b> result == <a href="#0x1_Option_spec_get">spec_get</a>(t);
 </code></pre>
 
 
@@ -721,10 +828,11 @@ Return the value inside of t.
 
 
 
-<pre><code><b>aborts_if</b> <a href="#0x1_Option_is_none_spec">is_none_spec</a>(t);
-<b>ensures</b> result == <a href="#0x1_Option_value_inside">value_inside</a>(<b>old</b>(t));
-<b>ensures</b> <a href="#0x1_Option_is_some_spec">is_some_spec</a>(t);
-<b>ensures</b> <a href="#0x1_Option_value_inside">value_inside</a>(t) == e;
+<pre><code>pragma opaque = <b>true</b>;
+<b>aborts_if</b> <a href="#0x1_Option_spec_is_none">spec_is_none</a>(t);
+<b>ensures</b> result == <a href="#0x1_Option_spec_get">spec_get</a>(<b>old</b>(t));
+<b>ensures</b> <a href="#0x1_Option_spec_is_some">spec_is_some</a>(t);
+<b>ensures</b> <a href="#0x1_Option_spec_get">spec_get</a>(t) == e;
 </code></pre>
 
 
@@ -740,9 +848,10 @@ Return the value inside of t.
 
 
 
-<pre><code><b>aborts_if</b> <b>false</b>;
-<b>ensures</b> <a href="#0x1_Option_is_none_spec">is_none_spec</a>(<b>old</b>(t)) ==&gt; result == default;
-<b>ensures</b> <a href="#0x1_Option_is_some_spec">is_some_spec</a>(<b>old</b>(t)) ==&gt; result == <a href="#0x1_Option_value_inside">value_inside</a>(<b>old</b>(t));
+<pre><code>pragma opaque = <b>true</b>;
+<b>aborts_if</b> <b>false</b>;
+<b>ensures</b> <a href="#0x1_Option_spec_is_none">spec_is_none</a>(<b>old</b>(t)) ==&gt; result == default;
+<b>ensures</b> <a href="#0x1_Option_spec_is_some">spec_is_some</a>(<b>old</b>(t)) ==&gt; result == <a href="#0x1_Option_spec_get">spec_get</a>(<b>old</b>(t));
 </code></pre>
 
 
@@ -758,8 +867,9 @@ Return the value inside of t.
 
 
 
-<pre><code><b>aborts_if</b> <a href="#0x1_Option_is_none_spec">is_none_spec</a>(t);
-<b>ensures</b> result == <a href="#0x1_Option_value_inside">value_inside</a>(<b>old</b>(t));
+<pre><code>pragma opaque = <b>true</b>;
+<b>aborts_if</b> <a href="#0x1_Option_spec_is_none">spec_is_none</a>(t);
+<b>ensures</b> result == <a href="#0x1_Option_spec_get">spec_get</a>(<b>old</b>(t));
 </code></pre>
 
 
@@ -775,5 +885,6 @@ Return the value inside of t.
 
 
 
-<pre><code><b>aborts_if</b> <a href="#0x1_Option_is_some_spec">is_some_spec</a>(t);
+<pre><code>pragma opaque = <b>true</b>;
+<b>aborts_if</b> <a href="#0x1_Option_spec_is_some">spec_is_some</a>(t);
 </code></pre>

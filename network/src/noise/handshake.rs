@@ -16,7 +16,7 @@ use libra_crypto::{noise, x25519};
 use libra_types::PeerId;
 use netcore::transport::ConnectionOrigin;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     convert::TryFrom as _,
     io,
     sync::{Arc, RwLock},
@@ -89,7 +89,7 @@ pub enum HandshakeAuthMode {
         // mutual-auth scenarios because we have a bounded set of trusted peers
         // that rarely changes.
         anti_replay_timestamps: RwLock<AntiReplayTimestamps>,
-        trusted_peers: Arc<RwLock<HashMap<PeerId, x25519::PublicKey>>>,
+        trusted_peers: Arc<RwLock<HashMap<PeerId, HashSet<x25519::PublicKey>>>>,
     },
     /// In `ServerOnly` mode, the dialer authenticates the server. However, the
     /// server does not care who connects to them and will allow inbound connections
@@ -98,7 +98,7 @@ pub enum HandshakeAuthMode {
 }
 
 impl HandshakeAuthMode {
-    pub fn mutual(trusted_peers: Arc<RwLock<HashMap<PeerId, x25519::PublicKey>>>) -> Self {
+    pub fn mutual(trusted_peers: Arc<RwLock<HashMap<PeerId, HashSet<x25519::PublicKey>>>>) -> Self {
         HandshakeAuthMode::Mutual {
             anti_replay_timestamps: RwLock::new(AntiReplayTimestamps::default()),
             trusted_peers,
@@ -115,7 +115,7 @@ impl HandshakeAuthMode {
         }
     }
 
-    fn trusted_peers(&self) -> Option<&RwLock<HashMap<PeerId, x25519::PublicKey>>> {
+    fn trusted_peers(&self) -> Option<&RwLock<HashMap<PeerId, HashSet<x25519::PublicKey>>>> {
         match &self {
             HandshakeAuthMode::Mutual { trusted_peers, .. } => Some(&trusted_peers),
             HandshakeAuthMode::ServerOnly => None,
@@ -348,13 +348,13 @@ impl NoiseUpgrader {
                 })?
                 .get(&remote_peer_id)
             {
-                Some(key) => {
-                    if key != &remote_public_key {
+                Some(remote_pubkey_set) => {
+                    if !remote_pubkey_set.contains(&remote_public_key) {
                         return Err(io::Error::new(
                             io::ErrorKind::InvalidData,
                             format!(
-                                "noise: peer id {} connecting to us with an unknown public key: {} (expected: {})",
-                                remote_peer_id, remote_public_key, key,
+                                "noise: peer id {} connecting to us with an unknown public key: {}, expected one of: {:?}",
+                                remote_peer_id, remote_public_key, remote_pubkey_set,
                             ),
                         ));
                     }
@@ -446,6 +446,7 @@ impl NoiseUpgrader {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::testutils::fake_socket::ReadWriteTestSocket;
     use futures::{executor::block_on, future::join};
     use libra_crypto::{test_utils::TEST_SEED, traits::Uniform as _};
     use memsocket::MemorySocket;
@@ -472,11 +473,13 @@ mod test {
 
         let (client_auth, server_auth, client_peer_id, server_peer_id) = if is_mutual_auth {
             let client_peer_id = PeerId::random();
+            let client_pubkey_set = [client_public_key].iter().copied().collect();
             let server_peer_id = PeerId::random();
+            let server_pubkey_set = [server_public_key].iter().copied().collect();
             let trusted_peers = Arc::new(RwLock::new(
                 vec![
-                    (client_peer_id, client_public_key),
-                    (server_peer_id, server_public_key),
+                    (client_peer_id, client_pubkey_set),
+                    (server_peer_id, server_pubkey_set),
                 ]
                 .into_iter()
                 .collect(),
@@ -612,5 +615,27 @@ mod test {
     #[test]
     fn test_handshake_self_fails_mutual_auth() {
         test_handshake_self_fails(true /* is_mutual_auth */);
+    }
+
+    #[test]
+    fn test_handshake_fragmented_reads() {
+        // create an in-memory socket for testing
+        let (mut dialer_socket, mut listener_socket) = ReadWriteTestSocket::new_pair();
+
+        // fragment reads
+        dialer_socket.set_fragmented_read();
+        listener_socket.set_fragmented_read();
+
+        // get peers
+        let ((client, _client_public_key), (server, server_public_key)) = build_peers(false);
+
+        // perform the handshake
+        let (client_session, server_session) = block_on(join(
+            client.upgrade_outbound(dialer_socket, server_public_key, AntiReplayTimestamps::now),
+            server.upgrade_inbound(listener_socket),
+        ));
+
+        client_session.unwrap();
+        server_session.unwrap();
     }
 }

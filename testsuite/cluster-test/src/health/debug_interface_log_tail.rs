@@ -9,8 +9,8 @@ use crate::{
     instance::Instance,
     util::unix_timestamp_now,
 };
-use debug_interface::{json_log::JsonLogEntry as DebugInterfaceEvent, AsyncNodeDebugClient};
-use libra_logger::*;
+use debug_interface::AsyncNodeDebugClient;
+use libra_logger::{json_log::JsonLogEntry as DebugInterfaceEvent, *};
 use serde_json::{self, value as json};
 use std::{
     env,
@@ -40,7 +40,7 @@ impl DebugPortLogWorker {
         let pending_messages = Arc::new(AtomicI64::new(0));
         let (trace_sender, trace_receiver) = mpsc::channel();
         let trace_enabled = Arc::new(AtomicBool::new(false));
-        for instance in cluster.all_instances() {
+        for instance in cluster.validator_and_fullnode_instances() {
             let (started_sender, started_receiver) = mpsc::channel();
             started_receivers.push(started_receiver);
             let client = instance.debug_interface_client();

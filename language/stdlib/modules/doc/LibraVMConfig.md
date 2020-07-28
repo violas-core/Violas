@@ -10,6 +10,8 @@
 -  [Struct `GasConstants`](#0x1_LibraVMConfig_GasConstants)
 -  [Function `initialize`](#0x1_LibraVMConfig_initialize)
 -  [Function `set_publishing_option`](#0x1_LibraVMConfig_set_publishing_option)
+-  [Specification](#0x1_LibraVMConfig_Specification)
+    -  [Function `initialize`](#0x1_LibraVMConfig_Specification_initialize)
 
 
 
@@ -173,6 +175,20 @@
 <dd>
 
 </dd>
+<dt>
+
+<code>gas_unit_scaling_factor: u64</code>
+</dt>
+<dd>
+
+</dd>
+<dt>
+
+<code>default_account_size: u64</code>
+</dt>
+<dd>
+
+</dd>
 </dl>
 
 
@@ -184,7 +200,7 @@
 
 
 
-<pre><code><b>public</b> <b>fun</b> <a href="#0x1_LibraVMConfig_initialize">initialize</a>(config_account: &signer, association_root_account: &signer, create_config_capability: &<a href="Roles.md#0x1_Roles_Capability">Roles::Capability</a>&lt;<a href="LibraConfig.md#0x1_LibraConfig_CreateOnChainConfig">LibraConfig::CreateOnChainConfig</a>&gt;, publishing_option: vector&lt;u8&gt;, instruction_schedule: vector&lt;u8&gt;, native_schedule: vector&lt;u8&gt;)
+<pre><code><b>public</b> <b>fun</b> <a href="#0x1_LibraVMConfig_initialize">initialize</a>(lr_account: &signer, publishing_option: vector&lt;u8&gt;, instruction_schedule: vector&lt;u8&gt;, native_schedule: vector&lt;u8&gt;)
 </code></pre>
 
 
@@ -194,29 +210,27 @@
 
 
 <pre><code><b>public</b> <b>fun</b> <a href="#0x1_LibraVMConfig_initialize">initialize</a>(
-    config_account: &signer,
-    association_root_account: &signer,
-    create_config_capability: &Capability&lt;CreateOnChainConfig&gt;,
+    lr_account: &signer,
     publishing_option: vector&lt;u8&gt;,
     instruction_schedule: vector&lt;u8&gt;,
     native_schedule: vector&lt;u8&gt;,
 ) {
     <b>let</b> gas_constants = <a href="#0x1_LibraVMConfig_GasConstants">GasConstants</a> {
-        global_memory_per_byte_cost: 8,
-        global_memory_per_byte_write_cost: 8,
+        global_memory_per_byte_cost: 4,
+        global_memory_per_byte_write_cost: 9,
         min_transaction_gas_units: 600,
         large_transaction_cutoff: 600,
         instrinsic_gas_per_byte: 8,
-        maximum_number_of_gas_units: 2000000,
+        maximum_number_of_gas_units: 4000000,
         min_price_per_gas_unit: 0,
         max_price_per_gas_unit: 10000,
         max_transaction_size_in_bytes: 16384,
+        gas_unit_scaling_factor: 1000,
+        default_account_size: 800,
     };
 
-
-    <a href="LibraConfig.md#0x1_LibraConfig_publish_new_config_with_delegate">LibraConfig::publish_new_config_with_delegate</a>&lt;<a href="#0x1_LibraVMConfig">LibraVMConfig</a>&gt;(
-        config_account,
-        create_config_capability,
+    <a href="LibraConfig.md#0x1_LibraConfig_publish_new_config">LibraConfig::publish_new_config</a>(
+        lr_account,
         <a href="#0x1_LibraVMConfig">LibraVMConfig</a> {
             publishing_option,
             gas_schedule: <a href="#0x1_LibraVMConfig_GasSchedule">GasSchedule</a> {
@@ -225,9 +239,7 @@
                 gas_constants,
             }
         },
-        <a href="Signer.md#0x1_Signer_address_of">Signer::address_of</a>(association_root_account),
     );
-    <a href="LibraConfig.md#0x1_LibraConfig_claim_delegated_modify_config">LibraConfig::claim_delegated_modify_config</a>&lt;<a href="#0x1_LibraVMConfig">LibraVMConfig</a>&gt;(association_root_account, <a href="Signer.md#0x1_Signer_address_of">Signer::address_of</a>(config_account));
 }
 </code></pre>
 
@@ -260,3 +272,30 @@
 
 
 </details>
+
+<a name="0x1_LibraVMConfig_Specification"></a>
+
+## Specification
+
+
+<a name="0x1_LibraVMConfig_Specification_initialize"></a>
+
+### Function `initialize`
+
+
+<pre><code><b>public</b> <b>fun</b> <a href="#0x1_LibraVMConfig_initialize">initialize</a>(lr_account: &signer, publishing_option: vector&lt;u8&gt;, instruction_schedule: vector&lt;u8&gt;, native_schedule: vector&lt;u8&gt;)
+</code></pre>
+
+
+
+
+<pre><code>pragma aborts_if_is_partial = <b>true</b>;
+</code></pre>
+
+
+
+The permission "UpdateVMConfig" is granted to LibraRoot [B21].
+
+
+<pre><code><b>apply</b> <a href="Roles.md#0x1_Roles_AbortsIfNotLibraRoot">Roles::AbortsIfNotLibraRoot</a>{account: lr_account} <b>to</b> initialize;
+</code></pre>

@@ -82,10 +82,16 @@ impl SchemaBatch {
     }
 }
 
+pub enum ScanDirection {
+    Forward,
+    Backward,
+}
+
 /// DB Iterator parameterized on [`Schema`] that seeks with [`Schema::Key`] and yields
 /// [`Schema::Key`] and [`Schema::Value`]
 pub struct SchemaIterator<'a, S> {
     db_iter: rocksdb::DBRawIterator<'a>,
+    direction: ScanDirection,
     phantom: PhantomData<S>,
 }
 
@@ -93,9 +99,10 @@ impl<'a, S> SchemaIterator<'a, S>
 where
     S: Schema,
 {
-    fn new(db_iter: rocksdb::DBRawIterator<'a>) -> Self {
+    fn new(db_iter: rocksdb::DBRawIterator<'a>, direction: ScanDirection) -> Self {
         SchemaIterator {
             db_iter,
+            direction,
             phantom: PhantomData,
         }
     }
@@ -135,6 +142,7 @@ where
     }
 
     fn next_impl(&mut self) -> Result<Option<(S::Key, S::Value)>> {
+        let _timer = OP_COUNTER.timer(&format!("db_iter_time_{}", S::COLUMN_FAMILY_NAME));
         if !self.db_iter.valid() {
             self.db_iter.status()?;
             return Ok(None);
@@ -142,9 +150,18 @@ where
 
         let raw_key = self.db_iter.key().expect("Iterator must be valid.");
         let raw_value = self.db_iter.value().expect("Iterator must be valid.");
+        OP_COUNTER.observe(
+            &format!("db_iter_bytes_{}", S::COLUMN_FAMILY_NAME),
+            (raw_key.len() + raw_value.len()) as f64,
+        );
         let key = <S::Key as KeyCodec<S>>::decode_key(raw_key)?;
         let value = <S::Value as ValueCodec<S>>::decode_value(raw_value)?;
-        self.db_iter.next();
+
+        match self.direction {
+            ScanDirection::Forward => self.db_iter.next(),
+            ScanDirection::Backward => self.db_iter.prev(),
+        }
+
         Ok(Some((key, value)))
     }
 }
@@ -256,12 +273,15 @@ impl DB {
 
     /// Reads single record by key.
     pub fn get<S: Schema>(&self, schema_key: &S::Key) -> Result<Option<S::Value>> {
+        let _timer = OP_COUNTER.timer(&format!("db_get_time_{}", S::COLUMN_FAMILY_NAME));
         let k = <S::Key as KeyCodec<S>>::encode_key(&schema_key)?;
         let cf_handle = self.get_cf_handle(S::COLUMN_FAMILY_NAME)?;
-        let time = std::time::Instant::now();
 
         let result = self.inner.get_cf(cf_handle, &k)?;
-        OP_COUNTER.observe_duration(&format!("db_get_{}", S::COLUMN_FAMILY_NAME), time.elapsed());
+        OP_COUNTER.observe(
+            &format!("db_get_bytes_{}", S::COLUMN_FAMILY_NAME),
+            result.as_ref().map_or(0.0, |v| v.len() as f64),
+        );
         result
             .map(|raw_value| <S::Value as ValueCodec<S>>::decode_value(&raw_value))
             .transpose()
@@ -294,16 +314,31 @@ impl DB {
         Ok(())
     }
 
-    /// Returns a [`SchemaIterator`] on a certain schema.
-    pub fn iter<S: Schema>(&self, opts: ReadOptions) -> Result<SchemaIterator<S>> {
+    fn iter_with_direction<S: Schema>(
+        &self,
+        opts: ReadOptions,
+        direction: ScanDirection,
+    ) -> Result<SchemaIterator<S>> {
         let cf_handle = self.get_cf_handle(S::COLUMN_FAMILY_NAME)?;
         Ok(SchemaIterator::new(
             self.inner.raw_iterator_cf_opt(cf_handle, opts),
+            direction,
         ))
+    }
+
+    /// Returns a forward [`SchemaIterator`] on a certain schema.
+    pub fn iter<S: Schema>(&self, opts: ReadOptions) -> Result<SchemaIterator<S>> {
+        self.iter_with_direction::<S>(opts, ScanDirection::Forward)
+    }
+
+    /// Returns a backward [`SchemaIterator`] on a certain schema.
+    pub fn rev_iter<S: Schema>(&self, opts: ReadOptions) -> Result<SchemaIterator<S>> {
+        self.iter_with_direction::<S>(opts, ScanDirection::Backward)
     }
 
     /// Writes a group of records wrapped in a [`SchemaBatch`].
     pub fn write_schemas(&self, batch: SchemaBatch) -> Result<()> {
+        let _timer = OP_COUNTER.timer(&format!("db_batch_commit_time_{}", self.name));
         let mut db_batch = rocksdb::WriteBatch::default();
         for (cf_name, rows) in &batch.rows {
             let cf_handle = self.get_cf_handle(cf_name)?;

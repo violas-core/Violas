@@ -1,13 +1,11 @@
 //! new-transaction
-//! sender: config
+//! sender: libraroot
 script {
 use 0x1::Libra;
-use 0x1::LibraConfig::CreateOnChainConfig;
-use 0x1::Roles;
+use 0x1::LibraTimestamp;
 fun main(account: &signer) {
-    let r = Roles::extract_privilege_to_capability<CreateOnChainConfig>(account);
-    Libra::initialize(account, &r);
-    Roles::restore_capability_to_privilege(account, r);
+    LibraTimestamp::reset_time_has_started_for_test();
+    Libra::initialize(account);
 }
 }
 // check: CANNOT_WRITE_EXISTING_RESOURCE

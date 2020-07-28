@@ -6,11 +6,11 @@ use anyhow::{format_err, Context, Result};
 use consensus_types::{
     block::Block, quorum_cert::QuorumCert, timeout_certificate::TimeoutCertificate, vote::Vote,
 };
-use debug_interface::prelude::*;
 use executor_types::ExecutedTrees;
 use libra_config::config::NodeConfig;
 use libra_crypto::HashValue;
 use libra_logger::prelude::*;
+use libra_trace::prelude::*;
 use libra_types::{
     block_info::Round, epoch_change::EpochChangeProof, ledger_info::LedgerInfo,
     transaction::Version,
@@ -85,7 +85,7 @@ impl LedgerRecoveryData {
 
         // We start from the block that storage's latest ledger info, if storage has end-epoch
         // LedgerInfo, we generate the virtual genesis block
-        let root_id = if self.storage_ledger.next_epoch_state().is_some() {
+        let root_id = if self.storage_ledger.ends_epoch() {
             let genesis = Block::make_genesis_block_from_ledger_info(&self.storage_ledger);
             let genesis_qc = QuorumCert::certificate_for_genesis_from_ledger_info(
                 &self.storage_ledger,

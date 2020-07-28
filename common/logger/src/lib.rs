@@ -47,9 +47,9 @@
 //! }
 //!
 //! // Usage:
-//! send_struct_log!(StructuredLogEntry::new_named("Committed")
+//! send_struct_log!(StructuredLogEntry::new_named("category", "Committed")
 //!    .data("block", &block)
-//!    .data("autor", &author))
+//!    .data("author", &author))
 //! ```
 //!
 //! Arguments passed to .data will be serialized into json, and as such should implement Serialize.
@@ -61,9 +61,7 @@
 //! ## Log macro bridge
 //!
 //! Crate owners are not required to rewrite their code right away to support new structured logging.
-//! Importing logger crate will automatically emit structured logging on every log(debug!, info!, etc) macro invocation, unless no_struct_log feature was enabled on this crate.
-//!
-//! Note: Only enable 'no_struct_log' on leaf binary crates, never on library, as it might disable structured logging for other crates, due to how cargo handles features at this moment.
+//! Importing logger crate will automatically emit structured logging on every log(debug!, info!, etc) macro invocation.
 //!
 //! So
 //! ```pseudo
@@ -118,9 +116,15 @@
 pub use log;
 
 pub mod prelude {
-    pub use crate::{crit, debug, error, info, send_struct_log, trace, warn};
+    pub use crate::{
+        crit, debug, error, event, info,
+        security::{security_events, security_log},
+        send_struct_log, trace, warn, StructuredLogEntry,
+    };
 }
+pub mod json_log;
 
+mod security;
 mod struct_log;
 
 pub use struct_log::{
@@ -131,6 +135,7 @@ pub use struct_log::{
 mod text_log;
 pub use log::Level;
 pub use text_log::{Logger, CHANNEL_SIZE, DEFAULT_TARGET};
+pub mod counters;
 
 /// Define crit macro that specify libra as the target
 // TODO Remove historical crit from code base since it isn't supported in Rust Log.
@@ -201,15 +206,6 @@ macro_rules! warn {
 }
 
 #[macro_export]
-#[cfg(feature = "no_struct_log")]
-macro_rules! struct_log_enabled {
-    ($level:expr) => {
-        false
-    };
-}
-
-#[macro_export]
-#[cfg(not(feature = "no_struct_log"))]
 macro_rules! struct_log_enabled {
     ($level:expr) => {
         $crate::struct_logger_enabled($level)
@@ -217,13 +213,6 @@ macro_rules! struct_log_enabled {
 }
 
 #[macro_export]
-#[cfg(feature = "no_struct_log")]
-macro_rules! struct_log {
-    ($($arg:tt)+) => {};
-}
-
-#[macro_export]
-#[cfg(not(feature = "no_struct_log"))]
 macro_rules! struct_log {
     ($($arg:tt)+) => {
         let mut entry = $crate::StructuredLogEntry::new_unnamed();
@@ -241,6 +230,7 @@ macro_rules! send_struct_log {
             entry.location($crate::location!());
             entry.git_rev($crate::git_rev!());
             entry.send();
+            $crate::counters::STRUCT_LOG_COUNT.inc();
         }
     };
 }
