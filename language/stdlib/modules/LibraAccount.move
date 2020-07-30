@@ -616,6 +616,8 @@ module LibraAccount {
             currency_code, 
             );
 
+        TransactionFee::add_txn_fee_currency<CoinType>(lr_account, &tc_account);
+
         destroy_signer(tc_account);
 
         AccountLimits::publish_unrestricted_limits<CoinType>(lr_account);

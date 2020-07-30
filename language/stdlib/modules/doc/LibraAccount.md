@@ -1203,6 +1203,8 @@ Create a treasury/compliance account at
         currency_code,
         );
 
+    <a href="TransactionFee.md#0x1_TransactionFee_add_txn_fee_currency">TransactionFee::add_txn_fee_currency</a>&lt;CoinType&gt;(lr_account, &tc_account);
+
     <a href="#0x1_LibraAccount_destroy_signer">destroy_signer</a>(tc_account);
 
     <a href="AccountLimits.md#0x1_AccountLimits_publish_unrestricted_limits">AccountLimits::publish_unrestricted_limits</a>&lt;CoinType&gt;(lr_account);
