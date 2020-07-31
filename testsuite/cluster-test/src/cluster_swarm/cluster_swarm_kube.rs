@@ -41,8 +41,8 @@ const ERROR_NOT_FOUND: u16 = 404;
 #[derive(Clone)]
 pub struct ClusterSwarmKube {
     client: Client,
-    node_map: Arc<Mutex<HashMap<String, KubeNode>>>,
     http_client: HttpClient,
+    pub node_map: Arc<Mutex<HashMap<String, KubeNode>>>,
 }
 
 impl ClusterSwarmKube {
@@ -150,8 +150,9 @@ impl ClusterSwarmKube {
         enable_lsr: bool,
         node_name: &str,
         image_tag: &str,
+        seed_peer_ip: &str,
+        safety_rules_addr: &str,
         cfg_overrides: &str,
-        delete_data: bool,
     ) -> Result<Pod> {
         let cfg_fullnode_seed = if num_fullnodes > 0 {
             CFG_FULLNODE_SEED
@@ -169,8 +170,9 @@ impl ClusterSwarmKube {
             image_tag = image_tag,
             node_name = node_name,
             cfg_overrides = cfg_overrides,
-            delete_data = delete_data,
             cfg_seed = CFG_SEED,
+            cfg_seed_peer_ip = seed_peer_ip,
+            cfg_safety_rules_addr = safety_rules_addr,
             cfg_fullnode_seed = cfg_fullnode_seed,
             fluentbit_enabled = fluentbit_enabled,
         );
@@ -188,8 +190,8 @@ impl ClusterSwarmKube {
         num_validators: u32,
         node_name: &str,
         image_tag: &str,
+        seed_peer_ip: &str,
         cfg_overrides: &str,
-        delete_data: bool,
     ) -> Result<Pod> {
         let fluentbit_enabled = "true";
         let pod_yaml = format!(
@@ -201,8 +203,8 @@ impl ClusterSwarmKube {
             node_name = node_name,
             image_tag = image_tag,
             cfg_overrides = cfg_overrides,
-            delete_data = delete_data,
             cfg_seed = CFG_SEED,
+            cfg_seed_peer_ip = seed_peer_ip,
             cfg_fullnode_seed = CFG_FULLNODE_SEED,
             fluentbit_enabled = fluentbit_enabled,
         );
@@ -414,7 +416,7 @@ impl ClusterSwarmKube {
         self.run_jobs(vec![job_spec], back_off_limit).await
     }
 
-    async fn allocate_node(&self, pod_name: &str) -> Result<KubeNode> {
+    pub async fn allocate_node(&self, pod_name: &str) -> Result<KubeNode> {
         libra_retrier::retry_async(libra_retrier::fixed_retry_strategy(5000, 15), || {
             Box::pin(async move { self.allocate_node_impl(pod_name).await })
         })
@@ -442,11 +444,7 @@ impl ClusterSwarmKube {
         ))
     }
 
-    pub async fn upsert_node(
-        &self,
-        instance_config: InstanceConfig,
-        delete_data: bool,
-    ) -> Result<Instance> {
+    pub async fn upsert_node(&self, instance_config: InstanceConfig) -> Result<Instance> {
         let pod_name = instance_config.pod_name();
         let pod_api: Api<Pod> = Api::namespaced(self.client.clone(), DEFAULT_NAMESPACE);
         if pod_api.get(&pod_name).await.is_ok() {
@@ -467,8 +465,12 @@ impl ClusterSwarmKube {
                     validator_config.enable_lsr,
                     &node.name,
                     &validator_config.image_tag,
+                    &validator_config.seed_peer_ip,
+                    validator_config
+                        .safety_rules_addr
+                        .as_ref()
+                        .unwrap_or(&"".to_string()),
                     &validator_config.config_overrides.iter().join(","),
-                    delete_data,
                 )?,
                 self.service_spec(pod_name.clone()),
             ),
@@ -480,8 +482,8 @@ impl ClusterSwarmKube {
                     fullnode_config.num_validators,
                     &node.name,
                     &fullnode_config.image_tag,
+                    &fullnode_config.seed_peer_ip,
                     &fullnode_config.config_overrides.iter().join(","),
-                    delete_data,
                 )?,
                 self.service_spec(pod_name.clone()),
             ),
@@ -570,7 +572,7 @@ impl ClusterSwarmKube {
             .map_err(|e| format_err!("remove_all_network_effects: {}", e))
     }
 
-    async fn delete_all(&self) -> Result<()> {
+    pub async fn delete_all(&self) -> Result<()> {
         let pod_api: Api<Pod> = Api::namespaced(self.client.clone(), DEFAULT_NAMESPACE);
         let pod_names: Vec<String> = pod_api
             .list(&ListParams {
@@ -642,16 +644,38 @@ impl ClusterSwarmKube {
         try_join_all(delete_futures).await?;
         Ok(())
     }
+
+    /// Runs command on the provided host in separate utility container based on cluster-test-util image
+    pub async fn util_cmd<S: AsRef<str>>(
+        &self,
+        command: S,
+        k8s_node: &str,
+        job_name: &str,
+    ) -> Result<()> {
+        self.run(
+            k8s_node,
+            "853397791086.dkr.ecr.us-west-2.amazonaws.com/cluster-test-util:latest",
+            command.as_ref(),
+            job_name,
+        )
+        .await
+    }
 }
 
 #[async_trait]
 impl ClusterSwarm for ClusterSwarmKube {
-    async fn spawn_new_instance(
-        &self,
-        instance_config: InstanceConfig,
-        delete_data: bool,
-    ) -> Result<Instance> {
-        self.upsert_node(instance_config, delete_data).await
+    async fn spawn_new_instance(&self, instance_config: InstanceConfig) -> Result<Instance> {
+        self.upsert_node(instance_config).await
+    }
+
+    async fn clean_data(&self, node: &str) -> Result<()> {
+        self.util_cmd("rm -rf /opt/libra/data/*", node, "clean-data")
+            .await
+    }
+
+    async fn get_node_name(&self, pod_name: &str) -> Result<String> {
+        let node = self.allocate_node(pod_name).await?;
+        Ok(node.name)
     }
 
     async fn get_grafana_baseurl(&self) -> Result<String> {

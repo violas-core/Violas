@@ -28,9 +28,6 @@ spec:
     - "-c"
     - |
       set -x;
-      if [[ {delete_data} = true ]]; then
-        rm -rf /opt/libra/data/*
-      fi
       if [[ {fluentbit_enabled} = true ]]; then
         libra_log_file="libra.log"
       else
@@ -52,12 +49,13 @@ spec:
           Parsers_File  /opt/libra/data/fluent-bit/parsers.conf
 
       [INPUT]
-          Name              tail
-          Tag               validator
-          Path              /opt/libra/data/${{libra_log_file}}
-          Mem_Buf_Limit     200MB
-          Refresh_Interval  10
-          Skip_Long_Lines   On
+          Name        tcp
+          Tag         validator
+          Listen      0.0.0.0
+          Port        5044
+          Chunk_Size  32
+          Buffer_Size 64
+          Format      json
 
       [INPUT]
           Name              tail
@@ -82,14 +80,8 @@ spec:
           Replace_Dots    Off
           Retry_Limit     False
           Logstash_Prefix kubernetes_cluster
+          Generate_ID     On
       EOF
-      CFG_SEED_PEER_IP=$(kubectl get pod/val-{validator_index} -o=jsonpath='{{.status.podIP}}');
-      while [ -z "${{CFG_SEED_PEER_IP}}" ]; do
-        sleep 5;
-        CFG_SEED_PEER_IP=$(kubectl get pod/val-{validator_index} -o=jsonpath='{{.status.podIP}}');
-        echo "Waiting for pod/val-{validator_index} IP Address";
-      done;
-      echo -n "${{CFG_SEED_PEER_IP}}" > /opt/libra/data/seed_peer_ip
   containers:
   - name: fluent-bit
     image: 853397791086.dkr.ecr.us-west-2.amazonaws.com/fluent-bit:1.3.9
@@ -122,12 +114,14 @@ spec:
       value: "{fullnode_index}"
     - name: CFG_SEED
       value: "{cfg_seed}"
+    - name: CFG_SEED_PEER_IP
+      value: "{cfg_seed_peer_ip}"
     - name: CFG_FULLNODE_SEED
       value: "{cfg_fullnode_seed}"
     - name: RUST_LOG
       value: "warn"
-    - name: STRUCT_LOG_FILE
-      value: "/opt/libra/data/events.log"
+    - name: STRUCT_LOG_TCP_ADDR
+      value: "127.0.0.1:5044"
     - name: STRUCT_LOG_LEVEL
       value: "debug"
     - name: RUST_BACKTRACE
@@ -144,7 +138,6 @@ spec:
       - |
         set -x;
         export CFG_LISTEN_ADDR=$MY_POD_IP;
-        export CFG_SEED_PEER_IP=$(cat /opt/libra/data/seed_peer_ip);
         exec bash /docker-run-dynamic-fullnode.sh &> /opt/libra/data/libra.log
   volumes:
   - name: data

@@ -5,6 +5,7 @@
 
 #[cfg(test)]
 mod executor_test;
+mod metrics;
 #[cfg(test)]
 mod mock_vm;
 mod speculation_cache;
@@ -13,6 +14,11 @@ mod types;
 pub mod db_bootstrapper;
 
 use crate::{
+    metrics::{
+        LIBRA_EXECUTOR_EXECUTE_BLOCK_SECONDS, LIBRA_EXECUTOR_SAVE_TRANSACTIONS_SECONDS,
+        LIBRA_EXECUTOR_TRANSACTIONS_SAVED, LIBRA_EXECUTOR_VM_EXECUTE_BLOCK_SECONDS,
+        LIBRA_EXECUTOR_VM_EXECUTE_CHUNK_SECONDS,
+    },
     speculation_cache::SpeculationCache,
     types::{ProcessedVMOutput, TransactionData},
 };
@@ -266,7 +272,7 @@ where
                 ));
                 continue;
             }
-            let (blobs, state_tree) = Self::process_write_set(
+            let (blobs, state_tree) = process_write_set(
                 txn,
                 &mut account_to_state,
                 &proof_reader,
@@ -368,82 +374,6 @@ where
         ))
     }
 
-    /// For all accounts modified by this transaction, find the previous blob and update it based
-    /// on the write set. Returns the blob value of all these accounts as well as the newly
-    /// constructed state tree.
-    fn process_write_set(
-        transaction: &Transaction,
-        account_to_state: &mut HashMap<AccountAddress, AccountState>,
-        proof_reader: &ProofReader,
-        write_set: WriteSet,
-        previous_state_tree: &SparseMerkleTree,
-    ) -> Result<(
-        HashMap<AccountAddress, AccountStateBlob>,
-        Arc<SparseMerkleTree>,
-    )> {
-        let mut updated_blobs = HashMap::new();
-
-        // Find all addresses this transaction touches while processing each write op.
-        let mut addrs = HashSet::new();
-        for (access_path, write_op) in write_set.into_iter() {
-            let address = access_path.address;
-            let path = access_path.path;
-            match account_to_state.entry(address) {
-                hash_map::Entry::Occupied(mut entry) => {
-                    Self::update_account_state(entry.get_mut(), path, write_op);
-                }
-                hash_map::Entry::Vacant(entry) => {
-                    // Before writing to an account, VM should always read that account. So we
-                    // should not reach this code path. The exception is genesis transaction (and
-                    // maybe other writeset transactions).
-                    match transaction {
-                        Transaction::WaypointWriteSet(_) => (),
-                        Transaction::BlockMetadata(_) => {
-                            bail!("Write set should be a subset of read set.")
-                        }
-                        Transaction::UserTransaction(txn) => match txn.payload() {
-                            TransactionPayload::Module(_) | TransactionPayload::Script(_) => {
-                                bail!("Write set should be a subset of read set.")
-                            }
-                            TransactionPayload::WriteSet(_) => (),
-                        },
-                    }
-
-                    let mut account_state = Default::default();
-                    Self::update_account_state(&mut account_state, path, write_op);
-                    entry.insert(account_state);
-                }
-            }
-            addrs.insert(address);
-        }
-
-        for addr in addrs {
-            let account_state = account_to_state.get(&addr).expect("Address should exist.");
-            let account_blob = AccountStateBlob::try_from(account_state)?;
-            updated_blobs.insert(addr, account_blob);
-        }
-        let state_tree = Arc::new(
-            previous_state_tree
-                .update(
-                    updated_blobs
-                        .iter()
-                        .map(|(addr, value)| (addr.hash(), value.clone()))
-                        .collect(),
-                    proof_reader,
-                )
-                .expect("Failed to update state tree."),
-        );
-
-        Ok((updated_blobs, state_tree))
-    }
-
-    fn update_account_state(account_state: &mut AccountState, path: Vec<u8>, write_op: WriteOp) {
-        match write_op {
-            WriteOp::Value(new_value) => account_state.insert(path, new_value),
-            WriteOp::Deletion => account_state.remove(&path),
-        };
-    }
-
     fn extract_reconfig_events(events: Vec<ContractEvent>) -> Vec<ContractEvent> {
         let new_epoch_event_key = on_chain_config::new_epoch_event_key();
         events
@@ -501,7 +431,8 @@ where
             self.cache.synced_trees().state_tree(),
         );
         let vm_outputs = {
-            let _timer = OP_COUNTERS.timer("vm_execute_chunk_time_s");
+            let __timer = OP_COUNTERS.timer("vm_execute_chunk_time_s");
+            let _timer = LIBRA_EXECUTOR_VM_EXECUTE_CHUNK_SECONDS.start_timer();
             V::execute_block(transactions.clone(), &state_view)?
         };
 
@@ -614,8 +545,12 @@ impl<V: VMExecutor> ChunkExecutor for Executor<V> {
         // 5. Cache maintenance.
         let output_trees = output.executed_trees().clone();
         if let Some(ledger_info_with_sigs) = &ledger_info_to_commit {
-            self.cache
-                .update_block_tree_root(output_trees, ledger_info_with_sigs.ledger_info());
+            self.cache.update_block_tree_root(
+                output_trees,
+                ledger_info_with_sigs.ledger_info(),
+                vec![],
+                vec![],
+            );
         } else {
             self.cache.update_synced_trees(output_trees);
         }
@@ -715,7 +650,8 @@ impl<V: VMExecutor> BlockExecutor for Executor<V> {
         } else {
             debug!("Received block {:x} to execute.", block_id);
 
-            let _timer = OP_COUNTERS.timer("block_execute_time_s");
+            let __timer = OP_COUNTERS.timer("block_execute_time_s");
+            let _timer = LIBRA_EXECUTOR_EXECUTE_BLOCK_SECONDS.start_timer();
 
             let parent_block_executed_trees = self.get_executed_trees(parent_block_id)?;
 
@@ -726,7 +662,8 @@ impl<V: VMExecutor> BlockExecutor for Executor<V> {
 
             let vm_outputs = {
                 trace_code_block!("executor::execute_block", {"block", block_id});
-                let _timer = OP_COUNTERS.timer("vm_execute_block_time_s");
+                let __timer = OP_COUNTERS.timer("vm_execute_block_time_s");
+                let _timer = LIBRA_EXECUTOR_VM_EXECUTE_BLOCK_SECONDS.start_timer();
                 V::execute_block(transactions.clone(), &state_view).map_err(anyhow::Error::from)?
             };
 
@@ -774,7 +711,21 @@ impl<V: VMExecutor> BlockExecutor for Executor<V> {
         let block_id_to_commit = ledger_info_with_sigs.ledger_info().consensus_block_id();
         debug!("Received request to commit block {:x}.", block_id_to_commit);
 
+        let version = ledger_info_with_sigs.ledger_info().version();
         let num_persistent_txns = self.cache.synced_trees().txn_accumulator().num_leaves();
+
+        if version + 1 < num_persistent_txns {
+            return Err(Error::InternalError {
+                error: format!(
+                    "Try to commit stale transactions with the last version as {}",
+                    version
+                ),
+            });
+        }
+
+        if version + 1 == num_persistent_txns {
+            return Ok(self.cache.committed_txns_and_events());
+        }
 
         // All transactions that need to go to storage. In the above example, this means all the
         // transactions in A, B and C whose status == TransactionStatus::Keep.
@@ -808,7 +759,6 @@ impl<V: VMExecutor> BlockExecutor for Executor<V> {
 
         // Check that the version in ledger info (computed by consensus) matches the version
         // computed by us.
-        let version = ledger_info_with_sigs.ledger_info().version();
         let num_txns_in_speculative_accumulator = last_block
             .output()
             .executed_trees()
@@ -852,8 +802,11 @@ impl<V: VMExecutor> BlockExecutor for Executor<V> {
 
         let num_txns_to_commit = txns_to_commit.len() as u64;
         {
-            let _timer = OP_COUNTERS.timer("storage_save_transactions_time_s");
+            let __timer = OP_COUNTERS.timer("storage_save_transactions_time_s");
+            let _timer = LIBRA_EXECUTOR_SAVE_TRANSACTIONS_SECONDS.start_timer();
             OP_COUNTERS.observe("storage_save_transactions.count", num_txns_to_commit as f64);
+            LIBRA_EXECUTOR_TRANSACTIONS_SAVED.observe(num_txns_to_commit as f64);
+
             assert_eq!(first_version_to_commit, version + 1 - num_txns_to_commit);
             self.db.writer.save_transactions(
                 txns_to_commit,
@@ -868,8 +821,6 @@ impl<V: VMExecutor> BlockExecutor for Executor<V> {
                 txn_data.prune_state_tree();
             }
         }
-        self.cache.prune(ledger_info_with_sigs.ledger_info())?;
-
         // Calculate committed transactions and reconfig events now that commit has succeeded
         let mut committed_txns = vec![];
         let mut reconfig_events = vec![];
@@ -878,7 +829,89 @@ impl<V: VMExecutor> BlockExecutor for Executor<V> {
             reconfig_events.append(&mut Self::extract_reconfig_events(txn.events().to_vec()));
         }
 
+        self.cache.prune(
+            ledger_info_with_sigs.ledger_info(),
+            committed_txns.clone(),
+            reconfig_events.clone(),
+        )?;
+
         // Now that the blocks are persisted successfully, we can reply to consensus
         Ok((committed_txns, reconfig_events))
     }
+}
+
+/// For all accounts modified by this transaction, find the previous blob and update it based
+/// on the write set. Returns the blob value of all these accounts as well as the newly
+/// constructed state tree.
+pub fn process_write_set(
+    transaction: &Transaction,
+    account_to_state: &mut HashMap<AccountAddress, AccountState>,
+    proof_reader: &ProofReader,
+    write_set: WriteSet,
+    previous_state_tree: &SparseMerkleTree,
+) -> Result<(
+    HashMap<AccountAddress, AccountStateBlob>,
+    Arc<SparseMerkleTree>,
+)> {
+    let mut updated_blobs = HashMap::new();
+
+    // Find all addresses this transaction touches while processing each write op.
+    let mut addrs = HashSet::new();
+    for (access_path, write_op) in write_set.into_iter() {
+        let address = access_path.address;
+        let path = access_path.path;
+        match account_to_state.entry(address) {
+            hash_map::Entry::Occupied(mut entry) => {
+                update_account_state(entry.get_mut(), path, write_op);
+            }
+            hash_map::Entry::Vacant(entry) => {
+                // Before writing to an account, VM should always read that account. So we
+                // should not reach this code path. The exception is genesis transaction (and
+                // maybe other writeset transactions).
+                match transaction {
+                    Transaction::WaypointWriteSet(_) => (),
+                    Transaction::BlockMetadata(_) => {
+                        bail!("Write set should be a subset of read set.")
+                    }
+                    Transaction::UserTransaction(txn) => match txn.payload() {
+                        TransactionPayload::Module(_) | TransactionPayload::Script(_) => {
+                            bail!("Write set should be a subset of read set.")
+                        }
+                        TransactionPayload::WriteSet(_) => (),
+                    },
+                }
+
+                let mut account_state = Default::default();
+                update_account_state(&mut account_state, path, write_op);
+                entry.insert(account_state);
+            }
+        }
+        addrs.insert(address);
+    }
+
+    for addr in addrs {
+        let account_state = account_to_state.get(&addr).expect("Address should exist.");
+        let account_blob = AccountStateBlob::try_from(account_state)?;
+        updated_blobs.insert(addr, account_blob);
+    }
+    let state_tree = Arc::new(
+        previous_state_tree
+            .update(
+                updated_blobs
+                    .iter()
+                    .map(|(addr, value)| (addr.hash(), value.clone()))
+                    .collect(),
+                proof_reader,
+            )
+            .expect("Failed to update state tree."),
+    );
+
+    Ok((updated_blobs, state_tree))
+}
+
+fn update_account_state(account_state: &mut AccountState, path: Vec<u8>, write_op: WriteOp) {
+    match write_op {
+        WriteOp::Value(new_value) => account_state.insert(path, new_value),
+        WriteOp::Deletion => account_state.remove(&path),
+    };
 }

@@ -19,6 +19,7 @@ module LibraAccount {
     use 0x1::SlidingNonce;
     use 0x1::TransactionFee;
     use 0x1::ValidatorConfig;
+    use 0x1::ValidatorOperatorConfig;
     use 0x1::VASP;
     use 0x1::Vector;
     use 0x1::DesignatedDealer;
@@ -571,6 +572,7 @@ module LibraAccount {
         assert(LibraTimestamp::is_genesis(), ENOT_GENESIS);
         assert(new_account_address == CoreAddresses::LIBRA_ROOT_ADDRESS(), EINVALID_SINGLETON_ADDRESS);
         let new_account = create_signer(new_account_address);
+        SlidingNonce::publish_nonce_resource(&new_account, &new_account);
         make_account(new_account, auth_key_prefix)
     }
 
@@ -935,11 +937,12 @@ module LibraAccount {
         creator_account: &signer,
         new_account_address: address,
         auth_key_prefix: vector<u8>,
+        human_name: vector<u8>,
     ) {
         assert(Roles::has_libra_root_role(creator_account), ENOT_LIBRA_ROOT);
         let new_account = create_signer(new_account_address);
         Event::publish_generator(&new_account);
-        ValidatorConfig::publish(&new_account, creator_account);
+        ValidatorConfig::publish(&new_account, creator_account, human_name);
         make_account(new_account, auth_key_prefix)
     }
 
@@ -947,10 +950,12 @@ module LibraAccount {
         creator_account: &signer,
         new_account_address: address,
         auth_key_prefix: vector<u8>,
+        human_name: vector<u8>,
     ) {
         assert(Roles::has_libra_root_role(creator_account), ENOT_LIBRA_ROOT);
         let new_account = create_signer(new_account_address);
         Event::publish_generator(&new_account);
+        ValidatorOperatorConfig::publish(&new_account, creator_account, human_name);
         make_account(new_account, auth_key_prefix)
     }
 

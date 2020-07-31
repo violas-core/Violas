@@ -62,7 +62,7 @@ use std::{
     str::{self, FromStr},
     thread, time,
 };
-use transaction_builder::encode_set_validator_config_script;
+use transaction_builder::encode_register_validator_config_script;
 
 const CLIENT_WALLET_MNEMONIC_FILE: &str = "client.mnemonic";
 const GAS_UNIT_PRICE: u64 = 0;
@@ -446,7 +446,7 @@ impl ClientProxy {
         let (receiver, receiver_auth_key_opt) =
             self.get_account_address_from_parameter(space_delim_strings[1])?;
         let receiver_auth_key = receiver_auth_key_opt.ok_or_else(|| {
-            format_err!("Need authentication key to create new account via minting")
+            format_err!("Need authentication key to create new account via minting from facuet")
         })?;
         let mint_currency = space_delim_strings[3];
         let use_base_units = space_delim_strings
@@ -461,7 +461,10 @@ impl ClientProxy {
         let currency_code = from_currency_code_string(mint_currency)
             .map_err(|_| format_err!("Invalid currency code {} provided to mint", mint_currency))?;
 
-        ensure!(num_coins > 0, "Invalid number of coins to mint.");
+        ensure!(
+            num_coins > 0,
+            "Invalid number of coins to transfer from faucet."
+        );
 
         if self.libra_root_account.is_some() {
             let script = transaction_builder::encode_create_testing_account_script(
@@ -478,6 +481,7 @@ impl ClientProxy {
             {
                 let status = &self.accounts.get(pos).unwrap().status;
                 if &AccountStatus::Local == status {
+                    println!(">> Creating recipient account before minting from faucet");
                     // This needs to be blocking since the mint can't happen until it completes
                     self.association_transaction_with_local_libra_root_account(
                         TransactionPayload::Script(script),
@@ -495,6 +499,7 @@ impl ClientProxy {
             } // else, the account has already been created -- do nothing
         }
 
+        println!(">> Sending coins from faucet");
         match self.testnet_designated_dealer_account {
             Some(_) => {
                 let script = transaction_builder::encode_testnet_mint_script(
@@ -618,9 +623,13 @@ impl ClientProxy {
             self.get_account_address_from_parameter(space_delim_strings[1])?;
         match self.libra_root_account {
             Some(_) => self.association_transaction_with_local_libra_root_account(
-                TransactionPayload::Script(transaction_builder::encode_remove_validator_script(
-                    account_address,
-                )),
+                TransactionPayload::Script(
+                    transaction_builder::encode_remove_validator_and_reconfigure_script(
+                        self.libra_root_account.as_ref().unwrap().sequence_number,
+                        vec![],
+                        account_address,
+                    ),
+                ),
                 is_blocking,
             ),
             None => unimplemented!(),
@@ -642,9 +651,13 @@ impl ClientProxy {
             self.get_account_address_from_parameter(space_delim_strings[1])?;
         match self.libra_root_account {
             Some(_) => self.association_transaction_with_local_libra_root_account(
-                TransactionPayload::Script(transaction_builder::encode_add_validator_script(
-                    account_address,
-                )),
+                TransactionPayload::Script(
+                    transaction_builder::encode_add_validator_and_reconfigure_script(
+                        self.libra_root_account.as_ref().unwrap().sequence_number,
+                        vec![],
+                        account_address,
+                    ),
+                ),
                 is_blocking,
             ),
             None => unimplemented!(),
@@ -698,7 +711,7 @@ impl ClientProxy {
         );
         let raw_enc_network_address = RawEncNetworkAddress::try_from(&enc_network_address)?;
 
-        let program = encode_set_validator_config_script(
+        let program = encode_register_validator_config_script(
             address,
             consensus_public_key.to_bytes().to_vec(),
             network_identity_key.to_bytes(),

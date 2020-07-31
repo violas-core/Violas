@@ -3,7 +3,7 @@
 
 use cli::client_proxy::ClientProxy;
 use debug_interface::NodeDebugClient;
-use libra_config::config::{Identity, KeyManagerConfig, NodeConfig};
+use libra_config::config::{Identity, KeyManagerConfig, NodeConfig, SecureBackend};
 use libra_crypto::{ed25519::Ed25519PrivateKey, PrivateKey, SigningKey, Uniform};
 use libra_genesis_tool::config_builder::FullnodeType;
 use libra_global_constants::CONSENSUS_KEY;
@@ -13,6 +13,7 @@ use libra_key_manager::{
     libra_interface::{JsonRpcLibraInterface, LibraInterface},
 };
 use libra_operational_tool::test_helper::OperationalTool;
+use libra_secure_json_rpc::VMStatusView;
 use libra_secure_storage::{CryptoStorage, KVStorage, Storage};
 use libra_swarm::swarm::{LibraNode, LibraSwarm};
 use libra_temppath::TempPath;
@@ -178,6 +179,16 @@ impl TestEnvironment {
 
     fn get_validator(&self, node_index: usize) -> Option<&LibraNode> {
         self.validator_swarm.get_validator(node_index)
+    }
+
+    fn get_op_tool(&self, node_index: usize) -> OperationalTool {
+        OperationalTool::new(
+            format!(
+                "http://127.0.0.1:{}",
+                self.validator_swarm.get_client_port(node_index)
+            ),
+            ChainId::test(),
+        )
     }
 }
 
@@ -1014,6 +1025,13 @@ fn test_full_node_basic_flow() {
 #[test]
 fn test_e2e_reconfiguration() {
     let (env, mut client_proxy_1) = setup_swarm_and_client_proxy(3, 1);
+    let node_configs: Vec<_> = env
+        .validator_swarm
+        .config
+        .config_files
+        .iter()
+        .map(|config_path| NodeConfig::load(config_path).unwrap())
+        .collect();
 
     // the client connected to the removed validator
     let mut client_proxy_0 = env.get_validator_client(0, None);
@@ -1034,14 +1052,12 @@ fn test_e2e_reconfiguration() {
         vec![(10.0, "Coin1".to_string())],
         client_proxy_0.get_balances(&["b", "0"]).unwrap(),
     ));
-    let peer_id = env
-        .get_validator(0)
-        .unwrap()
-        .validator_peer_id()
-        .unwrap()
-        .to_string();
+    let peer_id = env.get_validator(0).unwrap().validator_peer_id().unwrap();
+    let op_tool = env.get_op_tool(1);
+    let libra_root = load_libra_root_storage(node_configs.first().unwrap());
+    let context = op_tool.remove_validator(peer_id, &libra_root).unwrap();
     client_proxy_1
-        .remove_validator(&["remove_validator", &peer_id], true)
+        .wait_for_transaction(context.address, context.sequence_number)
         .unwrap();
     // mint another 10 coins after remove node 0
     client_proxy_1
@@ -1057,8 +1073,9 @@ fn test_e2e_reconfiguration() {
         client_proxy_0.get_balances(&["b", "0"]).unwrap(),
     ));
     // Add the node back
-    client_proxy_1
-        .add_validator(&["add_validator", &peer_id], true)
+    let context = op_tool.add_validator(peer_id, &libra_root).unwrap();
+    client_proxy_0
+        .wait_for_transaction(context.address, context.sequence_number)
         .unwrap();
     // Wait for it catches up, mint1 + mint2 => seq == 2
     client_proxy_0
@@ -1455,91 +1472,218 @@ fn test_key_manager_consensus_rotation() {
     }
 }
 
-/// Helper function to build libra interfaces for smoke test
-fn get_libra_interface(node_config: &NodeConfig) -> JsonRpcLibraInterface {
-    let json_rpc_endpoint = format!("http://127.0.0.1:{}", node_config.rpc.address.port());
-    JsonRpcLibraInterface::new(json_rpc_endpoint)
+/// Loads the validator's storage backend from the given node config
+fn load_backend_storage(node_config: &&NodeConfig) -> SecureBackend {
+    if let Identity::FromStorage(storage_identity) =
+        &node_config.validator_network.as_ref().unwrap().identity
+    {
+        storage_identity.backend.clone()
+    } else {
+        panic!("Couldn't load identity from storage");
+    }
 }
 
-/// Helper function to wait for all nodes to reach a condition
-fn wait_for_all_nodes(
-    libra_interfaces: &[JsonRpcLibraInterface],
-    condition: impl Fn(&JsonRpcLibraInterface) -> bool,
-) {
-    for libra in libra_interfaces {
-        while !condition(libra) {
-            sleep(Duration::from_secs(1));
+fn load_libra_root_storage(node_config: &NodeConfig) -> SecureBackend {
+    if let Identity::FromStorage(storage_identity) =
+        &node_config.validator_network.as_ref().unwrap().identity
+    {
+        match storage_identity.backend.clone() {
+            SecureBackend::OnDiskStorage(mut config) => {
+                config.namespace = Some("libra_root".to_string());
+                SecureBackend::OnDiskStorage(config)
+            }
+            _ => unimplemented!("only support on-disk storage in smoke tests"),
         }
+    } else {
+        panic!("Couldn't load identity from storage");
     }
 }
 
 #[test]
-/// There are three main steps to network key rotation
-/// 1. Rotate the key in local storage
-/// 2. Write a transaction to update the ValidatorConfig trigerring the reconfiguration (Operator)
-fn test_network_key_rotation() {
+fn test_consensus_key_rotation() {
     let mut swarm = TestEnvironment::new(5);
     swarm.validator_swarm.launch();
 
-    // Load the node configs
-    let node_configs: Vec<_> = swarm
-        .validator_swarm
-        .config
-        .config_files
-        .iter()
-        .map(|config_path| NodeConfig::load(config_path).unwrap())
-        .collect();
-    let libra_interfaces: Vec<_> = (&node_configs)
-        .iter()
-        .map(|node_config| get_libra_interface(node_config))
-        .collect();
-    let node_config = (&node_configs).first().unwrap();
+    // Load a node config
+    let node_config =
+        NodeConfig::load(swarm.validator_swarm.config.config_files.first().unwrap()).unwrap();
+
+    // Connect the operator tool to the first node's JSON RPC API
+    let op_tool = swarm.get_op_tool(0);
+
+    // Load validator's on disk storage
+    let backend = load_backend_storage(&&node_config);
+
+    // Rotate the consensus key
+    let (txn_ctx, new_consensus_key) = op_tool.rotate_consensus_key(&backend).unwrap();
+    let mut client = swarm.get_validator_client(0, None);
+    client
+        .wait_for_transaction(txn_ctx.address, txn_ctx.sequence_number + 1)
+        .unwrap();
+
+    // Verify that the config has been updated correctly with the new consensus key
+    let validator_account = node_config.validator_network.as_ref().unwrap().peer_id();
+    let config_consensus_key = op_tool
+        .validator_config(validator_account)
+        .unwrap()
+        .consensus_public_key;
+    assert_eq!(new_consensus_key, config_consensus_key);
+
+    // Verify that the validator set info contains the new consensus key
+    let info_consensus_key = op_tool.validator_set(validator_account).unwrap()[0]
+        .config()
+        .consensus_public_key
+        .clone();
+    assert_eq!(new_consensus_key, info_consensus_key)
+}
+
+#[test]
+fn test_operator_key_rotation() {
+    let mut swarm = TestEnvironment::new(5);
+    swarm.validator_swarm.launch();
+
+    // Load a node config
+    let node_config =
+        NodeConfig::load(swarm.validator_swarm.config.config_files.first().unwrap()).unwrap();
+
+    // Connect the operator tool to the first node's JSON RPC API
     let op_tool = OperationalTool::new(
         format!("http://127.0.0.1:{}", node_config.rpc.address.port()),
         ChainId::test(),
     );
 
     // Load validator's on disk storage
-    let backend = if let Identity::FromStorage(storage_identity) =
-        &node_config.validator_network.as_ref().unwrap().identity
-    {
-        &storage_identity.backend
-    } else {
-        panic!("Couldn't load identity from storage");
-    };
+    let backend = load_backend_storage(&&node_config);
 
-    // Setup an RPC endpoint so we can talk to the node
+    let (txn_ctx, _) = op_tool.rotate_operator_key(&backend).unwrap();
+    let mut client = swarm.get_validator_client(0, None);
+    client
+        .wait_for_transaction(txn_ctx.address, txn_ctx.sequence_number + 1)
+        .unwrap();
+
+    // Verify that the transaction was executed correctly
+    let result = op_tool
+        .validate_transaction(txn_ctx.address, txn_ctx.sequence_number)
+        .unwrap();
+    let vm_status = result.unwrap();
+    assert_eq!(VMStatusView::Executed, vm_status);
+
+    // Rotate the consensus key to verify the operator key has been updated
+    let (txn_ctx, new_consensus_key) = op_tool.rotate_consensus_key(&backend).unwrap();
+    let mut client = swarm.get_validator_client(0, None);
+    client
+        .wait_for_transaction(txn_ctx.address, txn_ctx.sequence_number + 1)
+        .unwrap();
+
+    // Verify that the config has been updated correctly with the new consensus key
     let validator_account = node_config.validator_network.as_ref().unwrap().peer_id();
-    let libra = (&libra_interfaces).first().unwrap();
+    let config_consensus_key = op_tool
+        .validator_config(validator_account)
+        .unwrap()
+        .consensus_public_key;
+    assert_eq!(new_consensus_key, config_consensus_key);
+}
 
-    let last_reconfig = libra.last_reconfiguration().unwrap();
-    let (transaction_context, new_network_key) =
-        op_tool.rotate_validator_network_key(backend).unwrap();
+#[test]
+fn test_network_key_rotation() {
+    let mut swarm = TestEnvironment::new(5);
+    swarm.validator_swarm.launch();
 
-    // Ensure all nodes have been reconfigured
-    wait_for_all_nodes(&libra_interfaces, |libra| {
-        libra.last_reconfiguration().unwrap() > last_reconfig
-    });
+    // Load a node config
+    let node_config =
+        NodeConfig::load(swarm.validator_swarm.config.config_files.first().unwrap()).unwrap();
 
-    // Validate transaction
-    // TODO: Validating transaction doesn't seem to validate that the reconfiguration occurred
-    // Should refactor once we have a command to validate that
-    op_tool
-        .validate_transaction(
-            transaction_context.address,
-            transaction_context.sequence_number,
-        )
+    // Connect the operator tool to the first node's JSON RPC API
+    let op_tool = swarm.get_op_tool(0);
+
+    // Load validator's on disk storage
+    let backend = load_backend_storage(&&node_config);
+
+    // Rotate the validator network key
+    let (txn_ctx, new_network_key) = op_tool.rotate_validator_network_key(&backend).unwrap();
+    let mut client = swarm.get_validator_client(0, None);
+    client
+        .wait_for_transaction(txn_ctx.address, txn_ctx.sequence_number + 1)
         .unwrap();
 
     // Verify that config has been loaded correctly with new key
-    let actual_key = libra
-        .retrieve_validator_config(validator_account)
+    let validator_account = node_config.validator_network.as_ref().unwrap().peer_id();
+    let config_network_key = op_tool
+        .validator_config(validator_account)
         .unwrap()
         .validator_network_identity_public_key;
-    assert_eq!(new_network_key, actual_key);
+    assert_eq!(new_network_key, config_network_key);
+
+    // Verify that the validator set info contains the new network key
+    let info_network_key = op_tool.validator_set(validator_account).unwrap()[0]
+        .config()
+        .validator_network_identity_public_key;
+    assert_eq!(new_network_key, info_network_key);
 
     // Restart validator
     // At this point, the `add_node` call ensures connectivity to all nodes
     swarm.validator_swarm.kill_node(0);
     swarm.validator_swarm.add_node(0, false).unwrap();
+}
+
+#[test]
+fn test_stop_consensus() {
+    let mut env = TestEnvironment::new(4);
+    println!("1. set stop_consensus = true for the first node and check it can sync to others");
+    let config_path = env.validator_swarm.config.config_files.first().unwrap();
+    let mut node_config = NodeConfig::load(config_path).unwrap();
+    node_config.consensus.stop_consensus = true;
+    node_config.save(config_path).unwrap();
+    env.validator_swarm.launch();
+    // 1. test the stopped node still syncs the transaction
+    let mut client_proxy = env.get_validator_client(0, None);
+    client_proxy.create_next_account(false).unwrap();
+    client_proxy
+        .mint_coins(&["mintb", "0", "10", "Coin1"], true)
+        .unwrap();
+    println!("2. set stop_consensus = true for all nodes and restart");
+    for (i, config_path) in env
+        .validator_swarm
+        .config
+        .config_files
+        .clone()
+        .iter()
+        .enumerate()
+    {
+        let mut node_config = NodeConfig::load(config_path).unwrap();
+        node_config.consensus.stop_consensus = true;
+        node_config.save(config_path).unwrap();
+        env.validator_swarm.kill_node(i);
+        env.validator_swarm.add_node(i, false).unwrap();
+    }
+    println!("3. delete one node's db and test they can still sync when stop_consensus is true for every nodes");
+    env.validator_swarm.kill_node(0);
+    fs::remove_dir_all(node_config.storage.dir()).unwrap();
+    env.validator_swarm.add_node(0, false).unwrap();
+    println!("4. verify all nodes are at the same round and no progress being made in 5 sec");
+    env.validator_swarm.wait_for_all_nodes_to_catchup();
+    let mut known_round = None;
+    for i in 0..5 {
+        let last_committed_round_str = "libra_consensus_last_committed_round{}";
+        for (index, node) in &mut env.validator_swarm.nodes {
+            if let Some(round) = node.get_metric(last_committed_round_str) {
+                match known_round {
+                    Some(r) if r != round => panic!(
+                        "round not equal, last known: {}, node {} is {}",
+                        r, index, round
+                    ),
+                    None => known_round = Some(round),
+                    _ => continue,
+                }
+            } else {
+                panic!("unable to get round from node {}", index);
+            }
+        }
+        println!(
+            "The last know round after {} sec is {}",
+            i,
+            known_round.unwrap()
+        );
+        sleep(Duration::from_secs(1));
+    }
 }

@@ -56,6 +56,8 @@ pub struct ValidatorConfig {
     pub enable_lsr: bool,
     pub image_tag: String,
     pub config_overrides: Vec<String>,
+    pub seed_peer_ip: String,
+    pub safety_rules_addr: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -65,6 +67,7 @@ pub struct FullnodeConfig {
     pub num_validators: u32,
     pub image_tag: String,
     pub config_overrides: Vec<String>,
+    pub seed_peer_ip: String,
 }
 
 #[derive(Clone)]
@@ -130,19 +133,18 @@ impl InstanceConfig {
     pub fn pod_name(&self) -> String {
         match &self.application_config {
             ApplicationConfig::Validator(_) => match self.validator_group.twin_index {
-                None => format!("val-{}", self.validator_group.index),
+                None => validator_pod_name(self.validator_group.index),
                 twin_index => format!(
                     "val-{}-twin-{}",
                     self.validator_group.index,
                     twin_index.unwrap()
                 ),
             },
-            ApplicationConfig::Fullnode(fullnode_config) => format!(
-                "fn-{}-{}",
-                self.validator_group.index, fullnode_config.fullnode_index
-            ),
-            ApplicationConfig::LSR(_) => format!("lsr-{}", self.validator_group.index),
-            ApplicationConfig::Vault(_) => format!("vault-{}", self.validator_group.index),
+            ApplicationConfig::Fullnode(fullnode_config) => {
+                fullnode_pod_name(self.validator_group.index, fullnode_config.fullnode_index)
+            }
+            ApplicationConfig::LSR(_) => lsr_pod_name(self.validator_group.index),
+            ApplicationConfig::Vault(_) => vault_pod_name(self.validator_group.index),
         }
     }
 
@@ -276,13 +278,20 @@ impl Instance {
     }
 
     /// Node must be stopped first
-    pub async fn start(&self, delete_data: bool) -> Result<()> {
+    pub async fn start(&self) -> Result<()> {
         let backend = self.k8s_backend();
         backend
             .kube
-            .upsert_node(backend.instance_config.clone(), delete_data)
+            .upsert_node(backend.instance_config.clone())
             .await
             .map(|_| ())
+    }
+
+    /// If deleting /opt/libra/data/* is required, call Instance::clean_date before calling
+    /// Instance::start.
+    pub async fn clean_data(&self) -> Result<()> {
+        self.util_cmd("rm -rf /opt/libra/data/*; ", "clean-data")
+            .await
     }
 
     pub fn instance_config(&self) -> &InstanceConfig {
@@ -370,4 +379,20 @@ pub fn instancelist_to_set(instances: &[Instance]) -> HashSet<String> {
         r.insert(instance.peer_name().clone());
     }
     r
+}
+
+pub fn validator_pod_name(index: u32) -> String {
+    format!("val-{}", index)
+}
+
+pub fn vault_pod_name(index: u32) -> String {
+    format!("vault-{}", index)
+}
+
+pub fn lsr_pod_name(index: u32) -> String {
+    format!("lsr-{}", index)
+}
+
+pub fn fullnode_pod_name(validator_index: u32, fullnode_index: u32) -> String {
+    format!("fn-{}-{}", validator_index, fullnode_index)
 }

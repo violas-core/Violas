@@ -1,12 +1,19 @@
 // Copyright (c) The Libra Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::command::{Command, CommandName};
+use crate::{
+    command::{Command, CommandName},
+    TransactionContext,
+};
 use libra_config::config;
-use libra_crypto::x25519;
-use libra_management::{error::Error, secure_backend::DISK, TransactionContext};
+use libra_crypto::{ed25519::Ed25519PublicKey, x25519};
+use libra_management::{error::Error, secure_backend::DISK};
 use libra_network_address::NetworkAddress;
-use libra_types::{account_address::AccountAddress, chain_id::ChainId};
+use libra_secure_json_rpc::VMStatusView;
+use libra_types::{
+    account_address::AccountAddress, chain_id::ChainId, validator_config::ValidatorConfig,
+    validator_info::ValidatorInfo,
+};
 use structopt::StructOpt;
 
 const TOOL_NAME: &str = "libra-operational-tool";
@@ -33,7 +40,7 @@ impl OperationalTool {
                 {fullnode_address}
                 {validator_address}
                 --chain-id {chain_id}
-                --host {host}
+                --json-server {host}
             ",
             command = command(TOOL_NAME, CommandName::SetValidatorConfig),
             host = self.host,
@@ -46,35 +53,73 @@ impl OperationalTool {
         command.set_validator_config()
     }
 
-    pub fn rotate_validator_network_key(
+    fn rotate_key<T>(
         &self,
         backend: &config::SecureBackend,
-    ) -> Result<(TransactionContext, x25519::PublicKey), Error> {
+        name: CommandName,
+        execute: fn(Command) -> Result<T, Error>,
+    ) -> Result<T, Error> {
         let args = format!(
             "
                 {command}
                 --chain-id {chain_id}
-                --host {host}
+                --json-server {host}
                 --validator-backend {backend_args}
             ",
-            command = command(TOOL_NAME, CommandName::RotateValidatorNetworkKey),
+            command = command(TOOL_NAME, name),
             host = self.host,
             chain_id = self.chain_id.id(),
             backend_args = backend_args(backend)?,
         );
         let command = Command::from_iter(args.split_whitespace());
-        command.rotate_validator_network_key()
+        execute(command)
+    }
+
+    pub fn rotate_consensus_key(
+        &self,
+        backend: &config::SecureBackend,
+    ) -> Result<(TransactionContext, Ed25519PublicKey), Error> {
+        self.rotate_key(backend, CommandName::RotateConsensusKey, |cmd| {
+            cmd.rotate_consensus_key()
+        })
+    }
+
+    pub fn rotate_operator_key(
+        &self,
+        backend: &config::SecureBackend,
+    ) -> Result<(TransactionContext, Ed25519PublicKey), Error> {
+        self.rotate_key(backend, CommandName::RotateOperatorKey, |cmd| {
+            cmd.rotate_operator_key()
+        })
+    }
+
+    pub fn rotate_validator_network_key(
+        &self,
+        backend: &config::SecureBackend,
+    ) -> Result<(TransactionContext, x25519::PublicKey), Error> {
+        self.rotate_key(backend, CommandName::RotateValidatorNetworkKey, |cmd| {
+            cmd.rotate_validator_network_key()
+        })
+    }
+
+    pub fn rotate_fullnode_network_key(
+        &self,
+        backend: &config::SecureBackend,
+    ) -> Result<(TransactionContext, x25519::PublicKey), Error> {
+        self.rotate_key(backend, CommandName::RotateFullNodeNetworkKey, |cmd| {
+            cmd.rotate_fullnode_network_key()
+        })
     }
 
     pub fn validate_transaction(
         &self,
         account_address: AccountAddress,
         sequence_number: u64,
-    ) -> Result<bool, Error> {
+    ) -> Result<Option<VMStatusView>, Error> {
         let args = format!(
             "
                 {command}
-                --host {host}
+                --json-server {host}
                 --account-address {account_address}
                 --sequence-number {sequence_number}
         ",
@@ -86,6 +131,90 @@ impl OperationalTool {
 
         let command = Command::from_iter(args.split_whitespace());
         command.validate_transaction()
+    }
+
+    pub fn validator_config(
+        &self,
+        account_address: AccountAddress,
+    ) -> Result<ValidatorConfig, Error> {
+        let args = format!(
+            "
+                {command}
+                --json-server {json_server}
+                --account-address {account_address}
+        ",
+            command = command(TOOL_NAME, CommandName::ValidatorConfig),
+            json_server = self.host,
+            account_address = account_address,
+        );
+
+        let command = Command::from_iter(args.split_whitespace());
+        command.validator_config()
+    }
+
+    pub fn validator_set(
+        &self,
+        account_address: AccountAddress,
+    ) -> Result<Vec<ValidatorInfo>, Error> {
+        let args = format!(
+            "
+                {command}
+                --json-server {json_server}
+                --account-address {account_address}
+        ",
+            command = command(TOOL_NAME, CommandName::ValidatorSet),
+            json_server = self.host,
+            account_address = account_address,
+        );
+
+        let command = Command::from_iter(args.split_whitespace());
+        command.validator_set()
+    }
+
+    pub fn add_validator(
+        &self,
+        account_address: AccountAddress,
+        backend: &config::SecureBackend,
+    ) -> Result<TransactionContext, Error> {
+        let args = format!(
+            "
+            {command}
+            --json-server {host}
+            --chain-id {chain_id}
+            --account-address {account_address}
+            --validator-backend {backend_args}
+            ",
+            command = command(TOOL_NAME, CommandName::AddValidator),
+            host = self.host,
+            chain_id = self.chain_id.id(),
+            account_address = account_address,
+            backend_args = backend_args(backend)?,
+        );
+        let command = Command::from_iter(args.split_whitespace());
+        command.add_validator()
+    }
+
+    pub fn remove_validator(
+        &self,
+        account_address: AccountAddress,
+        backend: &config::SecureBackend,
+    ) -> Result<TransactionContext, Error> {
+        let args = format!(
+            "
+            {command}
+            --json-server {host}
+            --chain-id {chain_id}
+            --account-address {account_address}
+            --validator-backend {backend_args}
+            ",
+            command = command(TOOL_NAME, CommandName::RemoveValidator),
+            host = self.host,
+            chain_id = self.chain_id.id(),
+            account_address = account_address,
+            backend_args = backend_args(backend)?,
+        );
+        let command = Command::from_iter(args.split_whitespace());
+        command.remove_validator()
     }
 }
 

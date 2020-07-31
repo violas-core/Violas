@@ -53,7 +53,6 @@ commands:
             echo 'export CI_TIMEOUT="timeout 40m"' >> $BASH_ENV
             export RUST_NIGHTLY=$(cat cargo-toolchain)
             echo 'export RUST_NIGHTLY='${RUST_NIGHTLY} >> $BASH_ENV
-
   install_deps:
     steps:
       - run:
@@ -73,14 +72,6 @@ commands:
             # Use nightly version of cargo to access the new feature resolver
             echo 'export CARGO=$(rustup which cargo --toolchain $RUST_NIGHTLY)' >> $BASH_ENV
             # Turn on the experimental feature resolver in cargo. See:
-  install_code_coverage_deps:
-    steps:
-      - run:
-          name: Install grcov and lcov
-          command: |
-            sudo apt-get update
-            sudo apt-get install lcov
-            $CARGO $CARGOFLAGS install --force grcov
   install_docker_linter:
     steps:
       - run:
@@ -315,19 +306,6 @@ jobs:
             RUST_BACKTRACE=1 $CARGO $CARGOFLAGS build -j 16 -p transaction-builder -p move-vm-types --target powerpc-unknown-linux-gnu
       - save_sccache
       - build_teardown
-  build-release:
-    executor: test-executor
-    description: Release Build
-    steps:
-      - build_setup
-      - restore_cargo_package_cache
-      - install_sccache
-      - restore_sccache
-      - run:
-          name: Build release
-          command: RUST_BACKTRACE=1 $CARGO $CARGOFLAGS  build -j 12 --release
-      - save_sccache
-      - build_teardown
   run-e2e-test:
     executor: build-executor
     parallelism: 2
@@ -395,7 +373,7 @@ jobs:
       - save_sccache
       - send_message:
           payload_file: "${MESSAGE_PAYLOAD_FILE}"
-          build_url: "${CIRCLE_BUILD_URL}#tests/containers/${CIRCLE_NODE_INDEX}"
+          build_url: "https://app.circleci.com/pipelines/github/${CIRCLE_PROJECT_USERNAME}/${CIRCLE_PROJECT_REPONAME}/<<pipeline.number>>/workflows/${CIRCLE_WORKFLOW_ID}/jobs/${CIRCLE_BUILD_NUM}/parallel-runs/${CIRCLE_NODE_INDEX}?filterBy=ALL"
           webhook: "${WEBHOOK_FLAKY_TESTS}"
   run-unit-test:
     executor: unittest-executor
@@ -455,29 +433,6 @@ jobs:
               --ignore RUSTSEC-2019-0031 \
               --ignore RUSTSEC-2020-0016
       - build_teardown
-  code-coverage:
-    description: Run code coverage
-    executor: unittest-executor
-    environment:
-      MESSAGE_PAYLOAD_FILE: "/tmp/message_payload"
-    steps:
-      - build_setup
-      - install_code_coverage_deps
-      - install_rust_nightly_toolchain
-      - run:
-          name: Setup code coverage output
-          command: echo "export CODECOV_OUTPUT=codecov" >> $BASH_ENV
-      - run:
-          name: Run code coverage
-          command: |
-            ./scripts/coverage_report.sh . $CODECOV_OUTPUT --batch --failed_crate_file ${MESSAGE_PAYLOAD_FILE}
-      - run:
-          name: Upload result to codecov.io
-          command: bash <(curl -s https://codecov.io/bash) -f $CODECOV_OUTPUT/lcov.info;
-      - send_message:
-          payload_file: "${MESSAGE_PAYLOAD_FILE}"
-          build_url: "${CIRCLE_BUILD_URL}#tests/containers/${CIRCLE_NODE_INDEX}"
-          webhook: "${WEBHOOK_FLAKY_TESTS}"
   terraform:
     executor: terraform-executor
     steps:
@@ -718,17 +673,6 @@ workflows:
                 - /^testflow[\d|.]+$/
                 - /^premainnet-[\d|.]+$/
                 - /^v[\d|.]+-release$/
-      - build-release:
-          requires:
-            - prefetch-crates
-          filters:
-            branches:
-              ignore:
-                - gh-pages
-                - master
-                - /^testflow[\d|.]+$/
-                - /^premainnet-[\d|.]+$/
-                - /^v[\d|.]+-release$/
       - run-e2e-test:
           requires:
             - prefetch-crates
@@ -806,4 +750,3 @@ workflows:
               only: master
     jobs:
       - audit
-      - code-coverage

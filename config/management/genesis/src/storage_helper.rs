@@ -62,37 +62,11 @@ impl StorageHelper {
         storage.set(WAYPOINT, Value::String("".into())).unwrap();
     }
 
-    pub fn libra_root_key(
-        &self,
-        validator_ns: &str,
-        shared_ns: &str,
-    ) -> Result<Ed25519PublicKey, Error> {
+    pub fn create_and_insert_waypoint(&self, validator_ns: &str) -> Result<Waypoint, Error> {
         let args = format!(
             "
                 libra-genesis-tool
-                libra-root-key
-                --validator-backend backend={backend};\
-                    path={path};\
-                    namespace={validator_ns}
-                --shared-backend backend={backend};\
-                    path={path};\
-                    namespace={shared_ns}\
-            ",
-            backend = DISK,
-            path = self.path_string(),
-            validator_ns = validator_ns,
-            shared_ns = shared_ns,
-        );
-
-        let command = Command::from_iter(args.split_whitespace());
-        command.libra_root_key()
-    }
-
-    pub fn create_waypoint(&self, validator_ns: &str) -> Result<Waypoint, Error> {
-        let args = format!(
-            "
-                libra-genesis-tool
-                create-waypoint
+                create-and-insert-waypoint
                 --shared-backend backend={backend};\
                     path={path}
                 --validator-backend backend={backend};\
@@ -105,7 +79,7 @@ impl StorageHelper {
         );
 
         let command = Command::from_iter(args.split_whitespace());
-        command.create_waypoint()
+        command.create_and_insert_waypoint()
     }
 
     pub fn genesis(&self, genesis_path: &Path) -> Result<Transaction, Error> {
@@ -126,11 +100,15 @@ impl StorageHelper {
         command.genesis()
     }
 
-    pub fn insert_waypoint(&self, validator_ns: &str, shared_ns: &str) -> Result<Waypoint, Error> {
+    pub fn libra_root_key(
+        &self,
+        validator_ns: &str,
+        shared_ns: &str,
+    ) -> Result<Ed25519PublicKey, Error> {
         let args = format!(
             "
                 libra-genesis-tool
-                insert-waypoint
+                libra-root-key
                 --validator-backend backend={backend};\
                     path={path};\
                     namespace={validator_ns}
@@ -145,7 +123,7 @@ impl StorageHelper {
         );
 
         let command = Command::from_iter(args.split_whitespace());
-        command.insert_waypoint()
+        command.libra_root_key()
     }
 
     pub fn operator_key(
@@ -162,7 +140,7 @@ impl StorageHelper {
                     namespace={validator_ns}
                 --shared-backend backend={backend};\
                     path={path};\
-                    namespace={shared_ns}\
+                    namespace={shared_ns}
             ",
             backend = DISK,
             path = self.path_string(),
@@ -188,7 +166,7 @@ impl StorageHelper {
                     namespace={validator_ns}
                 --shared-backend backend={backend};\
                     path={path};\
-                    namespace={shared_ns}\
+                    namespace={shared_ns}
             ",
             backend = DISK,
             path = self.path_string(),
@@ -201,11 +179,7 @@ impl StorageHelper {
     }
 
     #[cfg(test)]
-    pub fn set_layout(
-        &self,
-        path: &str,
-        namespace: &str,
-    ) -> Result<libra_management::layout::Layout, Error> {
+    pub fn set_layout(&self, path: &str, namespace: &str) -> Result<crate::layout::Layout, Error> {
         let args = format!(
             "
                 libra-genesis-tool
@@ -225,28 +199,19 @@ impl StorageHelper {
         command.set_layout()
     }
 
-    pub fn set_operator(
-        &self,
-        operator_name: &str,
-        validator_ns: &str,
-        shared_ns: &str,
-    ) -> Result<String, Error> {
+    pub fn set_operator(&self, operator_name: &str, shared_ns: &str) -> Result<String, Error> {
         let args = format!(
             "
                 libra-genesis-tool
                 set-operator
                 --operator-name {operator_name}
-                --validator-backend backend={backend};\
-                    path={path};\
-                    namespace={validator_ns}
                 --shared-backend backend={backend};\
                     path={path};\
-                    namespace={shared_ns}\
+                    namespace={shared_ns}
             ",
             operator_name = operator_name,
             backend = DISK,
             path = self.path_string(),
-            validator_ns = validator_ns,
             shared_ns = shared_ns,
         );
 
@@ -276,7 +241,7 @@ impl StorageHelper {
                     namespace={validator_ns}
                 --shared-backend backend={backend};\
                     path={path};\
-                    namespace={shared_ns}\
+                    namespace={shared_ns}
             ",
             owner_name = owner_name,
             validator_address = validator_address,

@@ -741,12 +741,12 @@ impl SignatureToken {
 
     /// Returns true if the `SignatureToken` can represent a constant (as in representable in
     /// the constants table).
-    pub fn is_constant(&self) -> bool {
+    pub fn is_valid_for_constant(&self) -> bool {
         use SignatureToken::*;
 
         match self {
             Bool | U8 | U64 | U128 | Address => true,
-            Vector(inner) => inner.is_constant(),
+            Vector(inner) => inner.is_valid_for_constant(),
             Signer
             | Struct(_)
             | StructInstantiation(_, _)
@@ -762,6 +762,7 @@ impl SignatureToken {
     pub fn debug_set_sh_idx(&mut self, sh_idx: StructHandleIndex) {
         match self {
             SignatureToken::Struct(ref mut wrapped) => *wrapped = sh_idx,
+            SignatureToken::StructInstantiation(ref mut wrapped, _) => *wrapped = sh_idx,
             SignatureToken::Reference(ref mut token)
             | SignatureToken::MutableReference(ref mut token) => token.debug_set_sh_idx(sh_idx),
             other => panic!(

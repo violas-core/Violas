@@ -8,36 +8,21 @@ use libra_types::{
     access_path::AccessPath,
     block_metadata::BlockMetadata,
     on_chain_config::{LibraVersion, VMPublishingOption},
-    transaction::{ChangeSet, Script, Transaction, TransactionArgument},
+    transaction::{ChangeSet, Script, Transaction},
     write_set::{WriteOp, WriteSetMut},
 };
-use move_core_types::language_storage::TypeTag;
 use std::convert::TryFrom;
-
-/// Generated builders.
-mod generated;
-
-/// Re-export all generated builders unless they are shadowed by custom builders below.
-pub use generated::*;
-
-/// Encode `stdlib_script` with arguments `args`.
-/// Note: this is not type-safe; the individual type-safe wrappers below should be used when
-/// possible.
-pub fn encode_stdlib_script(
-    stdlib_script: StdlibScript,
-    type_args: Vec<TypeTag>,
-    args: Vec<TransactionArgument>,
-) -> Script {
-    Script::new(stdlib_script.compiled_bytes().into_vec(), type_args, args)
-}
+pub use transaction_builder_generated::stdlib::*;
 
 pub fn encode_modify_publishing_option_script(config: VMPublishingOption) -> Script {
     let bytes = lcs::to_bytes(&config).expect("Cannot deserialize VMPublishingOption");
-    generated::encode_modify_publishing_option_script(bytes)
+    transaction_builder_generated::stdlib::encode_modify_publishing_option_script(bytes)
 }
 
 pub fn encode_update_libra_version_script(libra_version: LibraVersion) -> Script {
-    generated::encode_update_libra_version_script(libra_version.major as u64)
+    transaction_builder_generated::stdlib::encode_update_libra_version_script(
+        libra_version.major as u64,
+    )
 }
 
 // TODO: this should go away once we are no longer using it in tests

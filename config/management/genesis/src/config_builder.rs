@@ -1,7 +1,7 @@
 // Copyright (c) The Libra Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::storage_helper::StorageHelper;
+use crate::{layout::Layout, storage_helper::StorageHelper};
 use config_builder::BuildSwarm;
 use libra_config::{
     config::{
@@ -11,10 +11,7 @@ use libra_config::{
     network_id::NetworkId,
 };
 use libra_crypto::ed25519::Ed25519PrivateKey;
-use libra_management::{
-    constants::{COMMON_NS, LAYOUT},
-    layout::Layout,
-};
+use libra_management::constants::{COMMON_NS, LAYOUT};
 use libra_secure_storage::{CryptoStorage, KVStorage, Value};
 use libra_temppath::TempPath;
 use std::path::{Path, PathBuf};
@@ -108,13 +105,10 @@ impl<T: AsRef<Path>> ValidatorBuilder<T> {
     /// Sets the operator for the owner by uploading a set-operator transaction to shared storage.
     /// Note, we assume that owner i chooses operator i to operate the validator.
     fn set_validator_operator(&self, index: usize) {
-        let local_ns = index.to_string() + OWNER_NS;
         let remote_ns = index.to_string() + OWNER_SHARED_NS;
 
         let operator_name = index.to_string() + OPERATOR_SHARED_NS;
-        let _ = self
-            .storage_helper
-            .set_operator(&operator_name, &local_ns, &remote_ns);
+        let _ = self.storage_helper.set_operator(&operator_name, &remote_ns);
     }
 
     /// Operators upload their validator_config to shared storage.
@@ -141,14 +135,17 @@ impl<T: AsRef<Path>> ValidatorBuilder<T> {
             )
             .unwrap();
 
+        let validator_identity = validator_network.identity_from_storage();
         validator_network.identity = Identity::from_storage(
-            libra_global_constants::VALIDATOR_NETWORK_KEY.into(),
-            libra_global_constants::OWNER_ACCOUNT.into(),
+            validator_identity.key_name,
+            validator_identity.peer_id_name,
             self.secure_backend(&local_ns, "validator"),
         );
+
+        let fullnode_identity = fullnode_network.identity_from_storage();
         fullnode_network.identity = Identity::from_storage(
-            libra_global_constants::FULLNODE_NETWORK_KEY.into(),
-            libra_global_constants::OWNER_ACCOUNT.into(),
+            fullnode_identity.key_name,
+            fullnode_identity.peer_id_name,
             self.secure_backend(&local_ns, "full_node"),
         );
 
@@ -166,7 +163,7 @@ impl<T: AsRef<Path>> ValidatorBuilder<T> {
 
         let _ = self
             .storage_helper
-            .insert_waypoint(&local_ns, COMMON_NS)
+            .create_and_insert_waypoint(&local_ns)
             .unwrap();
         let output = self
             .storage_helper
@@ -210,7 +207,6 @@ impl<T: AsRef<Path>> BuildSwarm for ValidatorBuilder<T> {
         }
 
         // Create genesis and waypoint
-        let _ = self.storage_helper.create_waypoint(COMMON_NS).unwrap();
         for (i, config) in configs.iter_mut().enumerate() {
             self.finish_validator_config(i, config);
         }

@@ -133,6 +133,7 @@ pub enum SpecBlockMember_ {
         kind: SpecConditionKind,
         properties: Vec<PragmaProperty>,
         exp: Exp,
+        abort_codes: Vec<Exp>,
     },
     Function {
         uninterpreted: bool,
@@ -145,6 +146,10 @@ pub enum SpecBlockMember_ {
         name: Name,
         type_parameters: Vec<(Name, Kind)>,
         type_: Type,
+    },
+    Let {
+        name: Name,
+        def: Exp,
     },
     Include {
         exp: Exp,
@@ -469,9 +474,14 @@ impl AstDebug for SpecBlockMember_ {
                 kind,
                 properties: _,
                 exp,
+                abort_codes,
             } => {
                 kind.ast_debug(w);
                 exp.ast_debug(w);
+                w.list(abort_codes, ",", |w, e| {
+                    e.ast_debug(w);
+                    true
+                });
             }
             SpecBlockMember_::Function {
                 uninterpreted,
@@ -506,6 +516,10 @@ impl AstDebug for SpecBlockMember_ {
                 type_parameters.ast_debug(w);
                 w.write(": ");
                 type_.ast_debug(w);
+            }
+            SpecBlockMember_::Let { name, def } => {
+                w.write(&format!("let {} = ", name));
+                def.ast_debug(w);
             }
             SpecBlockMember_::Include { exp } => {
                 w.write("include ");

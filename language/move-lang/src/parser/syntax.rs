@@ -1699,12 +1699,34 @@ fn parse_script<'input>(tokens: &mut Lexer<'input>) -> Result<Script, Error> {
 //        | "module"
 //        | "schema" <Identifier> <OptionalTypeParameters>
 //        | <empty>
-//     SpecBlock = <DocComments> "spec" <SpecBlockTarget> "{" SpecBlockMember* "}"
+//     SpecBlock =
+//        <DocComments> "spec" ( <SpecFunction> | <SpecBlockTarget> "{" SpecBlockMember* "}" )
 fn parse_spec_block<'input>(tokens: &mut Lexer<'input>) -> Result<SpecBlock, Error> {
     tokens.match_doc_comments();
     let start_loc = tokens.start_loc();
     consume_token(tokens, Tok::Spec)?;
     let target_start_loc = tokens.start_loc();
+    let target_end_loc = target_start_loc + tokens.content().len();
+    if matches!(tokens.peek(), Tok::Define | Tok::Native) {
+        // Special treatment of the 'spec [native] define ..` short form. This is mapped into an AST
+        // which matches 'spec module { [native] define .. }`.
+        let define = parse_spec_function(tokens)?;
+        return Ok(spanned(
+            tokens.file_name(),
+            start_loc,
+            tokens.previous_end_loc(),
+            SpecBlock_ {
+                target: spanned(
+                    tokens.file_name(),
+                    target_start_loc,
+                    target_end_loc,
+                    SpecBlockTarget_::Module,
+                ),
+                uses: vec![],
+                members: vec![define],
+            },
+        ));
+    }
     let target_ = match tokens.peek() {
         Tok::Fun => {
             tokens.advance()?;
@@ -1768,15 +1790,16 @@ fn parse_spec_block<'input>(tokens: &mut Lexer<'input>) -> Result<SpecBlock, Err
 
 // Parse a spec block member:
 //    SpecBlockMember = <DocComments ( <Invariant> | <Condition> | <SpecFunction> | <SpecVariable>
-//                                   | <SpecInclude> | <SpecApply> | <SpecPragma> )
+//                                   | <SpecInclude> | <SpecApply> | <SpecPragma> | <SpecLet> )
 fn parse_spec_block_member<'input>(tokens: &mut Lexer<'input>) -> Result<SpecBlockMember, Error> {
     tokens.match_doc_comments();
     match tokens.peek() {
         Tok::Invariant => parse_invariant(tokens),
+        Tok::Let => parse_spec_let(tokens),
         Tok::Define | Tok::Native => parse_spec_function(tokens),
         Tok::IdentifierValue => match tokens.content() {
-            "assert" | "assume" | "decreases" | "aborts_if" | "succeeds_if" | "ensures"
-            | "requires" => parse_condition(tokens),
+            "assert" | "assume" | "decreases" | "aborts_if" | "aborts_with" | "succeeds_if"
+            | "ensures" | "requires" => parse_condition(tokens),
             "include" => parse_spec_include(tokens),
             "apply" => parse_spec_apply(tokens),
             "pragma" => parse_spec_pragma(tokens),
@@ -1799,6 +1822,7 @@ fn parse_spec_block_member<'input>(tokens: &mut Lexer<'input>) -> Result<SpecBlo
 //    SpecCondition =
 //        ("assert" | "assume" | "decreases" | "aborts_if" | "ensures" | "requires" )
 //        <ConditionProperties> <Exp> ";"
+//      | "aborts_with" <ConditionProperties> Comma<Exp> ";"
 fn parse_condition<'input>(tokens: &mut Lexer<'input>) -> Result<SpecBlockMember, Error> {
     let start_loc = tokens.start_loc();
     let kind = match tokens.content() {
@@ -1806,6 +1830,7 @@ fn parse_condition<'input>(tokens: &mut Lexer<'input>) -> Result<SpecBlockMember
         "assume" => SpecConditionKind::Assume,
         "decreases" => SpecConditionKind::Decreases,
         "aborts_if" => SpecConditionKind::AbortsIf,
+        "aborts_with" => SpecConditionKind::AbortsWith,
         "succeeds_if" => SpecConditionKind::SucceedsIf,
         "ensures" => SpecConditionKind::Ensures,
         "requires" => {
@@ -1820,8 +1845,34 @@ fn parse_condition<'input>(tokens: &mut Lexer<'input>) -> Result<SpecBlockMember
     };
     tokens.advance()?;
     let properties = parse_condition_properties(tokens)?;
-    let exp = parse_exp(tokens)?;
-    consume_token(tokens, Tok::Semicolon)?;
+    let exp = if kind == SpecConditionKind::AbortsWith {
+        // Use a dummy expression as a placeholder for this field.
+        let loc = make_loc(tokens.file_name(), start_loc, start_loc + 1);
+        sp(loc, Exp_::Value(sp(loc, Value_::Bool(false))))
+    } else {
+        parse_exp(tokens)?
+    };
+    let abort_codes = if kind == SpecConditionKind::AbortsIf
+        && tokens.peek() == Tok::IdentifierValue
+        && tokens.content() == "with"
+    {
+        tokens.advance()?;
+        let codes = vec![parse_exp(tokens)?];
+        consume_token(tokens, Tok::Semicolon)?;
+        codes
+    } else if kind == SpecConditionKind::AbortsWith {
+        parse_comma_list_after_start(
+            tokens,
+            tokens.start_loc(),
+            tokens.peek(),
+            Tok::Semicolon,
+            parse_exp,
+            "a aborts code",
+        )?
+    } else {
+        consume_token(tokens, Tok::Semicolon)?;
+        vec![]
+    };
     let end_loc = tokens.previous_end_loc();
     Ok(spanned(
         tokens.file_name(),
@@ -1831,6 +1882,7 @@ fn parse_condition<'input>(tokens: &mut Lexer<'input>) -> Result<SpecBlockMember
             kind,
             properties,
             exp,
+            abort_codes,
         },
     ))
 }
@@ -1898,6 +1950,7 @@ fn parse_invariant<'input>(tokens: &mut Lexer<'input>) -> Result<SpecBlockMember
             kind,
             properties,
             exp,
+            abort_codes: vec![],
         },
     ))
 }
@@ -1992,6 +2045,23 @@ fn parse_spec_variable<'input>(tokens: &mut Lexer<'input>) -> Result<SpecBlockMe
             type_parameters,
             type_,
         },
+    ))
+}
+
+// Parse a specification let.
+//     SpecLet =  "let" <Identifier> "=" <Exp> ";"
+fn parse_spec_let<'input>(tokens: &mut Lexer<'input>) -> Result<SpecBlockMember, Error> {
+    let start_loc = tokens.start_loc();
+    tokens.advance()?;
+    let name = parse_identifier(tokens)?;
+    consume_token(tokens, Tok::Equal)?;
+    let def = parse_exp(tokens)?;
+    consume_token(tokens, Tok::Semicolon)?;
+    Ok(spanned(
+        tokens.file_name(),
+        start_loc,
+        tokens.previous_end_loc(),
+        SpecBlockMember_::Let { name, def },
     ))
 }
 

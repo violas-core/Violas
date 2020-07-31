@@ -1117,6 +1117,7 @@ Creates the libra root account in genesis.
     <b>assert</b>(<a href="LibraTimestamp.md#0x1_LibraTimestamp_is_genesis">LibraTimestamp::is_genesis</a>(), ENOT_GENESIS);
     <b>assert</b>(new_account_address == <a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>(), EINVALID_SINGLETON_ADDRESS);
     <b>let</b> new_account = <a href="#0x1_LibraAccount_create_signer">create_signer</a>(new_account_address);
+    <a href="SlidingNonce.md#0x1_SlidingNonce_publish_nonce_resource">SlidingNonce::publish_nonce_resource</a>(&new_account, &new_account);
     <a href="#0x1_LibraAccount_make_account">make_account</a>(new_account, auth_key_prefix)
 }
 </code></pre>
@@ -2014,7 +2015,7 @@ a writeset transaction is committed.
 
 
 
-<pre><code><b>public</b> <b>fun</b> <a href="#0x1_LibraAccount_create_validator_account">create_validator_account</a>(creator_account: &signer, new_account_address: address, auth_key_prefix: vector&lt;u8&gt;)
+<pre><code><b>public</b> <b>fun</b> <a href="#0x1_LibraAccount_create_validator_account">create_validator_account</a>(creator_account: &signer, new_account_address: address, auth_key_prefix: vector&lt;u8&gt;, human_name: vector&lt;u8&gt;)
 </code></pre>
 
 
@@ -2027,11 +2028,12 @@ a writeset transaction is committed.
     creator_account: &signer,
     new_account_address: address,
     auth_key_prefix: vector&lt;u8&gt;,
+    human_name: vector&lt;u8&gt;,
 ) {
     <b>assert</b>(<a href="Roles.md#0x1_Roles_has_libra_root_role">Roles::has_libra_root_role</a>(creator_account), ENOT_LIBRA_ROOT);
     <b>let</b> new_account = <a href="#0x1_LibraAccount_create_signer">create_signer</a>(new_account_address);
     <a href="Event.md#0x1_Event_publish_generator">Event::publish_generator</a>(&new_account);
-    <a href="ValidatorConfig.md#0x1_ValidatorConfig_publish">ValidatorConfig::publish</a>(&new_account, creator_account);
+    <a href="ValidatorConfig.md#0x1_ValidatorConfig_publish">ValidatorConfig::publish</a>(&new_account, creator_account, human_name);
     <a href="#0x1_LibraAccount_make_account">make_account</a>(new_account, auth_key_prefix)
 }
 </code></pre>
@@ -2046,7 +2048,7 @@ a writeset transaction is committed.
 
 
 
-<pre><code><b>public</b> <b>fun</b> <a href="#0x1_LibraAccount_create_validator_operator_account">create_validator_operator_account</a>(creator_account: &signer, new_account_address: address, auth_key_prefix: vector&lt;u8&gt;)
+<pre><code><b>public</b> <b>fun</b> <a href="#0x1_LibraAccount_create_validator_operator_account">create_validator_operator_account</a>(creator_account: &signer, new_account_address: address, auth_key_prefix: vector&lt;u8&gt;, human_name: vector&lt;u8&gt;)
 </code></pre>
 
 
@@ -2059,10 +2061,12 @@ a writeset transaction is committed.
     creator_account: &signer,
     new_account_address: address,
     auth_key_prefix: vector&lt;u8&gt;,
+    human_name: vector&lt;u8&gt;,
 ) {
     <b>assert</b>(<a href="Roles.md#0x1_Roles_has_libra_root_role">Roles::has_libra_root_role</a>(creator_account), ENOT_LIBRA_ROOT);
     <b>let</b> new_account = <a href="#0x1_LibraAccount_create_signer">create_signer</a>(new_account_address);
     <a href="Event.md#0x1_Event_publish_generator">Event::publish_generator</a>(&new_account);
+    <a href="ValidatorOperatorConfig.md#0x1_ValidatorOperatorConfig_publish">ValidatorOperatorConfig::publish</a>(&new_account, creator_account, human_name);
     <a href="#0x1_LibraAccount_make_account">make_account</a>(new_account, auth_key_prefix)
 }
 </code></pre>

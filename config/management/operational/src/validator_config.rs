@@ -1,11 +1,12 @@
 // Copyright (c) The Libra Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use libra_crypto::x25519;
-use libra_global_constants::{OWNER_ACCOUNT, VALIDATOR_NETWORK_KEY};
-use libra_management::{
-    error::Error, json_rpc::JsonRpcClientWrapper, storage::StorageWrapper, TransactionContext,
+use crate::{json_rpc::JsonRpcClientWrapper, TransactionContext};
+use libra_crypto::{ed25519::Ed25519PublicKey, x25519};
+use libra_global_constants::{
+    CONSENSUS_KEY, FULLNODE_NETWORK_KEY, OPERATOR_ACCOUNT, OWNER_ACCOUNT, VALIDATOR_NETWORK_KEY,
 };
+use libra_management::{error::Error, storage::to_x25519};
 use libra_network_address::{
     encrypted::{EncNetworkAddress, Key, RawEncNetworkAddress, TEST_SHARED_VAL_NETADDR_KEY},
     NetworkAddress, Protocol, RawNetworkAddress,
@@ -17,8 +18,9 @@ use structopt::StructOpt;
 // TODO: Load all chain IDs from the host
 #[derive(Debug, StructOpt)]
 pub struct SetValidatorConfig {
-    #[structopt(long, help = "JSON-RPC Endpoint (e.g. http://localhost:8080")]
-    host: String,
+    /// JSON-RPC Endpoint (e.g. http://localhost:8080)
+    #[structopt(long, required_unless = "config")]
+    json_server: Option<String>,
     #[structopt(flatten)]
     validator_config: libra_management::validator_config::ValidatorConfig,
     #[structopt(long, help = "Validator Network Address")]
@@ -29,14 +31,20 @@ pub struct SetValidatorConfig {
 
 impl SetValidatorConfig {
     pub fn execute(self) -> Result<TransactionContext, Error> {
-        let storage = StorageWrapper::new(
-            self.validator_config.validator_backend.name(),
-            &self.validator_config.validator_backend.validator_backend,
-        )?;
-        let owner_account = storage.account_address(OWNER_ACCOUNT)?;
+        let config = self
+            .validator_config
+            .config
+            .load()?
+            .override_json_server(&self.json_server)
+            .override_validator_backend(
+                &self.validator_config.validator_backend.validator_backend,
+            )?;
+        let storage = config.validator_backend();
 
-        let client = JsonRpcClientWrapper::new(self.host);
-        let sequence_number = client.sequence_number(owner_account)?;
+        let operator_account = storage.account_address(OPERATOR_ACCOUNT)?;
+        let owner_account = storage.account_address(OWNER_ACCOUNT)?;
+        let client = JsonRpcClientWrapper::new(config.json_server);
+        let sequence_number = client.sequence_number(operator_account)?;
 
         // Retrieve the current validator / fullnode addresses and update accordingly
         let validator_config = client.validator_config(owner_account)?;
@@ -68,30 +76,77 @@ impl SetValidatorConfig {
 }
 
 #[derive(Debug, StructOpt)]
-pub struct RotateValidatorNetworkKey {
-    #[structopt(long, help = "JSON-RPC Endpoint (e.g. http://localhost:8080)")]
-    host: String,
+pub struct RotateKey {
+    /// JSON-RPC Endpoint (e.g. http://localhost:8080)
+    #[structopt(long, required_unless = "config")]
+    json_server: Option<String>,
     #[structopt(flatten)]
     validator_config: libra_management::validator_config::ValidatorConfig,
 }
 
-impl RotateValidatorNetworkKey {
-    pub fn execute(self) -> Result<(TransactionContext, x25519::PublicKey), Error> {
-        let mut storage = StorageWrapper::new(
-            self.validator_config.validator_backend.name(),
-            &self.validator_config.validator_backend.validator_backend,
-        )?;
-        let key = storage.rotate_key(VALIDATOR_NETWORK_KEY)?;
-        let key = StorageWrapper::x25519(key)?;
+impl RotateKey {
+    pub fn execute(
+        self,
+        key_name: &'static str,
+    ) -> Result<(TransactionContext, Ed25519PublicKey), Error> {
+        let config = self
+            .validator_config
+            .config
+            .load()?
+            .override_json_server(&self.json_server)
+            .override_validator_backend(
+                &self.validator_config.validator_backend.validator_backend,
+            )?;
+
+        let mut storage = config.validator_backend();
+        let key = storage.rotate_key(key_name)?;
 
         let set_validator_config = SetValidatorConfig {
-            host: self.host,
+            json_server: self.json_server,
             validator_config: self.validator_config,
             validator_address: None,
             fullnode_address: None,
         };
 
         set_validator_config.execute().map(|txn_ctx| (txn_ctx, key))
+    }
+}
+
+#[derive(Debug, StructOpt)]
+pub struct RotateConsensusKey {
+    #[structopt(flatten)]
+    rotate_key: RotateKey,
+}
+
+impl RotateConsensusKey {
+    pub fn execute(self) -> Result<(TransactionContext, Ed25519PublicKey), Error> {
+        self.rotate_key.execute(CONSENSUS_KEY)
+    }
+}
+
+#[derive(Debug, StructOpt)]
+pub struct RotateValidatorNetworkKey {
+    #[structopt(flatten)]
+    rotate_key: RotateKey,
+}
+
+impl RotateValidatorNetworkKey {
+    pub fn execute(self) -> Result<(TransactionContext, x25519::PublicKey), Error> {
+        let (txn_ctx, key) = self.rotate_key.execute(VALIDATOR_NETWORK_KEY)?;
+        Ok((txn_ctx, to_x25519(key)?))
+    }
+}
+
+#[derive(Debug, StructOpt)]
+pub struct RotateFullNodeNetworkKey {
+    #[structopt(flatten)]
+    rotate_key: RotateKey,
+}
+
+impl RotateFullNodeNetworkKey {
+    pub fn execute(self) -> Result<(TransactionContext, x25519::PublicKey), Error> {
+        let (txn_ctx, key) = self.rotate_key.execute(FULLNODE_NETWORK_KEY)?;
+        Ok((txn_ctx, to_x25519(key)?))
     }
 }
 
@@ -139,4 +194,19 @@ fn decode_address(raw_address: RawNetworkAddress) -> Result<NetworkAddress, Erro
         .cloned()
         .collect::<Vec<_>>();
     Ok(NetworkAddress::try_from(protocols).unwrap())
+}
+
+#[derive(Debug, StructOpt)]
+pub struct ValidatorConfig {
+    #[structopt(long, help = "JSON-RPC Endpoint (e.g. http://localhost:8080")]
+    json_server: String,
+    #[structopt(long, help = "Validator account address to display the config")]
+    account_address: AccountAddress,
+}
+
+impl ValidatorConfig {
+    pub fn execute(self) -> Result<libra_types::validator_config::ValidatorConfig, Error> {
+        let client = JsonRpcClientWrapper::new(self.json_server);
+        client.validator_config(self.account_address)
+    }
 }
