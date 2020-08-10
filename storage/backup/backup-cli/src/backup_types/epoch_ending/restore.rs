@@ -38,11 +38,25 @@ impl EpochEndingRestoreController {
             storage,
             restore_handler,
             manifest_handle: opt.manifest_handle,
-            target_version: global_opt.target_version,
+            target_version: global_opt.target_version(),
         }
     }
 
     pub async fn run(self) -> Result<()> {
+        println!(
+            "Epoch ending restore started. Manifest: {}",
+            self.manifest_handle
+        );
+        self.run_impl()
+            .await
+            .map_err(|e| anyhow!("Epoch ending restore failed: {}", e))?;
+        println!("Epoch ending restore succeeded.");
+        Ok(())
+    }
+}
+
+impl EpochEndingRestoreController {
+    async fn run_impl(self) -> Result<()> {
         let manifest: EpochEndingBackup =
             self.storage.load_json_file(&self.manifest_handle).await?;
         manifest.verify()?;
@@ -109,9 +123,7 @@ impl EpochEndingRestoreController {
 
         Ok(())
     }
-}
 
-impl EpochEndingRestoreController {
     async fn read_chunk(&self, file_handle: FileHandle) -> Result<Vec<LedgerInfoWithSignatures>> {
         let mut file = self.storage.open_for_read(&file_handle).await?;
         let mut chunk = vec![];

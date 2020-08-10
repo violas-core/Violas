@@ -44,6 +44,7 @@ use crate::{
     metrics::{
         LIBRA_STORAGE_API_LATENCY_SECONDS, LIBRA_STORAGE_CF_SIZE_BYTES,
         LIBRA_STORAGE_COMMITTED_TXNS, LIBRA_STORAGE_LATEST_TXN_VERSION,
+        LIBRA_STORAGE_LEDGER_VERSION, LIBRA_STORAGE_NEXT_BLOCK_EPOCH,
     },
     pruner::Pruner,
     schema::*,
@@ -585,7 +586,7 @@ impl DbReader for LibraDB {
         Ok(events)
     }
 
-    /// Gets ledger info at specified version and ensures it's an epoch change.
+    /// Gets ledger info at specified version and ensures it's an epoch ending.
     fn get_epoch_ending_ledger_info(&self, version: u64) -> Result<LedgerInfoWithSignatures> {
         let _timer = LIBRA_STORAGE_API_LATENCY_SECONDS
             .with_label_values(&["get_epoch_ending_ledger_info"])
@@ -800,6 +801,9 @@ impl DbWriter for LibraDB {
         // Once everything is successfully persisted, update the latest in-memory ledger info.
         if let Some(x) = ledger_info_with_sigs {
             self.ledger_store.set_latest_ledger_info(x.clone());
+
+            LIBRA_STORAGE_LEDGER_VERSION.set(x.ledger_info().version() as i64);
+            LIBRA_STORAGE_NEXT_BLOCK_EPOCH.set(x.ledger_info().next_block_epoch() as i64);
         }
 
         // Only increment counter if commit succeeds and there are at least one transaction written

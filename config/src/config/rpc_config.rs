@@ -9,9 +9,13 @@ use std::net::SocketAddr;
 #[serde(default, deny_unknown_fields)]
 pub struct RpcConfig {
     pub address: SocketAddr,
+    pub batch_size_limit: u16,
+    pub page_size_limit: u16,
 }
 
 pub const DEFAULT_JSON_RPC_PORT: u16 = 8080;
+pub const DEFAULT_BATCH_SIZE_LIMIT: u16 = 20;
+pub const DEFAULT_PAGE_SIZE_LIMIT: u16 = 1000;
 
 impl Default for RpcConfig {
     fn default() -> RpcConfig {
@@ -19,6 +23,8 @@ impl Default for RpcConfig {
             address: format!("0.0.0.0:{}", DEFAULT_JSON_RPC_PORT)
                 .parse()
                 .unwrap(),
+            batch_size_limit: DEFAULT_BATCH_SIZE_LIMIT,
+            page_size_limit: DEFAULT_PAGE_SIZE_LIMIT,
         }
     }
 }

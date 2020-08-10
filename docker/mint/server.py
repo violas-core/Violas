@@ -45,6 +45,7 @@ create_client()
 
 
 @application.route("/", methods=('POST',))
+@application.route("/mint", methods=('POST',))
 def send_transaction():
     auth_key = flask.request.args['auth_key']
 
@@ -81,3 +82,8 @@ def send_transaction():
         raise
 
     return str(next_dd_seq)
+
+
+@application.route("/-/healthy", methods=('GET',))
+def health_check():
+    return "libra-faucet:ok"

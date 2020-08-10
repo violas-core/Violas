@@ -87,6 +87,24 @@ impl JsonRpcBatch {
         );
     }
 
+    pub fn add_get_account_transactions_request(
+        &mut self,
+        account: AccountAddress,
+        start: u64,
+        limit: u64,
+        include_events: bool,
+    ) {
+        self.add_request(
+            "get_account_transactions".to_string(),
+            vec![
+                json!(account.to_string()),
+                json!(start),
+                json!(limit),
+                json!(include_events),
+            ],
+        );
+    }
+
     pub fn add_get_events_request(&mut self, event_key: String, start: u64, limit: u64) {
         self.add_request(
             "get_events".to_string(),
@@ -124,6 +142,7 @@ pub enum JsonRpcAsyncClientError {
     ClientError(reqwest::Error),
     InvalidArgument(String),
     InvalidServerResponse(String),
+    JsonRpcError(JsonRpcError),
 }
 
 impl JsonRpcAsyncClientError {
@@ -145,8 +164,7 @@ impl JsonRpcAsyncClientError {
                 }
                 false
             }
-            JsonRpcAsyncClientError::InvalidServerResponse(_)
-            | JsonRpcAsyncClientError::InvalidArgument(_) => false,
+            _ => false,
         }
     }
 }
@@ -165,6 +183,7 @@ impl std::fmt::Display for JsonRpcAsyncClientError {
             JsonRpcAsyncClientError::InvalidServerResponse(e) => {
                 write!(f, "InvalidServerResponse {}", e)
             }
+            JsonRpcAsyncClientError::JsonRpcError(e) => write!(f, "JsonRpcError {}", e),
         }
     }
 }
@@ -261,12 +280,28 @@ impl JsonRpcAsyncClient {
             )));
         }
 
-        let responses: Vec<Value> = resp
+        let json: Value = resp
             .json()
             .await
             .map_err(|e| JsonRpcAsyncClientError::InvalidServerResponse(e.to_string()))?;
-        process_batch_response(batch, responses)
-            .map_err(|e| JsonRpcAsyncClientError::InvalidServerResponse(e.to_string()))
+
+        if let Value::Array(responses) = json {
+            process_batch_response(batch, responses)
+                .map_err(|e| JsonRpcAsyncClientError::InvalidServerResponse(e.to_string()))
+        } else if let Value::Object(response) = json {
+            let error_value = response.get("error").ok_or_else(|| {
+                JsonRpcAsyncClientError::InvalidServerResponse(
+                    "batch response should be an array".to_string(),
+                )
+            })?;
+            let rpc_err: JsonRpcError = serde_json::from_value(error_value.clone())
+                .map_err(|e| JsonRpcAsyncClientError::InvalidServerResponse(e.to_string()))?;
+            Err(JsonRpcAsyncClientError::JsonRpcError(rpc_err))
+        } else {
+            Err(JsonRpcAsyncClientError::InvalidServerResponse(
+                json.to_string(),
+            ))
+        }
     }
 }
 
@@ -287,7 +322,7 @@ pub fn process_batch_response(
     let mut result = batch
         .requests
         .iter()
-        .map(|_| Err(format_err!("response is missing")))
+        .map(|_| Err(format_err!("request is missing")))
         .collect::<Vec<_>>();
 
     let mut seen_ids = HashSet::new();

@@ -49,7 +49,13 @@ use move_core_types::{
 };
 use move_vm_types::values::{Struct, Value};
 use proptest::prelude::*;
-use std::{collections::HashMap, convert::TryFrom, str::FromStr, sync::Arc};
+use std::{
+    cmp::{max, min},
+    collections::HashMap,
+    convert::TryFrom,
+    str::FromStr,
+    sync::Arc,
+};
 use storage_interface::DbReader;
 use tokio::runtime::Runtime;
 use vm_validator::{
@@ -185,7 +191,7 @@ fn test_json_rpc_protocol() {
         serde_json::json!({"jsonrpc": "2.0", "method": "add", "params": [1, 2], "id": true});
     let resp = client.post(&url).json(&request).send().unwrap();
     assert_eq!(resp.status(), 200);
-    assert_eq!(error_code(resp), -32600);
+    assert_eq!(error_code(resp), -32604);
 
     // invalid rpc method
     let request = serde_json::json!({"jsonrpc": "2.0", "method": "add", "params": [1, 2], "id": 1});
@@ -398,6 +404,49 @@ fn test_get_metadata() {
 }
 
 #[test]
+fn test_limit_batch_size() {
+    let (_, client, mut runtime) = create_database_client_and_runtime(1);
+
+    let mut batch = JsonRpcBatch::default();
+
+    for i in 0..21 {
+        batch.add_get_metadata_request(Some(i));
+    }
+
+    let ret = runtime.block_on(client.execute(batch));
+    assert!(ret.is_err());
+    let expected = "JsonRpcError JsonRpcError { code: -32600, message: \"Invalid Request\", data: Some(ExceedSizeLimit(ExceedSizeLimit { limit: 20, size: 21, name: \"batch size\" })) }";
+    assert_eq!(ret.unwrap_err().to_string(), expected)
+}
+
+#[test]
+fn test_get_events_page_limit() {
+    let (_, client, mut runtime) = create_database_client_and_runtime(1);
+
+    let mut batch = JsonRpcBatch::default();
+
+    batch.add_get_events_request("event_key".to_string(), 0, 1001);
+
+    let ret = runtime.block_on(client.execute(batch)).unwrap().remove(0);
+    assert!(ret.is_err());
+    let expected = "JsonRpcError { code: -32600, message: \"Invalid Request\", data: Some(ExceedSizeLimit(ExceedSizeLimit { limit: 1000, size: 1001, name: \"page size\" })) }";
+    assert_eq!(ret.unwrap_err().to_string(), expected)
+}
+
+#[test]
+fn test_get_transactions_page_limit() {
+    let (_, client, mut runtime) = create_database_client_and_runtime(1);
+
+    let mut batch = JsonRpcBatch::default();
+    batch.add_get_transactions_request(0, 1001, false);
+
+    let ret = runtime.block_on(client.execute(batch)).unwrap().remove(0);
+    assert!(ret.is_err());
+    let expected = "JsonRpcError { code: -32600, message: \"Invalid Request\", data: Some(ExceedSizeLimit(ExceedSizeLimit { limit: 1000, size: 1001, name: \"page size\" })) }";
+    assert_eq!(ret.unwrap_err().to_string(), expected)
+}
+
+#[test]
 fn test_get_events() {
     let (mock_db, client, mut runtime) = create_database_client_and_runtime(1);
 
@@ -480,7 +529,7 @@ fn test_get_transactions() {
                     }
                     _ => panic!("Returned value doesn't match!"),
                 },
-                Transaction::WaypointWriteSet(_) => match view.transaction {
+                Transaction::GenesisTransaction(_) => match view.transaction {
                     TransactionDataView::WriteSet { .. } => {}
                     _ => panic!("Returned value doesn't match!"),
                 },
@@ -581,6 +630,21 @@ fn test_get_account_transaction() {
     }
 }
 
+#[test]
+fn test_get_account_transactions() {
+    let (mock_db, client, mut runtime) = create_database_client_and_runtime(1);
+
+    for (acc, blob) in mock_db.all_accounts.iter() {
+        let total = AccountResource::try_from(blob).unwrap().sequence_number();
+
+        let mut batch = JsonRpcBatch::default();
+        batch.add_get_account_transactions_request(*acc, 0, max(1, min(1000, total * 2)), true);
+
+        let result = execute_batch_and_get_first_response(&client, &mut runtime, batch);
+        let tx_views = TransactionView::vec_from_response(result).unwrap();
+        assert_eq!(tx_views.len() as u64, total);
+    }
+}
 #[test]
 // Check that if version and ledger_version parameters are None, then the server returns the latest
 // known state.

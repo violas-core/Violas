@@ -594,6 +594,10 @@ impl<V: VMExecutor> TransactionReplayer for Executor<V> {
             .update_synced_trees(output.executed_trees().clone());
         Ok(())
     }
+
+    fn expecting_version(&self) -> Version {
+        self.cache.synced_trees().version().map_or(0, |v| v + 1)
+    }
 }
 
 impl<V: VMExecutor> BlockExecutor for Executor<V> {
@@ -869,7 +873,7 @@ pub fn process_write_set(
                 // should not reach this code path. The exception is genesis transaction (and
                 // maybe other writeset transactions).
                 match transaction {
-                    Transaction::WaypointWriteSet(_) => (),
+                    Transaction::GenesisTransaction(_) => (),
                     Transaction::BlockMetadata(_) => {
                         bail!("Write set should be a subset of read set.")
                     }

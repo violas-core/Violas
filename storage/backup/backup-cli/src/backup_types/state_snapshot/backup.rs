@@ -3,6 +3,7 @@
 
 use crate::{
     backup_types::state_snapshot::manifest::{StateSnapshotBackup, StateSnapshotChunk},
+    metadata::Metadata,
     storage::{BackupHandleRef, BackupStorage, FileHandle, ShellSafeName},
     utils::{
         backup_service_client::BackupServiceClient, read_record_bytes::ReadRecordBytes,
@@ -53,6 +54,19 @@ impl StateSnapshotBackupController {
     }
 
     pub async fn run(self) -> Result<FileHandle> {
+        println!(
+            "State snapshot backup started, for version {}.",
+            self.version,
+        );
+        let ret = self
+            .run_impl()
+            .await
+            .map_err(|e| anyhow!("State snapshot backup failed: {}", e))?;
+        println!("State snapshot backup succeeded. Manifest: {}", ret);
+        Ok(ret)
+    }
+
+    async fn run_impl(self) -> Result<FileHandle> {
         let backup_handle = self.storage.create_backup(&self.backup_name()).await?;
 
         let mut chunks = vec![];
@@ -70,8 +84,6 @@ impl StateSnapshotBackupController {
 
         while let Some(record_bytes) = state_snapshot_file.read_record_bytes().await? {
             if should_cut_chunk(&chunk_bytes, &record_bytes, self.max_chunk_size) {
-                println!("New Chunk.");
-
                 let chunk = self
                     .write_chunk(
                         &backup_handle,
@@ -95,7 +107,6 @@ impl StateSnapshotBackupController {
         }
 
         assert!(!chunk_bytes.is_empty());
-        println!("Last chunk.");
         let chunk = self
             .write_chunk(
                 &backup_handle,
@@ -153,7 +164,6 @@ impl StateSnapshotBackupController {
         first_key: HashValue,
         last_key: HashValue,
     ) -> Result<StateSnapshotChunk> {
-        println!("Asking proof for key: {:?}", last_key);
         let (chunk_handle, mut chunk_file) = self
             .storage
             .create_for_write(backup_handle, &Self::chunk_name(first_idx))
@@ -210,6 +220,11 @@ impl StateSnapshotBackupController {
             .await?;
         manifest_file
             .write_all(&serde_json::to_vec(&manifest)?)
+            .await?;
+
+        let metadata = Metadata::new_state_snapshot_backup(self.version, manifest_handle.clone());
+        self.storage
+            .save_metadata_line(&metadata.name(), &metadata.to_text_line()?)
             .await?;
 
         Ok(manifest_handle)

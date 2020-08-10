@@ -66,12 +66,14 @@ commands:
       - run:
           name: Set cargo Environment
           command: |
+            # Turn on the experimental feature resolver in cargo. See:
             # https://doc.rust-lang.org/nightly/cargo/reference/unstable.html#features
             export CARGOFLAGS=$(cat cargo-flags)
             echo 'export CARGOFLAGS='${CARGOFLAGS} >> $BASH_ENV
             # Use nightly version of cargo to access the new feature resolver
-            echo 'export CARGO=$(rustup which cargo --toolchain $RUST_NIGHTLY)' >> $BASH_ENV
-            # Turn on the experimental feature resolver in cargo. See:
+            echo 'export CARGO="$(rustup which cargo --toolchain $RUST_NIGHTLY)"' >> $BASH_ENV
+            # Pin the version of RUSTC used for all invocations of cargo
+            echo 'export RUSTUP_TOOLCHAIN="$(cat rust-toolchain)"' >> $BASH_ENV
   install_docker_linter:
     steps:
       - run:
@@ -246,7 +248,20 @@ commands:
       - run:
           name: Check for changed and untracked files
           command: ./scripts/changed-files.sh
-
+  setup_docker_signing:
+    steps:
+      - run:
+          name: Setup docker setup_docker_signing
+          command: |
+            set -x
+            echo 'export DOCKER_CONTENT_TRUST=1' >> $BASH_ENV
+            echo "$DOCKERHUB_PASSWORD" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
+            export DOCKER_CONTENT_TRUST_REPOSITORY_PASSPHRASE=${DOCKERHUB_KEY_PASSWORD}
+            echo 'export DOCKER_CONTENT_TRUST_REPOSITORY_PASSPHRASE=${DOCKERHUB_KEY_PASSWORD}' >> $BASH_ENV
+            mkdir -p ~/.docker/trust/private/
+            echo ${DOCKERHUB_KEY_MATERIAL} | base64 -d > ~/.docker/trust/private/${DOCKERHUB_KEY_NAME}.key
+            chmod 600 ~/.docker/trust/private/${DOCKERHUB_KEY_NAME}.key
+            docker trust key load ~/.docker/trust/private/${DOCKERHUB_KEY_NAME}.key --name "$DOCKERHUB_USERNAME"
 jobs:
   prefetch-crates:
     executor: audit-executor
@@ -402,6 +417,16 @@ jobs:
             RUST_BACKTRACE=1 $CARGO $CARGOFLAGS test \
               --features='vanilla' \
               --no-default-features
+  compile-benches:
+    executor: unittest-executor
+    description: Compile (but don't run) the benchmarks, to insulate against bit rot
+    steps:
+      - build_setup
+      - run:
+          name: Run bench --no-run
+          command: |
+            RUST_BACKTRACE=1 $CARGO $CARGOFLAGS x bench \
+              --no-run
   run-flaky-unit-test:
     executor: test-executor
     description: Run a list of known flaky tests.
@@ -577,11 +602,12 @@ jobs:
     description: publish docker images
     steps:
       - checkout
+      - setup_docker_signing
       - run:
           name: should pre build docker images (targeting a release branch)?
           command: |
             export commit_message=$( git log -1 --pretty=%B )
-            export pr_num=`echo "$commit_message" | tail -2 | head -1 | sed 's/Closes: #//'`
+            export pr_num=`echo "$commit_message" | tail -1 | sed 's/Closes: #//'`
             if [ -z $pr_num ]; then
               echo "Did not find pull request num in commit message. -\\_(O_o)_/-";
               exit 1
@@ -594,16 +620,15 @@ jobs:
             export IS_PRE_RELEASE=$( if [[ "$BRANCH" =~ "^premainnet-[0-9|.]+$" ]]; then echo true; else echo false; fi )
 
             if [[ $IS_RELEASE  == true ]] || [[ $IS_TEST == true ]] || [[ $IS_PRE_RELEASE == true ]] ; then
-              echo "$DOCKERHUB_PASSWORD" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
               docker/update_or_build.sh -u -p -b ${BRANCH} -n client
               docker/update_or_build.sh -u -p -b ${BRANCH} -n init
               docker/update_or_build.sh -u -p -b ${BRANCH} -n mint
-              docker/update_or_build.sh -u -p -b ${BRANCH} -n safety-rules
               docker/update_or_build.sh -u -p -b ${BRANCH} -n tools
-              docker/update_or_build.sh -u -p -b ${BRANCH} -n validator-dynamic
+              docker/update_or_build.sh -u -p -b ${BRANCH} -n validator
+              docker/update_or_build.sh -u -p -b ${BRANCH} -n validator-tcb
               docker/update_or_build.sh -u -p -b ${BRANCH} -n cluster-test
               #build but don't publish
-              docker/update_or_build.sh -p -b ${BRANCH} -n validator
+              docker/update_or_build.sh -p -b ${BRANCH} -n validator-dynamic
             else
               echo Targeting branch $TARGET_BRANCH will not publish docker images.
             fi
@@ -616,18 +641,18 @@ jobs:
     description: publish docker images
     steps:
       - checkout
+      - setup_docker_signing
       - run:
           name: pull pre images (or build if not pullable) and push release docker images
           command: |
             set -x
             export BRANCH=${CIRCLE_BRANCH}
-            echo "$DOCKERHUB_PASSWORD" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
             docker/update_or_build.sh -u -b ${BRANCH} -n client
             docker/update_or_build.sh -u -b ${BRANCH} -n init
             docker/update_or_build.sh -u -b ${BRANCH} -n mint
-            docker/update_or_build.sh -u -b ${BRANCH} -n safety-rules
             docker/update_or_build.sh -u -b ${BRANCH} -n tools
-            docker/update_or_build.sh -u -b ${BRANCH} -n validator-dynamic
+            docker/update_or_build.sh -u -b ${BRANCH} -n validator
+            docker/update_or_build.sh -u -b ${BRANCH} -n validator-tcb
             docker/update_or_build.sh -u -b ${BRANCH} -n cluster-test
 
 workflows:
@@ -706,6 +731,17 @@ workflows:
                 - /^testflow[\d|.]+$/
                 - /^premainnet-[\d|.]+$/
                 - /^v[\d|.]+-release$/
+      - compile-benches:
+          requires:
+            - prefetch-crates
+          filters:
+            branches:
+              ignore:
+                - gh-pages
+                - master
+                - /^testflow[\d|.]+$/
+                - /^premainnet-[\d|.]+$/
+                - /^v[\d|.]+-release$/
       - build-docs:
           requires:
             - lint
@@ -729,11 +765,13 @@ workflows:
             branches:
               only: master
       - docker-pre-publish:
+          context: docker
           filters:
             branches:
               only:
                 - auto
       - docker-publish:
+          context: docker
           filters:
             branches:
               only:

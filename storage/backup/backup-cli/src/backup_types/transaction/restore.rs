@@ -6,7 +6,7 @@ use crate::{
     storage::{BackupStorage, FileHandle},
     utils::{read_record_bytes::ReadRecordBytes, storage_ext::BackupStorageExt, GlobalRestoreOpt},
 };
-use anyhow::{ensure, Result};
+use anyhow::{anyhow, ensure, Result};
 use executor::Executor;
 use executor_types::TransactionReplayer;
 use libra_types::{
@@ -28,10 +28,18 @@ pub struct TransactionRestoreOpt {
     #[structopt(long = "transaction-manifest")]
     pub manifest_handle: FileHandle,
     #[structopt(
-        long = "replay-transaction-from-version",
-        default_value = "Version::max_value()"
+        long = "replay-transactions-from-version",
+        help = "Transactions with this version and above will be replayed so state and events are \
+        gonna pop up. Requires state at the version right before this to exist, either by \
+        recovering a state snapshot, or previous transaction replay."
     )]
-    pub replay_from_version: Version,
+    pub replay_from_version: Option<Version>,
+}
+
+impl TransactionRestoreOpt {
+    pub fn replay_from_version(&self) -> Version {
+        self.replay_from_version.unwrap_or(Version::max_value())
+    }
 }
 
 pub struct TransactionRestoreController {
@@ -116,37 +124,28 @@ impl TransactionRestoreController {
         Self {
             storage,
             restore_handler,
+            replay_from_version: opt.replay_from_version(),
             manifest_handle: opt.manifest_handle,
-            target_version: global_opt.target_version,
-            replay_from_version: opt.replay_from_version,
+            target_version: global_opt.target_version(),
             state: State::default(),
         }
     }
 
-    fn maybe_save_frozen_subtrees(&mut self, chunk: &LoadedChunk) -> Result<()> {
-        if !self.state.frozen_subtree_confirmed {
-            self.restore_handler.confirm_or_save_frozen_subtrees(
-                chunk.manifest.first_version,
-                chunk.range_proof.left_siblings(),
-            )?;
-            self.state.frozen_subtree_confirmed = true;
-        }
+    pub async fn run(self) -> Result<()> {
+        println!(
+            "Transaction restore started. Manifest: {}",
+            self.manifest_handle
+        );
+        self.run_impl()
+            .await
+            .map_err(|e| anyhow!("Transaction restore failed: {}", e))?;
+        println!("Transaction restore succeeded.");
         Ok(())
     }
+}
 
-    fn transaction_replayer(&mut self) -> Result<&mut Executor<LibraVM>> {
-        if self.state.transaction_replayer.is_none() {
-            let replayer = Executor::new_on_unbootstrapped_db(
-                DbReaderWriter::from_arc(Arc::clone(&self.restore_handler.libradb)),
-                self.restore_handler
-                    .get_tree_state(self.replay_from_version)?,
-            );
-            self.state.transaction_replayer = Some(replayer);
-        }
-        Ok(self.state.transaction_replayer.as_mut().unwrap())
-    }
-
-    pub async fn run(mut self) -> Result<()> {
+impl TransactionRestoreController {
+    async fn run_impl(mut self) -> Result<()> {
         let manifest: TransactionBackup =
             self.storage.load_json_file(&self.manifest_handle).await?;
         manifest.verify()?;
@@ -171,7 +170,7 @@ impl TransactionRestoreController {
 
             // Transactions to save without replaying:
             if first_to_replay > chunk.manifest.first_version {
-                let last_to_save = min(last, first_to_replay);
+                let last_to_save = min(last, first_to_replay - 1);
                 let num_txns_to_save = (last_to_save - chunk.manifest.first_version + 1) as usize;
                 self.restore_handler.save_transactions(
                     chunk.manifest.first_version,
@@ -186,7 +185,7 @@ impl TransactionRestoreController {
                 let num_to_replay = (last - first_to_replay + 1) as usize;
                 chunk.txns.truncate(num_to_replay);
                 chunk.txn_infos.truncate(num_to_replay);
-                self.transaction_replayer()?.replay_chunk(
+                self.transaction_replayer(first_to_replay)?.replay_chunk(
                     first_to_replay,
                     chunk.txns,
                     chunk.txn_infos,
@@ -208,5 +207,36 @@ impl TransactionRestoreController {
         }
 
         Ok(())
+    }
+
+    fn maybe_save_frozen_subtrees(&mut self, chunk: &LoadedChunk) -> Result<()> {
+        if !self.state.frozen_subtree_confirmed {
+            self.restore_handler.confirm_or_save_frozen_subtrees(
+                chunk.manifest.first_version,
+                chunk.range_proof.left_siblings(),
+            )?;
+            self.state.frozen_subtree_confirmed = true;
+        }
+        Ok(())
+    }
+
+    fn transaction_replayer(&mut self, first_version: Version) -> Result<&mut Executor<LibraVM>> {
+        if self.state.transaction_replayer.is_none() {
+            let replayer = Executor::new_on_unbootstrapped_db(
+                DbReaderWriter::from_arc(Arc::clone(&self.restore_handler.libradb)),
+                self.restore_handler.get_tree_state(first_version)?,
+            );
+            self.state.transaction_replayer = Some(replayer);
+        } else {
+            assert_eq!(
+                self.state
+                    .transaction_replayer
+                    .as_ref()
+                    .unwrap()
+                    .expecting_version(),
+                first_version
+            );
+        }
+        Ok(self.state.transaction_replayer.as_mut().unwrap())
     }
 }

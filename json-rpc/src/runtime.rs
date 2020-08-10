@@ -24,16 +24,14 @@ use warp::{
 
 // Counter labels for runtime metrics
 const LABEL_FAIL: &str = "fail";
-const LABEL_INVALID_FORMAT: &str = "invalid_format";
-const LABEL_INVALID_METHOD: &str = "invalid_method";
-const LABEL_INVALID_PARAMS: &str = "invalid_params";
-const LABEL_MISSING_METHOD: &str = "method_not_found";
 const LABEL_SUCCESS: &str = "success";
 
 /// Creates HTTP server (warp-based) that serves JSON RPC requests
 /// Returns handle to corresponding Tokio runtime
 pub fn bootstrap(
     address: SocketAddr,
+    batch_size_limit: u16,
+    page_size_limit: u16,
     libra_db: Arc<dyn DbReader>,
     mp_sender: MempoolClientSender,
     role: RoleType,
@@ -47,7 +45,14 @@ pub fn bootstrap(
         .expect("[rpc] failed to create runtime");
 
     let registry = Arc::new(build_registry());
-    let service = JsonRpcService::new(libra_db, mp_sender, role, chain_id);
+    let service = JsonRpcService::new(
+        libra_db,
+        mp_sender,
+        role,
+        chain_id,
+        batch_size_limit,
+        page_size_limit,
+    );
 
     let base_route = warp::any()
         .and(warp::post())
@@ -64,7 +69,11 @@ pub fn bootstrap(
         .and(warp::path::end())
         .and(base_route);
 
-    let full_route = route_v1.or(route_root);
+    let health_route = warp::path!("-" / "healthy")
+        .and(warp::path::end())
+        .map(|| "libra-node:ok");
+
+    let full_route = health_route.or(route_v1.or(route_root));
 
     // Ensure that we actually bind to the socket first before spawning the
     // server tasks. This helps in tests to prevent races where a client attempts
@@ -81,15 +90,18 @@ pub fn bootstrap(
 /// Creates JSON RPC endpoint by given node config
 pub fn bootstrap_from_config(
     config: &NodeConfig,
+    chain_id: ChainId,
     libra_db: Arc<dyn DbReader>,
     mp_sender: MempoolClientSender,
 ) -> Runtime {
     bootstrap(
         config.rpc.address,
+        config.rpc.batch_size_limit,
+        config.rpc.page_size_limit,
         libra_db,
         mp_sender,
         config.base.role,
-        config.base.chain_id,
+        chain_id,
     )
 }
 
@@ -107,17 +119,27 @@ async fn rpc_endpoint(
         .map_err(|_| reject::custom(DatabaseError))?;
 
     let resp = Ok(if let Value::Array(requests) = data {
-        // batch API call
-        let futures = requests.into_iter().map(|req| {
-            rpc_request_handler(
-                req,
-                service.clone(),
-                Arc::clone(&registry),
-                ledger_info.clone(),
-            )
-        });
-        let responses = join_all(futures).await;
-        warp::reply::json(&Value::Array(responses))
+        match service.validate_batch_size_limit(requests.len()) {
+            Ok(_) => {
+                // batch API call
+                let futures = requests.into_iter().map(|req| {
+                    rpc_request_handler(
+                        req,
+                        service.clone(),
+                        Arc::clone(&registry),
+                        ledger_info.clone(),
+                    )
+                });
+                let responses = join_all(futures).await;
+                warp::reply::json(&Value::Array(responses))
+            }
+            Err(err) => {
+                let mut resp = Map::new();
+                set_response_error(&mut resp, err);
+
+                warp::reply::json(&resp)
+            }
+        }
     } else {
         // single API call
         let resp = rpc_request_handler(data, service, registry, ledger_info).await;
@@ -161,11 +183,7 @@ async fn rpc_request_handler(
             request = data;
         }
         _ => {
-            set_response_error(
-                &mut response,
-                JsonRpcError::invalid_request(),
-                Some(LABEL_INVALID_FORMAT),
-            );
+            set_response_error(&mut response, JsonRpcError::invalid_format());
             return Value::Object(response);
         }
     }
@@ -176,14 +194,14 @@ async fn rpc_request_handler(
             response.insert("id".to_string(), request_id);
         }
         Err(err) => {
-            set_response_error(&mut response, err, Some(LABEL_INVALID_FORMAT));
+            set_response_error(&mut response, err);
             return Value::Object(response);
         }
     };
 
     // verify protocol version
     if let Err(err) = verify_protocol(&request) {
-        set_response_error(&mut response, err, Some(LABEL_INVALID_FORMAT));
+        set_response_error(&mut response, err);
         return Value::Object(response);
     }
 
@@ -194,11 +212,7 @@ async fn rpc_request_handler(
             params = parameters.to_vec();
         }
         _ => {
-            set_response_error(
-                &mut response,
-                JsonRpcError::invalid_params(None),
-                Some(LABEL_INVALID_PARAMS),
-            );
+            set_response_error(&mut response, JsonRpcError::invalid_params(None));
             return Value::Object(response);
         }
     }
@@ -220,12 +234,11 @@ async fn rpc_request_handler(
                 Err(err) => {
                     // check for custom error
                     if let Some(custom_error) = err.downcast_ref::<JsonRpcError>() {
-                        set_response_error(&mut response, custom_error.clone(), None);
+                        set_response_error(&mut response, custom_error.clone());
                     } else {
                         set_response_error(
                             &mut response,
                             JsonRpcError::internal_error(err.to_string()),
-                            None,
                         );
                     }
                     counters::REQUESTS
@@ -234,19 +247,11 @@ async fn rpc_request_handler(
                 }
             },
             None => {
-                set_response_error(
-                    &mut response,
-                    JsonRpcError::method_not_found(),
-                    Some(LABEL_MISSING_METHOD),
-                );
+                set_response_error(&mut response, JsonRpcError::method_not_found());
             }
         },
         _ => {
-            set_response_error(
-                &mut response,
-                JsonRpcError::invalid_request(),
-                Some(LABEL_INVALID_METHOD),
-            );
+            set_response_error(&mut response, JsonRpcError::method_not_found());
         }
     }
 
@@ -255,10 +260,21 @@ async fn rpc_request_handler(
 
 // Sets the JSON RPC error value for a given response.
 // If a counter label is supplied, also increments the invalid request counter using the label,
-fn set_response_error(response: &mut Map<String, Value>, error: JsonRpcError, label: Option<&str>) {
+fn set_response_error(response: &mut Map<String, Value>, error: JsonRpcError) {
+    let err_code = error.code;
     response.insert("error".to_string(), error.serialize());
 
-    if let Some(label) = label {
+    if err_code <= -32000 && err_code >= -32099 {
+        counters::INTERNAL_ERRORS.inc();
+    } else {
+        let label = match err_code {
+            -32600 => "invalid_request",
+            -32601 => "method_not_found",
+            -32602 => "invalid_params",
+            -32604 => "invalid_format",
+            -32700 => "parse_error",
+            _ => "unexpected_code",
+        };
         counters::INVALID_REQUESTS.with_label_values(&[label]).inc();
     }
 }
@@ -269,7 +285,7 @@ fn parse_request_id(request: &Map<String, Value>) -> Result<Value, JsonRpcError>
             if req_id.is_string() || req_id.is_number() || req_id.is_null() {
                 Ok(req_id.clone())
             } else {
-                Err(JsonRpcError::invalid_request())
+                Err(JsonRpcError::invalid_format())
             }
         }
         None => Ok(Value::Null),

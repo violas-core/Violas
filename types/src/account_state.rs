@@ -4,15 +4,17 @@
 use crate::{
     account_address::AccountAddress,
     account_config::{
-        type_tag_for_currency_code, AccountResource, AccountRole, BalanceResource, ChildVASP,
-        Credential, CurrencyInfoResource, DesignatedDealer, FreezingBit, ParentVASP,
+        type_tag_for_currency_code, AccountResource, AccountRole, BalanceResource, ChainIdResource,
+        ChildVASP, Credential, CurrencyInfoResource, DesignatedDealer, FreezingBit, ParentVASP,
         PreburnResource, ACCOUNT_RECEIVED_EVENT_PATH, ACCOUNT_SENT_EVENT_PATH,
     },
     block_metadata::{LibraBlockResource, NEW_BLOCK_EVENT_PATH},
     event::EventHandle,
     libra_timestamp::LibraTimestampResource,
-    on_chain_config::{ConfigurationResource, OnChainConfig, RegisteredCurrencies, ValidatorSet},
-    validator_config::ValidatorConfigResource,
+    on_chain_config::{
+        ConfigurationResource, LibraVersion, OnChainConfig, RegisteredCurrencies, ValidatorSet,
+    },
+    validator_config::{ValidatorConfigResource, ValidatorOperatorConfigResource},
 };
 use anyhow::{bail, Error, Result};
 use move_core_types::{identifier::Identifier, move_resource::MoveResource};
@@ -67,6 +69,10 @@ impl AccountState {
             .collect()
     }
 
+    pub fn get_chain_id_resource(&self) -> Result<Option<ChainIdResource>> {
+        self.get_resource(&ChainIdResource::resource_path())
+    }
+
     pub fn get_configuration_resource(&self) -> Result<Option<ConfigurationResource>> {
         self.get_resource(&ConfigurationResource::resource_path())
     }
@@ -77,6 +83,12 @@ impl AccountState {
 
     pub fn get_validator_config_resource(&self) -> Result<Option<ValidatorConfigResource>> {
         self.get_resource(&ValidatorConfigResource::resource_path())
+    }
+
+    pub fn get_validator_operator_config_resource(
+        &self,
+    ) -> Result<Option<ValidatorOperatorConfigResource>> {
+        self.get_resource(&ValidatorOperatorConfigResource::resource_path())
     }
 
     pub fn get_freezing_bit(&self) -> Result<Option<FreezingBit>> {
@@ -120,6 +132,10 @@ impl AccountState {
 
     pub fn get_validator_set(&self) -> Result<Option<ValidatorSet>> {
         self.get_resource(&ValidatorSet::CONFIG_ID.access_path().path)
+    }
+
+    pub fn get_libra_version(&self) -> Result<Option<LibraVersion>> {
+        self.get_resource(&LibraVersion::CONFIG_ID.access_path().path)
     }
 
     pub fn get_registered_currency_info_resources(

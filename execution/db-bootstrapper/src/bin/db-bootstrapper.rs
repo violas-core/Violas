@@ -34,6 +34,10 @@ fn main() -> Result<()> {
 
     let genesis_txn = load_genesis_txn(&opt.genesis_txn_file)
         .with_context(|| format_err!("Failed loading genesis txn."))?;
+    assert!(
+        matches!(genesis_txn, Transaction::GenesisTransaction(_)),
+        "Not a GenesisTransaction"
+    );
     let db = DbReaderWriter::new(
         LibraDB::open(
             &opt.db_dir,
@@ -50,7 +54,7 @@ fn main() -> Result<()> {
     let committer = calculate_genesis::<LibraVM>(&db, tree_state, &genesis_txn)
         .with_context(|| format_err!("Failed to calculate genesis."))?;
     println!("Successfully calculated genesis.");
-    println!("{:?}", committer.waypoint());
+    println!("{}", committer.waypoint());
 
     if let Some(waypoint) = opt.waypoint_to_verify {
         ensure!(

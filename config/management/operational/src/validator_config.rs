@@ -12,6 +12,7 @@ use libra_network_address::{
     NetworkAddress, Protocol, RawNetworkAddress,
 };
 use libra_types::account_address::AccountAddress;
+use serde::Serialize;
 use std::convert::TryFrom;
 use structopt::StructOpt;
 
@@ -52,7 +53,7 @@ impl SetValidatorConfig {
             validator_address
         } else {
             decode_validator_address(
-                validator_config.validator_network_address,
+                &validator_config.validator_network_address,
                 &owner_account,
                 &TEST_SHARED_VAL_NETADDR_KEY,
                 0, // addr_idx
@@ -62,7 +63,7 @@ impl SetValidatorConfig {
         let fullnode_address = if let Some(fullnode_address) = self.fullnode_address {
             fullnode_address
         } else {
-            decode_address(validator_config.full_node_network_address)?
+            decode_address(&validator_config.full_node_network_address)?
         };
 
         let txn = self.validator_config.build_transaction(
@@ -89,6 +90,7 @@ impl RotateKey {
         self,
         key_name: &'static str,
     ) -> Result<(TransactionContext, Ed25519PublicKey), Error> {
+        // Load the config, storage backend and create a json rpc client.
         let config = self
             .validator_config
             .config
@@ -97,18 +99,48 @@ impl RotateKey {
             .override_validator_backend(
                 &self.validator_config.validator_backend.validator_backend,
             )?;
-
         let mut storage = config.validator_backend();
-        let key = storage.rotate_key(key_name)?;
+        let client = JsonRpcClientWrapper::new(config.json_server);
 
+        // Fetch the current on-chain validator config for the node
+        let owner_account = storage.account_address(OWNER_ACCOUNT)?;
+        let validator_config = client.validator_config(owner_account)?;
+
+        // Check that the key held in storage matches the key registered on-chain in the validator
+        // config. If so, rotate the key in storage. If not, don't rotate the key in storage and
+        // rather allow the next step to resubmit the set_validator_config transaction with the
+        // current key (to resynchronize the validator config on the blockchain).
+        let mut storage_key = storage.ed25519_public_from_private(key_name)?;
+        let keys_match = match key_name {
+            CONSENSUS_KEY => storage_key == validator_config.consensus_public_key,
+            VALIDATOR_NETWORK_KEY => {
+                to_x25519(storage_key.clone())?
+                    == validator_config.validator_network_identity_public_key
+            }
+            FULLNODE_NETWORK_KEY => {
+                to_x25519(storage_key.clone())?
+                    == validator_config.full_node_network_identity_public_key
+            }
+            _ => {
+                return Err(Error::UnexpectedError(
+                    "Rotate key was called with an unknown key name!".into(),
+                ));
+            }
+        };
+        if keys_match {
+            storage_key = storage.rotate_key(key_name)?;
+        }
+
+        // Create and set the validator config state on the blockchain.
         let set_validator_config = SetValidatorConfig {
             json_server: self.json_server,
             validator_config: self.validator_config,
             validator_address: None,
             fullnode_address: None,
         };
-
-        set_validator_config.execute().map(|txn_ctx| (txn_ctx, key))
+        set_validator_config
+            .execute()
+            .map(|txn_ctx| (txn_ctx, storage_key))
     }
 }
 
@@ -150,13 +182,13 @@ impl RotateFullNodeNetworkKey {
     }
 }
 
-fn decode_validator_address(
-    address: RawEncNetworkAddress,
+pub fn decode_validator_address(
+    address: &RawEncNetworkAddress,
     account: &AccountAddress,
     key: &Key,
     addr_idx: u32,
 ) -> Result<NetworkAddress, Error> {
-    let enc_addr = EncNetworkAddress::try_from(&address).map_err(|e| {
+    let enc_addr = EncNetworkAddress::try_from(address).map_err(|e| {
         Error::UnexpectedError(format!(
             "Failed to decode network address {}",
             e.to_string()
@@ -168,11 +200,11 @@ fn decode_validator_address(
             e.to_string()
         ))
     })?;
-    decode_address(raw_addr)
+    decode_address(&raw_addr)
 }
 
-fn decode_address(raw_address: RawNetworkAddress) -> Result<NetworkAddress, Error> {
-    let network_address = NetworkAddress::try_from(&raw_address).map_err(|e| {
+pub fn decode_address(raw_address: &RawNetworkAddress) -> Result<NetworkAddress, Error> {
+    let network_address = NetworkAddress::try_from(raw_address).map_err(|e| {
         Error::UnexpectedError(format!(
             "Failed to decode network address {}",
             e.to_string()
@@ -198,15 +230,63 @@ fn decode_address(raw_address: RawNetworkAddress) -> Result<NetworkAddress, Erro
 
 #[derive(Debug, StructOpt)]
 pub struct ValidatorConfig {
-    #[structopt(long, help = "JSON-RPC Endpoint (e.g. http://localhost:8080")]
-    json_server: String,
     #[structopt(long, help = "Validator account address to display the config")]
     account_address: AccountAddress,
+    #[structopt(flatten)]
+    config: libra_management::config::ConfigPath,
+    /// JSON-RPC Endpoint (e.g. http://localhost:8080)
+    #[structopt(long, required_unless = "config")]
+    json_server: Option<String>,
 }
 
 impl ValidatorConfig {
-    pub fn execute(self) -> Result<libra_types::validator_config::ValidatorConfig, Error> {
-        let client = JsonRpcClientWrapper::new(self.json_server);
-        client.validator_config(self.account_address)
+    pub fn execute(self) -> Result<DecryptedValidatorConfig, Error> {
+        let config = self.config.load()?.override_json_server(&self.json_server);
+        let client = JsonRpcClientWrapper::new(config.json_server);
+        client.validator_config(self.account_address).map(|config| {
+            DecryptedValidatorConfig::from_validator_config(
+                self.account_address,
+                &TEST_SHARED_VAL_NETADDR_KEY,
+                0,
+                &config,
+            )
+            .unwrap()
+        })
+    }
+}
+
+#[derive(Serialize)]
+pub struct DecryptedValidatorConfig {
+    pub consensus_public_key: Ed25519PublicKey,
+    pub validator_network_key: x25519::PublicKey,
+    pub validator_network_address: NetworkAddress,
+    pub full_node_network_key: x25519::PublicKey,
+    pub full_node_network_address: NetworkAddress,
+}
+
+impl DecryptedValidatorConfig {
+    pub fn from_validator_config(
+        account: AccountAddress,
+        address_encryption_key: &libra_network_address::encrypted::Key,
+        addr_idx: u32,
+        validator_config: &libra_types::validator_config::ValidatorConfig,
+    ) -> Result<DecryptedValidatorConfig, Error> {
+        let full_node_network_address =
+            crate::validator_config::decode_address(&validator_config.full_node_network_address)?;
+
+        let validator_network_address = crate::validator_config::decode_validator_address(
+            &validator_config.validator_network_address,
+            &account,
+            address_encryption_key,
+            addr_idx,
+        )?;
+
+        Ok(DecryptedValidatorConfig {
+            consensus_public_key: validator_config.consensus_public_key.clone(),
+            validator_network_key: validator_config.validator_network_identity_public_key,
+            validator_network_address,
+            full_node_network_key: validator_config.full_node_network_identity_public_key,
+            full_node_network_address,
+        })
     }
 }

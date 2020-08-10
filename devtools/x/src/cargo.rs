@@ -5,11 +5,15 @@ use crate::{config::CargoConfig, utils::project_root, Result};
 use anyhow::anyhow;
 use log::{info, warn};
 use std::{
+    env,
     ffi::{OsStr, OsString},
     path::Path,
     process::{Command, Output, Stdio},
     time::Instant,
 };
+
+const RUST_TOOLCHAIN_VERSION: &str = include_str!("../../../rust-toolchain");
+const RUSTUP_TOOLCHAIN: &str = "RUSTUP_TOOLCHAIN";
 
 pub struct Cargo {
     inner: Command,
@@ -54,6 +58,13 @@ impl Cargo {
         if let Some(flags) = &cargo_flags {
             inner.arg(&flags);
         }
+
+        // The environment is inherited for child processes so we only need to set RUSTUP_TOOLCHAIN
+        // if it isn't already present in the environment
+        if env::var_os(RUSTUP_TOOLCHAIN).is_none() {
+            inner.env(RUSTUP_TOOLCHAIN, RUST_TOOLCHAIN_VERSION);
+        }
+
         inner.arg(command);
         Self {
             inner,
@@ -226,7 +237,7 @@ pub struct CargoArgs {
 /// Represents an invocations of cargo that will call multiple other invocations of
 /// cargo based on groupings implied by the contents of <workspace-root>/x.toml.
 pub enum CargoCommand<'a> {
-    Bench(&'a CargoConfig, &'a [OsString]),
+    Bench(&'a CargoConfig, &'a [OsString], &'a [OsString]),
     Check(&'a CargoConfig),
     Clippy(&'a CargoConfig, &'a [OsString]),
     Fix(&'a CargoConfig, &'a [OsString]),
@@ -241,7 +252,7 @@ pub enum CargoCommand<'a> {
 impl<'a> CargoCommand<'a> {
     pub fn cargo_config(&self) -> &CargoConfig {
         match self {
-            CargoCommand::Bench(config, _) => config,
+            CargoCommand::Bench(config, _, _) => config,
             CargoCommand::Check(config) => config,
             CargoCommand::Clippy(config, _) => config,
             CargoCommand::Fix(config, _) => config,
@@ -311,7 +322,7 @@ impl<'a> CargoCommand<'a> {
 
     pub fn as_str(&self) -> &'static str {
         match self {
-            CargoCommand::Bench(_, _) => "bench",
+            CargoCommand::Bench(_, _, _) => "bench",
             CargoCommand::Check(_) => "check",
             CargoCommand::Clippy(_, _) => "clippy",
             CargoCommand::Fix(_, _) => "fix",
@@ -321,7 +332,7 @@ impl<'a> CargoCommand<'a> {
 
     fn pass_through_args(&self) -> &[OsString] {
         match self {
-            CargoCommand::Bench(_, args) => args,
+            CargoCommand::Bench(_, _, args) => args,
             CargoCommand::Check(_) => &[],
             CargoCommand::Clippy(_, args) => args,
             CargoCommand::Fix(_, args) => args,
@@ -331,7 +342,7 @@ impl<'a> CargoCommand<'a> {
 
     fn direct_args(&self) -> &[OsString] {
         match self {
-            CargoCommand::Bench(_, _) => &[],
+            CargoCommand::Bench(_, direct_args, _) => direct_args,
             CargoCommand::Check(_) => &[],
             CargoCommand::Clippy(_, _) => &[],
             CargoCommand::Fix(_, _) => &[],
@@ -341,7 +352,7 @@ impl<'a> CargoCommand<'a> {
 
     pub fn get_extra_env(&self) -> &[(&str, &str)] {
         match self {
-            CargoCommand::Bench(_, _) => &[],
+            CargoCommand::Bench(_, _, _) => &[],
             CargoCommand::Check(_) => &[],
             CargoCommand::Clippy(_, _) => &[],
             CargoCommand::Fix(_, _) => &[],

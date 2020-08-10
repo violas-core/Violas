@@ -518,10 +518,10 @@ that amount that can be minted according to the bounds for the
 
 
 
-TODO(wrwg): times out
+TODO(wrwg): takes a long time but verifies.
 
 
-<pre><code>pragma verify = <b>false</b>;
+<pre><code>pragma verify_duration_estimate = 80;
 </code></pre>
 
 
@@ -535,6 +535,8 @@ TODO(wrwg): times out
 </code></pre>
 
 
+
+TODO(wrwg): sort out strange behavior: verifies wo/ problem locally, but times out in Ci
 
 
 <pre><code>pragma verify = <b>false</b>;
@@ -586,13 +588,11 @@ TODO(wrwg): times out
 
 
 
-TODO(wrwg): this currently does not verify. It probably never did as it was timing out in the past
-(which it does not any longer)
 
-
-<pre><code>pragma verify = <b>false</b>;
 <a name="0x1_DesignatedDealer_dealer$11"></a>
-<b>let</b> dealer = <b>global</b>&lt;<a href="#0x1_DesignatedDealer_TierInfo">TierInfo</a>&lt;CoinType&gt;&gt;(dd_addr);
+
+
+<pre><code><b>let</b> dealer = <b>global</b>&lt;<a href="#0x1_DesignatedDealer_TierInfo">TierInfo</a>&lt;CoinType&gt;&gt;(dd_addr);
 <a name="0x1_DesignatedDealer_current_time$12"></a>
 <b>let</b> current_time = <a href="LibraTimestamp.md#0x1_LibraTimestamp_spec_now_microseconds">LibraTimestamp::spec_now_microseconds</a>();
 <b>ensures</b> <b>old</b>(dealer.window_start) &lt;= dealer.window_start;

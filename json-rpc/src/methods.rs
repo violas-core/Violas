@@ -3,7 +3,7 @@
 
 //! Module contains RPC method handlers for Full Node JSON-RPC interface
 use crate::{
-    errors::{ErrorData, InvalidArguments, JsonRpcError},
+    errors::{ErrorData, ExceedSizeLimit, InvalidArguments, JsonRpcError},
     views::{
         AccountStateWithProofView, AccountView, BlockMetadata, CurrencyInfoView, EventView,
         StateProofView, TransactionView,
@@ -18,7 +18,7 @@ use libra_mempool::MempoolClientSender;
 use libra_trace::prelude::*;
 use libra_types::{
     account_address::AccountAddress,
-    account_config::{from_currency_code_string, libra_root_address},
+    account_config::{from_currency_code_string, libra_root_address, AccountResource},
     account_state::AccountState,
     chain_id::ChainId,
     event::EventKey,
@@ -28,7 +28,7 @@ use libra_types::{
 };
 use network::counters;
 use serde_json::Value;
-use std::{collections::HashMap, convert::TryFrom, pin::Pin, str::FromStr, sync::Arc};
+use std::{cmp::min, collections::HashMap, convert::TryFrom, pin::Pin, str::FromStr, sync::Arc};
 use storage_interface::DbReader;
 
 #[derive(Clone)]
@@ -37,6 +37,8 @@ pub(crate) struct JsonRpcService {
     mempool_sender: MempoolClientSender,
     role: RoleType,
     chain_id: ChainId,
+    batch_size_limit: u16,
+    page_size_limit: u16,
 }
 
 impl JsonRpcService {
@@ -45,12 +47,16 @@ impl JsonRpcService {
         mempool_sender: MempoolClientSender,
         role: RoleType,
         chain_id: ChainId,
+        batch_size_limit: u16,
+        page_size_limit: u16,
     ) -> Self {
         Self {
             db,
             mempool_sender,
             role,
             chain_id,
+            batch_size_limit,
+            page_size_limit,
         }
     }
 
@@ -60,6 +66,28 @@ impl JsonRpcService {
 
     pub fn chain_id(&self) -> ChainId {
         self.chain_id
+    }
+
+    pub fn validate_batch_size_limit(&self, size: usize) -> Result<(), JsonRpcError> {
+        self.validate_size_limit("batch size", self.batch_size_limit, size)
+    }
+
+    pub fn validate_page_size_limit(&self, size: usize) -> Result<(), JsonRpcError> {
+        self.validate_size_limit("page size", self.page_size_limit, size)
+    }
+
+    fn validate_size_limit(&self, name: &str, limit: u16, size: usize) -> Result<(), JsonRpcError> {
+        if size > limit as usize {
+            Err(JsonRpcError::invalid_request_with_data(Some(
+                ErrorData::ExceedSizeLimit(ExceedSizeLimit {
+                    limit,
+                    size,
+                    name: name.to_string(),
+                }),
+            )))
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -141,7 +169,7 @@ async fn get_account(
         .get_freezing_bit()?
         .ok_or_else(|| format_err!("invalid account data: no freezing bit"))?;
 
-    let currency_info = currencies_info(service, request).await?;
+    let currency_info = get_currencies(service, request).await?;
     let currencies: Vec<_> = currency_info
         .into_iter()
         .map(|info| from_currency_code_string(&info.code))
@@ -186,10 +214,7 @@ async fn get_transactions(
     let limit: u64 = serde_json::from_value(request.get_param(1))?;
     let include_events: bool = serde_json::from_value(request.get_param(2))?;
 
-    ensure!(
-        limit > 0 && limit <= 1000,
-        "limit must be smaller than 1000"
-    );
+    service.validate_page_size_limit(limit as usize)?;
 
     let txs =
         service
@@ -285,6 +310,8 @@ async fn get_events(service: JsonRpcService, request: JsonRpcRequest) -> Result<
     let start: u64 = serde_json::from_value(request.get_param(1))?;
     let limit: u64 = serde_json::from_value(request.get_param(2))?;
 
+    service.validate_page_size_limit(limit as usize)?;
+
     let event_key = EventKey::try_from(&hex::decode(raw_event_key)?[..])?;
     let events_with_proof = service.db.get_events(&event_key, start, true, limit)?;
 
@@ -298,7 +325,7 @@ async fn get_events(service: JsonRpcService, request: JsonRpcRequest) -> Result<
 }
 
 /// Returns meta information about supported currencies
-async fn currencies_info(
+async fn get_currencies(
     service: JsonRpcService,
     request: JsonRpcRequest,
 ) -> Result<Vec<CurrencyInfoView>> {
@@ -316,6 +343,73 @@ async fn currencies_info(
     } else {
         Ok(vec![])
     }
+}
+
+/// Returns all account transactions
+async fn get_account_transactions(
+    service: JsonRpcService,
+    request: JsonRpcRequest,
+) -> Result<Vec<TransactionView>> {
+    let p_account: String = serde_json::from_value(request.get_param(0))?;
+    let start: u64 = serde_json::from_value(request.get_param(1))?;
+    let limit: u64 = serde_json::from_value(request.get_param(2))?;
+    let include_events: bool = serde_json::from_value(request.get_param(3))?;
+
+    service.validate_page_size_limit(limit as usize)?;
+
+    let account = AccountAddress::try_from(p_account)?;
+    let account_seq = AccountResource::try_from(
+        &service
+            .db
+            .get_latest_account_state(account)?
+            .ok_or_else(|| format_err!("Account doesn't exist"))?,
+    )?
+    .sequence_number();
+
+    if start >= account_seq {
+        return Ok(vec![]);
+    }
+
+    let mut all_txs = vec![];
+    let end = min(
+        start
+            .checked_add(limit)
+            .ok_or_else(|| format_err!("overflow!"))?,
+        account_seq,
+    );
+
+    for seq in start..end {
+        let tx = service
+            .db
+            .get_txn_by_account(account, seq, request.version(), include_events)?
+            .ok_or_else(|| format_err!("Can not find transaction for seq {}!", seq))?;
+
+        let tx_version = tx.version;
+        let events = if include_events {
+            ensure!(
+                tx.events.is_some(),
+                "Storage layer didn't return events when requested!"
+            );
+            tx.events
+                .unwrap_or_default()
+                .into_iter()
+                .map(|x| ((tx_version, x).into()))
+                .collect()
+        } else {
+            vec![]
+        };
+
+        all_txs.push(TransactionView {
+            version: tx.version,
+            hash: tx.transaction.hash().to_hex(),
+            transaction: tx.transaction.into(),
+            events,
+            vm_status: tx.proof.transaction_info().status().into(),
+            gas_used: tx.proof.transaction_info().gas_used(),
+        });
+    }
+
+    Ok(all_txs)
 }
 
 /// Returns proof of new state relative to version known to client
@@ -379,8 +473,15 @@ pub(crate) fn build_registry() -> RpcRegistry {
         3,
         0
     );
+    register_rpc_method!(
+        registry,
+        "get_account_transactions",
+        get_account_transactions,
+        4,
+        0
+    );
     register_rpc_method!(registry, "get_events", get_events, 3, 0);
-    register_rpc_method!(registry, "get_currencies", currencies_info, 0, 0);
+    register_rpc_method!(registry, "get_currencies", get_currencies, 0, 0);
 
     register_rpc_method!(registry, "get_state_proof", get_state_proof, 1, 0);
     register_rpc_method!(

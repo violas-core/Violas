@@ -1,13 +1,14 @@
 // Copyright (c) The Libra Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use backup_cli::{
     backup_types::{
         epoch_ending::restore::{EpochEndingRestoreController, EpochEndingRestoreOpt},
         state_snapshot::restore::{StateSnapshotRestoreController, StateSnapshotRestoreOpt},
         transaction::restore::{TransactionRestoreController, TransactionRestoreOpt},
     },
+    coordinators::restore::{RestoreCoordinator, RestoreCoordinatorOpt},
     storage::StorageOpt,
     utils::GlobalRestoreOpt,
 };
@@ -44,6 +45,12 @@ enum RestoreType {
         #[structopt(subcommand)]
         storage: StorageOpt,
     },
+    Auto {
+        #[structopt(flatten)]
+        opt: RestoreCoordinatorOpt,
+        #[structopt(subcommand)]
+        storage: StorageOpt,
+    },
 }
 
 #[tokio::main]
@@ -70,9 +77,7 @@ async fn main() -> Result<()> {
                 restore_handler,
             )
             .run()
-            .await
-            .map(|_| println!("Epoch ending information restore success."))
-            .context("Failed restoring epoch ending information.")?;
+            .await?;
         }
         RestoreType::StateSnapshot { opt, storage } => {
             StateSnapshotRestoreController::new(
@@ -82,9 +87,7 @@ async fn main() -> Result<()> {
                 restore_handler,
             )
             .run()
-            .await
-            .map(|_| println!("State snapshot restore success."))
-            .context("Failed restoring state snapshot.")?;
+            .await?;
         }
         RestoreType::Transaction { opt, storage } => {
             TransactionRestoreController::new(
@@ -94,9 +97,17 @@ async fn main() -> Result<()> {
                 restore_handler,
             )
             .run()
-            .await
-            .map(|_| println!("Transactions restore success."))
-            .context("Failed restoring state snapshot.")?;
+            .await?;
+        }
+        RestoreType::Auto { opt, storage } => {
+            RestoreCoordinator::new(
+                opt,
+                global_opt,
+                storage.init_storage().await?,
+                restore_handler,
+            )
+            .run()
+            .await?;
         }
     }
 

@@ -27,6 +27,7 @@ module LibraTimestamp {
     const ETIME_NOT_INITIALIZED: u64 = 1;
     const ENOT_VM: u64 = 2;
     const EINVALID_TIMESTAMP: u64 = 3;
+    const EGENESIS_ONLY: u64 = 4;
 
     /// Initializes the global wall clock time resource. This can only be called from genesis.
     public fun initialize(lr_account: &signer) {
@@ -47,6 +48,7 @@ module LibraTimestamp {
             exists<CurrentTimeMicroseconds>(CoreAddresses::LIBRA_ROOT_ADDRESS()) && now_microseconds() == 0,
             ETIME_NOT_INITIALIZED
         );
+        assert(!exists<TimeHasStarted>(Signer::address_of(lr_account)), EGENESIS_ONLY);
         move_to(lr_account, TimeHasStarted{});
     }
 
@@ -128,28 +130,20 @@ module LibraTimestamp {
 
     /// ## Persistence of Initialization
 
-    spec schema InitializationPersists {
-        /// If the `TimeHasStarted` resource is initialized and we finished genesis, we can never enter genesis again.
-        /// Note that this is an important safety property since during genesis, we are allowed to perform certain
-        /// operations which should never be allowed in normal on-chain execution.
-        ensures old(!spec_is_genesis()) ==> !spec_is_genesis();
-
-        /// If the `CurrentTimeMicroseconds` resource is initialized, it stays initialized.
-        ensures old(spec_root_ctm_initialized()) ==> spec_root_ctm_initialized();
-    }
-
     spec module {
-        apply InitializationPersists to * except reset_time_has_started_for_test;
+        /// After genesis, the time stamp and time-has-started marker stay published.
+        invariant [global]
+            spec_is_up() ==>
+                exists<CurrentTimeMicroseconds>(CoreAddresses::LIBRA_ROOT_ADDRESS()) &&
+                exists<TimeHasStarted>(CoreAddresses::LIBRA_ROOT_ADDRESS());
     }
 
     /// ## Global Clock Time Progression
 
-    spec schema GlobalWallClockIsMonotonic {
-        /// The global wall clock time never decreases.
-        ensures old(spec_root_ctm_initialized()) ==> (old(spec_now_microseconds()) <= spec_now_microseconds());
-    }
     spec module {
-        apply GlobalWallClockIsMonotonic to *;
+        /// After genesis, time progresses monotonically.
+        invariant update [global]
+            spec_is_up() ==> old(spec_now_microseconds()) <= spec_now_microseconds();
     }
 
     // **************** FUNCTION SPECIFICATIONS ****************
@@ -162,6 +156,11 @@ module LibraTimestamp {
     }
 
     spec fun set_time_has_started {
+        /// This function is not directly verified but only in its calling context. Once it publishes
+        /// the `TimeHasStarted` resource, all invariants in the system which describe the resource state
+        /// after genesis will be asserted. This function is only called from genesis, which must
+        /// establish a state which passes the verification steps implied by calling this function.
+        pragma verify = false;
         aborts_if Signer::spec_address_of(lr_account) != CoreAddresses::SPEC_LIBRA_ROOT_ADDRESS();
         aborts_if !spec_is_genesis();
         aborts_if !spec_root_ctm_initialized();

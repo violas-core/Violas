@@ -56,6 +56,7 @@ impl ExperimentSuite {
         if env::var("TWIN_EXPERIMENT").is_ok() {
             experiments.push(Box::new(TwinValidatorsParams { pair: 1 }.build(cluster)));
         }
+
         experiments.push(Box::new(
             CpuFlamegraphParams { duration_secs: 60 }.build(cluster),
         ));

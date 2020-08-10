@@ -3,18 +3,19 @@
 
 use cli::client_proxy::ClientProxy;
 use debug_interface::NodeDebugClient;
-use libra_config::config::{Identity, KeyManagerConfig, NodeConfig, SecureBackend};
+use libra_config::config::{Identity, KeyManagerConfig, NodeConfig, SecureBackend, WaypointConfig};
 use libra_crypto::{ed25519::Ed25519PrivateKey, PrivateKey, SigningKey, Uniform};
 use libra_genesis_tool::config_builder::FullnodeType;
-use libra_global_constants::CONSENSUS_KEY;
+use libra_global_constants::{CONSENSUS_KEY, OPERATOR_KEY, VALIDATOR_NETWORK_KEY};
 use libra_json_rpc::views::{ScriptView, TransactionDataView};
 use libra_key_manager::{
     self,
     libra_interface::{JsonRpcLibraInterface, LibraInterface},
 };
+use libra_management::storage::to_x25519;
 use libra_operational_tool::test_helper::OperationalTool;
 use libra_secure_json_rpc::VMStatusView;
-use libra_secure_storage::{CryptoStorage, KVStorage, Storage};
+use libra_secure_storage::{CryptoStorage, KVStorage, Storage, Value};
 use libra_swarm::swarm::{LibraNode, LibraSwarm};
 use libra_temppath::TempPath;
 use libra_trace::trace::trace_node;
@@ -23,7 +24,7 @@ use libra_types::{
     account_config::{libra_root_address, testnet_dd_account_address, COIN1_NAME},
     chain_id::ChainId,
     ledger_info::LedgerInfo,
-    transaction::authenticator::AuthenticationKey,
+    transaction::{authenticator::AuthenticationKey, Transaction, WriteSetPayload},
     waypoint::Waypoint,
 };
 use num_traits::cast::FromPrimitive;
@@ -32,6 +33,7 @@ use std::{
     collections::BTreeMap,
     convert::TryInto,
     fs,
+    fs::File,
     io::{self, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -39,6 +41,8 @@ use std::{
     thread::sleep,
     time::Duration,
 };
+use transaction_builder::encode_remove_validator_and_reconfigure_script;
+use workspace_builder::workspace_root;
 
 const KEY_MANAGER_BIN: &str = "libra-key-manager";
 
@@ -51,10 +55,10 @@ struct TestEnvironment {
 }
 
 impl TestEnvironment {
-    fn new(num_validators: usize) -> Self {
+    fn new_with_chunk_limit(num_validators: usize, chunk_limit: u64) -> Self {
         ::libra_logger::Logger::new().init();
         let mut template = NodeConfig::default_for_validator();
-        template.state_sync.chunk_limit = 5;
+        template.state_sync.chunk_limit = chunk_limit;
 
         let validator_swarm =
             LibraSwarm::configure_validator_swarm(num_validators, None, Some(template)).unwrap();
@@ -79,6 +83,9 @@ impl TestEnvironment {
             libra_root_key: (key, key_path),
             mnemonic_file,
         }
+    }
+    fn new(num_validators: usize) -> Self {
+        Self::new_with_chunk_limit(num_validators, 10)
     }
 
     fn setup_vfn_swarm(&mut self) {
@@ -654,7 +661,12 @@ fn test_basic_state_synchronization() {
     // - Restart the node
     // - Wait for all the nodes to catch up
     // - Verify that the restarted node has synced up with the submitted transactions.
-    let (mut env, mut client_proxy) = setup_swarm_and_client_proxy(5, 1);
+
+    // we set a smaller chunk limit (=5) here to properly test multi-chunk state sync
+    let mut env = TestEnvironment::new_with_chunk_limit(5, 5);
+    env.validator_swarm.launch();
+    let mut client_proxy = env.get_validator_client(1, None);
+
     client_proxy.create_next_account(false).unwrap();
     client_proxy.create_next_account(false).unwrap();
     client_proxy
@@ -1256,7 +1268,7 @@ fn test_vfn_failover() {
     vfn_0_client
         .mint_coins(&["mb", "1", "50", "Coin1"], true)
         .unwrap();
-    for _ in 0..20 {
+    for _ in 0..8 {
         vfn_0_client
             .transfer_coins(&["t", "0", "1", "1", "Coin1"], false)
             .unwrap();
@@ -1265,6 +1277,13 @@ fn test_vfn_failover() {
         .transfer_coins(&["tb", "0", "1", "1", "Coin1"], true)
         .unwrap();
 
+    // wait for VFN 1 to catch up with creation and sender account
+    vfn_1_client
+        .wait_for_transaction(creation_account, 3)
+        .unwrap();
+    vfn_1_client
+        .wait_for_transaction(sender_account, 2)
+        .unwrap();
     vfn_1_client
         .get_sequence_number(&sequence_reset_command)
         .unwrap();
@@ -1334,14 +1353,14 @@ fn test_vfn_failover() {
     assert!(env.validator_swarm.add_node(0, false).is_ok());
     // check all txns submitted so far (even those submitted during overlapping validator downtime) are committed
     let vfn_0_acct_0 = vfn_0_client.copy_all_accounts().get(0).unwrap().address;
-    vfn_0_client.wait_for_transaction(vfn_0_acct_0, 26).unwrap();
+    vfn_0_client.wait_for_transaction(vfn_0_acct_0, 14).unwrap();
     let vfn_1_acct_0 = vfn_1_client.copy_all_accounts().get(2).unwrap().address;
     vfn_1_client.wait_for_transaction(vfn_1_acct_0, 10).unwrap();
     let pfn_acct_0 = pfn_0_client.copy_all_accounts().get(4).unwrap().address;
     pfn_0_client.wait_for_transaction(pfn_acct_0, 7).unwrap();
 
     // submit txns to vfn of dead V
-    for _ in 0..20 {
+    for _ in 0..5 {
         vfn_1_client
             .transfer_coins(&["t", "2", "3", "1", "Coin1"], false)
             .unwrap();
@@ -1354,7 +1373,7 @@ fn test_vfn_failover() {
     assert!(env.validator_swarm.add_node(1, false).is_ok());
 
     // just for kicks: check regular minting still works with revived validators
-    for _ in 0..20 {
+    for _ in 0..5 {
         pfn_0_client
             .transfer_coins(&["t", "4", "5", "1", "Coin1"], false)
             .unwrap();
@@ -1531,10 +1550,17 @@ fn test_consensus_key_rotation() {
 
     // Verify that the validator set info contains the new consensus key
     let info_consensus_key = op_tool.validator_set(validator_account).unwrap()[0]
-        .config()
         .consensus_public_key
         .clone();
-    assert_eq!(new_consensus_key, info_consensus_key)
+    assert_eq!(new_consensus_key, info_consensus_key);
+
+    // Rotate the consensus key in storage manually and perform another rotation using the op_tool.
+    // Here, we expected the op_tool to see that the consensus key in storage doesn't match the one
+    // on-chain, and thus it should simply forward a transaction to the blockchain.
+    let mut storage: Storage = (&backend).try_into().unwrap();
+    let rotated_consensus_key = storage.rotate_key(CONSENSUS_KEY).unwrap();
+    let (_txn_ctx, new_consensus_key) = op_tool.rotate_consensus_key(&backend).unwrap();
+    assert_eq!(rotated_consensus_key, new_consensus_key);
 }
 
 #[test]
@@ -1585,6 +1611,56 @@ fn test_operator_key_rotation() {
 }
 
 #[test]
+fn test_operator_key_rotation_recovery() {
+    let mut swarm = TestEnvironment::new(5);
+    swarm.validator_swarm.launch();
+
+    // Load a node config
+    let node_config =
+        NodeConfig::load(swarm.validator_swarm.config.config_files.first().unwrap()).unwrap();
+
+    // Connect the operator tool to the first node's JSON RPC API
+    let op_tool = OperationalTool::new(
+        format!("http://127.0.0.1:{}", node_config.rpc.address.port()),
+        ChainId::test(),
+    );
+
+    // Load validator's on disk storage
+    let backend = load_backend_storage(&&node_config);
+
+    let (txn_ctx, _) = op_tool.rotate_operator_key(&backend).unwrap();
+    let mut client = swarm.get_validator_client(0, None);
+    client
+        .wait_for_transaction(txn_ctx.address, txn_ctx.sequence_number + 1)
+        .unwrap();
+
+    // Verify that the transaction was executed correctly
+    let result = op_tool
+        .validate_transaction(txn_ctx.address, txn_ctx.sequence_number)
+        .unwrap();
+    let vm_status = result.unwrap();
+    assert_eq!(VMStatusView::Executed, vm_status);
+
+    // Rotate the operator key in storage manually and perform another rotation using the op tool.
+    // Here, we expected the op_tool to see that the operator key in storage doesn't match the one
+    // on-chain, and thus it should simply forward a transaction to the blockchain.
+    let mut storage: Storage = (&backend).try_into().unwrap();
+    let rotated_operator_key = storage.rotate_key(OPERATOR_KEY).unwrap();
+    let (txn_ctx, new_operator_key) = op_tool.rotate_operator_key(&backend).unwrap();
+    assert_eq!(rotated_operator_key, new_operator_key);
+    client
+        .wait_for_transaction(txn_ctx.address, txn_ctx.sequence_number + 1)
+        .unwrap();
+
+    // Verify that the transaction was executed correctly
+    let result = op_tool
+        .validate_transaction(txn_ctx.address, txn_ctx.sequence_number)
+        .unwrap();
+    let vm_status = result.unwrap();
+    assert_eq!(VMStatusView::Executed, vm_status);
+}
+
+#[test]
 fn test_network_key_rotation() {
     let mut swarm = TestEnvironment::new(5);
     swarm.validator_swarm.launch();
@@ -1611,13 +1687,12 @@ fn test_network_key_rotation() {
     let config_network_key = op_tool
         .validator_config(validator_account)
         .unwrap()
-        .validator_network_identity_public_key;
+        .validator_network_key;
     assert_eq!(new_network_key, config_network_key);
 
     // Verify that the validator set info contains the new network key
-    let info_network_key = op_tool.validator_set(validator_account).unwrap()[0]
-        .config()
-        .validator_network_identity_public_key;
+    let info_network_key =
+        op_tool.validator_set(validator_account).unwrap()[0].validator_network_key;
     assert_eq!(new_network_key, info_network_key);
 
     // Restart validator
@@ -1627,21 +1702,73 @@ fn test_network_key_rotation() {
 }
 
 #[test]
-fn test_stop_consensus() {
+fn test_network_key_rotation_recovery() {
+    let mut swarm = TestEnvironment::new(5);
+    swarm.validator_swarm.launch();
+
+    // Load a node config
+    let node_config =
+        NodeConfig::load(swarm.validator_swarm.config.config_files.first().unwrap()).unwrap();
+
+    // Connect the operator tool to the first node's JSON RPC API
+    let op_tool = swarm.get_op_tool(0);
+
+    // Load validator's on disk storage
+    let backend = load_backend_storage(&&node_config);
+
+    // Rotate the network key in storage manually and perform a key rotation using the op_tool.
+    // Here, we expected the op_tool to see that the network key in storage doesn't match the one
+    // on-chain, and thus it should simply forward a transaction to the blockchain.
+    let mut storage: Storage = (&backend).try_into().unwrap();
+    let rotated_network_key = storage.rotate_key(VALIDATOR_NETWORK_KEY).unwrap();
+    let (txn_ctx, new_network_key) = op_tool.rotate_validator_network_key(&backend).unwrap();
+    assert_eq!(new_network_key, to_x25519(rotated_network_key).unwrap());
+
+    let mut client = swarm.get_validator_client(0, None);
+    client
+        .wait_for_transaction(txn_ctx.address, txn_ctx.sequence_number + 1)
+        .unwrap();
+
+    // Verify that config has been loaded correctly with new key
+    let validator_account = node_config.validator_network.as_ref().unwrap().peer_id();
+    let config_network_key = op_tool
+        .validator_config(validator_account)
+        .unwrap()
+        .validator_network_key;
+    assert_eq!(new_network_key, config_network_key);
+
+    // Verify that the validator set info contains the new network key
+    let info_network_key =
+        op_tool.validator_set(validator_account).unwrap()[0].validator_network_key;
+    assert_eq!(new_network_key, info_network_key);
+
+    // Restart validator
+    // At this point, the `add_node` call ensures connectivity to all nodes
+    swarm.validator_swarm.kill_node(0);
+    swarm.validator_swarm.add_node(0, false).unwrap();
+}
+
+#[test]
+/// This test verifies the flow of a genesis transaction after the chain starts.
+/// 1. test the consensus sync_only mode, every node should stop at the same version.
+/// 2. test the db-bootstrapper apply a manual genesis transaction (remove validator 0) on libradb directly
+/// 3. test the nodes and clients resume working after updating waypoint
+/// 4. test a node lag behind can sync to the waypoint
+fn test_genesis_transaction_flow() {
+    let db_bootstrapper = workspace_builder::get_bin("db-bootstrapper");
     let mut env = TestEnvironment::new(4);
-    println!("1. set stop_consensus = true for the first node and check it can sync to others");
+    println!("1. set sync_only = true for the first node and check it can sync to others");
     let config_path = env.validator_swarm.config.config_files.first().unwrap();
     let mut node_config = NodeConfig::load(config_path).unwrap();
-    node_config.consensus.stop_consensus = true;
+    node_config.consensus.sync_only = true;
     node_config.save(config_path).unwrap();
     env.validator_swarm.launch();
-    // 1. test the stopped node still syncs the transaction
-    let mut client_proxy = env.get_validator_client(0, None);
-    client_proxy.create_next_account(false).unwrap();
-    client_proxy
+    let mut client_proxy_0 = env.get_validator_client(0, None);
+    client_proxy_0.create_next_account(false).unwrap();
+    client_proxy_0
         .mint_coins(&["mintb", "0", "10", "Coin1"], true)
         .unwrap();
-    println!("2. set stop_consensus = true for all nodes and restart");
+    println!("2. set sync_only = true for all nodes and restart");
     for (i, config_path) in env
         .validator_swarm
         .config
@@ -1651,12 +1778,12 @@ fn test_stop_consensus() {
         .enumerate()
     {
         let mut node_config = NodeConfig::load(config_path).unwrap();
-        node_config.consensus.stop_consensus = true;
+        node_config.consensus.sync_only = true;
         node_config.save(config_path).unwrap();
         env.validator_swarm.kill_node(i);
         env.validator_swarm.add_node(i, false).unwrap();
     }
-    println!("3. delete one node's db and test they can still sync when stop_consensus is true for every nodes");
+    println!("3. delete one node's db and test they can still sync when sync_only is true for every nodes");
     env.validator_swarm.kill_node(0);
     fs::remove_dir_all(node_config.storage.dir()).unwrap();
     env.validator_swarm.add_node(0, false).unwrap();
@@ -1686,4 +1813,107 @@ fn test_stop_consensus() {
         );
         sleep(Duration::from_secs(1));
     }
+    println!("5. kill all nodes and prepare a genesis txn to remove validator 0");
+    for index in 0..env.validator_swarm.nodes.len() {
+        env.validator_swarm.kill_node(index);
+    }
+    let validator_address = node_config.validator_network.as_ref().unwrap().peer_id();
+    let genesis_transaction = Transaction::GenesisTransaction(WriteSetPayload::Script {
+        execute_as: libra_root_address(),
+        script: encode_remove_validator_and_reconfigure_script(0, vec![], validator_address),
+    });
+    let genesis_path = TempPath::new();
+    genesis_path.create_as_file().unwrap();
+    let mut file = File::create(genesis_path.path()).unwrap();
+    file.write_all(&lcs::to_bytes(&genesis_transaction).unwrap())
+        .unwrap();
+    println!("6. prepare the waypoint with the transaction");
+    let waypoint_command = Command::new(db_bootstrapper.as_path())
+        .current_dir(workspace_root())
+        .args(&vec![
+            node_config.storage.dir().to_str().unwrap(),
+            "--genesis-txn-file",
+            genesis_path.path().to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    let output = std::str::from_utf8(&waypoint_command.stdout).unwrap();
+    println!("{:?}", output);
+    let waypoint_str = output.split('\n').collect::<Vec<_>>()[1];
+    println!("{}", waypoint_str);
+    println!("7. apply genesis transaction for nodes 1, 2, 3");
+    let set_waypoint = |backend: &SecureBackend| {
+        let mut storage: Storage = backend.into();
+        storage
+            .set(
+                libra_global_constants::WAYPOINT,
+                Value::String(waypoint_str.to_string()),
+            )
+            .expect("Unable to write waypoint");
+    };
+    for (i, config_path) in env
+        .validator_swarm
+        .config
+        .config_files
+        .clone()
+        .iter()
+        .enumerate()
+        .skip(1)
+    {
+        let mut node_config = NodeConfig::load(config_path).unwrap();
+        let output = Command::new(db_bootstrapper.as_path())
+            .current_dir(workspace_root())
+            .args(&vec![
+                node_config.storage.dir().to_str().unwrap(),
+                "--genesis-txn-file",
+                genesis_path.path().to_str().unwrap(),
+                "--waypoint-to-verify",
+                waypoint_str,
+                "--commit",
+            ])
+            .output()
+            .unwrap();
+        println!("Apply transaction for {}, output: {:?}", i, output);
+        assert!(output.status.success());
+        println!("Overwrite the waypoint in safety rules for {}", i);
+        set_waypoint(&node_config.consensus.safety_rules.backend);
+        // reset the sync_only flag to false
+        node_config.consensus.sync_only = false;
+        node_config.save(config_path).unwrap();
+    }
+    for i in 1..4 {
+        env.validator_swarm.add_node(i, false).unwrap();
+    }
+    println!("8. verify it's able to mint after the waypoint");
+    let mut client_proxy_1 =
+        env.get_validator_client(1, Some(Waypoint::from_str(waypoint_str).unwrap()));
+    client_proxy_1.set_accounts(client_proxy_0.copy_all_accounts());
+    client_proxy_1.create_next_account(false).unwrap();
+    client_proxy_1
+        .mint_coins(&["mintb", "1", "10", "Coin1"], true)
+        .unwrap();
+    println!("9. add node 0 back and test if it can sync to the waypoint via state synchronizer");
+    let op_tool = env.get_op_tool(1);
+    let context = op_tool
+        .add_validator(validator_address, &load_libra_root_storage(&node_config))
+        .unwrap();
+    client_proxy_1
+        .wait_for_transaction(context.address, context.sequence_number)
+        .unwrap();
+    // setup the waypoint for node 0
+    set_waypoint(&node_config.consensus.safety_rules.backend);
+    match &node_config.base.waypoint {
+        WaypointConfig::FromStorage(backend) => {
+            set_waypoint(backend);
+        }
+        _ => panic!("unexpected waypoint from node config"),
+    }
+    env.validator_swarm.add_node(0, false).unwrap();
+    let mut client_proxy_0 =
+        env.get_validator_client(0, Some(Waypoint::from_str(waypoint_str).unwrap()));
+    client_proxy_0.set_accounts(client_proxy_1.copy_all_accounts());
+    client_proxy_0.create_next_account(false).unwrap();
+    client_proxy_1
+        .mint_coins(&["mintb", "1", "10", "Coin1"], true)
+        .unwrap();
 }
