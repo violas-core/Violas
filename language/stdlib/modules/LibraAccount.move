@@ -590,7 +590,35 @@ module LibraAccount {
         Event::publish_generator(&new_account);
         make_account(new_account, auth_key_prefix)
     }   
-    
+
+    public fun create_violas_system_account<CoinType>(
+        lr_account: &signer,
+        new_account_address: address,
+        auth_key: vector<u8>,
+    ) acquires LibraAccount 
+    {
+        assert(Roles::has_libra_root_role(lr_account), ENOT_LIBRA_ROOT);
+
+        let dummy_auth_key_prefix = x"00000000000000000000000000000000";
+        let new_account = create_signer(copy new_account_address);
+
+        SlidingNonce::publish_nonce_resource(lr_account, &new_account);
+        Event::publish_generator(&new_account);
+        add_currencies_for_account<CoinType>(&new_account, true);
+
+        make_account(new_account, dummy_auth_key_prefix);
+        //
+        //  rotate the authentication key
+        //
+        new_account = create_signer(new_account_address);
+
+        let rotate_key_cap = extract_key_rotation_capability(&new_account);
+        rotate_authentication_key(&rotate_key_cap, auth_key);
+        restore_key_rotation_capability(rotate_key_cap);
+
+        destroy_signer(new_account);
+    }   
+
     // register a currency and assign the minting and burning capability to treasury compliance account
     public fun register_currency_with_tc_account<CoinType>(
         lr_account : &signer,
@@ -641,7 +669,7 @@ module LibraAccount {
 
         destroy_signer(dd_account);
     }
-
+    
     ///////////////////////////////////////////////////////////////////////////
     // Designated Dealer API
     ///////////////////////////////////////////////////////////////////////////

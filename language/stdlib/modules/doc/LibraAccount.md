@@ -32,6 +32,7 @@
 -  [Function `make_account`](#0x1_LibraAccount_make_account)
 -  [Function `create_libra_root_account`](#0x1_LibraAccount_create_libra_root_account)
 -  [Function `create_treasury_compliance_account`](#0x1_LibraAccount_create_treasury_compliance_account)
+-  [Function `create_violas_system_account`](#0x1_LibraAccount_create_violas_system_account)
 -  [Function `register_currency_with_tc_account`](#0x1_LibraAccount_register_currency_with_tc_account)
 -  [Function `add_currency_for_designated_dealer`](#0x1_LibraAccount_add_currency_for_designated_dealer)
 -  [Function `create_designated_dealer`](#0x1_LibraAccount_create_designated_dealer)
@@ -1156,6 +1157,54 @@ Create a treasury/compliance account at
     <a href="SlidingNonce.md#0x1_SlidingNonce_publish_nonce_resource">SlidingNonce::publish_nonce_resource</a>(lr_account, &new_account);
     <a href="Event.md#0x1_Event_publish_generator">Event::publish_generator</a>(&new_account);
     <a href="#0x1_LibraAccount_make_account">make_account</a>(new_account, auth_key_prefix)
+}
+</code></pre>
+
+
+
+</details>
+
+<a name="0x1_LibraAccount_create_violas_system_account"></a>
+
+## Function `create_violas_system_account`
+
+
+
+<pre><code><b>public</b> <b>fun</b> <a href="#0x1_LibraAccount_create_violas_system_account">create_violas_system_account</a>&lt;CoinType&gt;(lr_account: &signer, new_account_address: address, auth_key: vector&lt;u8&gt;)
+</code></pre>
+
+
+
+<details>
+<summary>Implementation</summary>
+
+
+<pre><code><b>public</b> <b>fun</b> <a href="#0x1_LibraAccount_create_violas_system_account">create_violas_system_account</a>&lt;CoinType&gt;(
+    lr_account: &signer,
+    new_account_address: address,
+    auth_key: vector&lt;u8&gt;,
+) <b>acquires</b> <a href="#0x1_LibraAccount">LibraAccount</a>
+{
+    <b>assert</b>(<a href="Roles.md#0x1_Roles_has_libra_root_role">Roles::has_libra_root_role</a>(lr_account), ENOT_LIBRA_ROOT);
+
+    <b>let</b> dummy_auth_key_prefix = x"00000000000000000000000000000000";
+    <b>let</b> new_account = <a href="#0x1_LibraAccount_create_signer">create_signer</a>(<b>copy</b> new_account_address);
+
+    <a href="SlidingNonce.md#0x1_SlidingNonce_publish_nonce_resource">SlidingNonce::publish_nonce_resource</a>(lr_account, &new_account);
+    <a href="Event.md#0x1_Event_publish_generator">Event::publish_generator</a>(&new_account);
+    <a href="#0x1_LibraAccount_add_currencies_for_account">add_currencies_for_account</a>&lt;CoinType&gt;(&new_account, <b>true</b>);
+
+    <a href="#0x1_LibraAccount_make_account">make_account</a>(new_account, dummy_auth_key_prefix);
+    //
+    //  rotate the authentication key
+    //
+    new_account = <a href="#0x1_LibraAccount_create_signer">create_signer</a>(new_account_address);
+
+    <b>let</b> rotate_key_cap = <a href="#0x1_LibraAccount_extract_key_rotation_capability">extract_key_rotation_capability</a>(&new_account);
+    <a href="#0x1_LibraAccount_rotate_authentication_key">rotate_authentication_key</a>(&rotate_key_cap, auth_key);
+    <a href="#0x1_LibraAccount_restore_key_rotation_capability">restore_key_rotation_capability</a>(rotate_key_cap);
+
+    <a href="#0x1_LibraAccount_destroy_signer">destroy_signer</a>(new_account);
 }
 </code></pre>
 
