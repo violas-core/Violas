@@ -1,6 +1,7 @@
 // Copyright (c) The Libra Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
+use anyhow::anyhow;
 use cli::client_proxy::ClientProxy;
 use debug_interface::NodeDebugClient;
 use libra_config::config::{Identity, KeyManagerConfig, NodeConfig, SecureBackend, WaypointConfig};
@@ -28,6 +29,7 @@ use libra_types::{
     waypoint::Waypoint,
 };
 use num_traits::cast::FromPrimitive;
+use regex::Regex;
 use rust_decimal::Decimal;
 use std::{
     collections::BTreeMap,
@@ -1839,44 +1841,39 @@ fn test_genesis_transaction_flow() {
         .unwrap();
     let output = std::str::from_utf8(&waypoint_command.stdout).unwrap();
     println!("{:?}", output);
-    let waypoint_str = output.split('\n').collect::<Vec<_>>()[1];
+    let waypoint_str = &parse_waypoint(output);
     println!("{}", waypoint_str);
-    println!("7. apply genesis transaction for nodes 1, 2, 3");
-    let set_waypoint = |backend: &SecureBackend| {
-        let mut storage: Storage = backend.into();
-        storage
-            .set(
-                libra_global_constants::WAYPOINT,
-                Value::String(waypoint_str.to_string()),
-            )
-            .expect("Unable to write waypoint");
+    let set_waypoint = |node_config: &NodeConfig| {
+        let f = |backend: &SecureBackend| {
+            let mut storage: Storage = backend.into();
+            storage
+                .set(
+                    libra_global_constants::WAYPOINT,
+                    Value::String(waypoint_str.to_string()),
+                )
+                .expect("Unable to write waypoint");
+        };
+        let backend = &node_config.consensus.safety_rules.backend;
+        f(backend);
+        match &node_config.base.waypoint {
+            WaypointConfig::FromStorage(backend) => {
+                f(backend);
+            }
+            _ => panic!("unexpected waypoint from node config"),
+        }
     };
-    for (i, config_path) in env
+    println!("7. apply genesis transaction for nodes 1, 2, 3");
+    for config_path in env
         .validator_swarm
         .config
         .config_files
         .clone()
         .iter()
-        .enumerate()
         .skip(1)
     {
         let mut node_config = NodeConfig::load(config_path).unwrap();
-        let output = Command::new(db_bootstrapper.as_path())
-            .current_dir(workspace_root())
-            .args(&vec![
-                node_config.storage.dir().to_str().unwrap(),
-                "--genesis-txn-file",
-                genesis_path.path().to_str().unwrap(),
-                "--waypoint-to-verify",
-                waypoint_str,
-                "--commit",
-            ])
-            .output()
-            .unwrap();
-        println!("Apply transaction for {}, output: {:?}", i, output);
-        assert!(output.status.success());
-        println!("Overwrite the waypoint in safety rules for {}", i);
-        set_waypoint(&node_config.consensus.safety_rules.backend);
+        set_waypoint(&node_config);
+        node_config.execution.genesis = Some(genesis_transaction.clone());
         // reset the sync_only flag to false
         node_config.consensus.sync_only = false;
         node_config.save(config_path).unwrap();
@@ -1901,13 +1898,12 @@ fn test_genesis_transaction_flow() {
         .wait_for_transaction(context.address, context.sequence_number)
         .unwrap();
     // setup the waypoint for node 0
-    set_waypoint(&node_config.consensus.safety_rules.backend);
-    match &node_config.base.waypoint {
-        WaypointConfig::FromStorage(backend) => {
-            set_waypoint(backend);
-        }
-        _ => panic!("unexpected waypoint from node config"),
-    }
+    node_config.execution.genesis = None;
+    node_config.execution.genesis_file_location = PathBuf::from("");
+    set_waypoint(&node_config);
+    node_config
+        .save(&env.validator_swarm.config.config_files[0])
+        .unwrap();
     env.validator_swarm.add_node(0, false).unwrap();
     let mut client_proxy_0 =
         env.get_validator_client(0, Some(Waypoint::from_str(waypoint_str).unwrap()));
@@ -1916,4 +1912,13 @@ fn test_genesis_transaction_flow() {
     client_proxy_1
         .mint_coins(&["mintb", "1", "10", "Coin1"], true)
         .unwrap();
+}
+
+fn parse_waypoint(db_bootstrapper_output: &str) -> String {
+    Regex::new(r"Got waypoint: (\d+:\w+)")
+        .unwrap()
+        .captures(db_bootstrapper_output)
+        .ok_or_else(|| anyhow!("Failed to parse db-bootstrapper output."))
+        .unwrap()[1]
+        .into()
 }

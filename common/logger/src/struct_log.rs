@@ -1,9 +1,12 @@
 // Copyright (c) The Libra Core Contributors
 // SPDX-License-Identifier: Apache-2.0
-use crate::counters::{
-    PROCESSED_STRUCT_LOG_COUNT, SENT_STRUCT_LOG_COUNT, STRUCT_LOG_CONNECT_ERROR_COUNT,
-    STRUCT_LOG_PARSE_ERROR_COUNT, STRUCT_LOG_QUEUE_ERROR_COUNT, STRUCT_LOG_SEND_ERROR_COUNT,
-    STRUCT_LOG_TCP_CONNECT_COUNT,
+use crate::{
+    counters::{
+        PROCESSED_STRUCT_LOG_COUNT, SENT_STRUCT_LOG_COUNT, STRUCT_LOG_CONNECT_ERROR_COUNT,
+        STRUCT_LOG_PARSE_ERROR_COUNT, STRUCT_LOG_QUEUE_ERROR_COUNT, STRUCT_LOG_SEND_ERROR_COUNT,
+        STRUCT_LOG_TCP_CONNECT_COUNT,
+    },
+    LogLevel,
 };
 use chrono::Utc;
 use once_cell::sync::Lazy;
@@ -41,16 +44,15 @@ const UNINITIALIZED: usize = 0;
 const INITIALIZING: usize = 1;
 const INITIALIZED: usize = 2;
 
-// severity level - lower is worse
-const SEVERITY_CRITICAL: usize = 1;
-const SEVERITY_WARNING: usize = 2;
-
 // Size configurations
-const MAX_LOG_LINE_SIZE: usize = 4096; // 4KiB
+const MAX_LOG_LINE_SIZE: usize = 10240; // 10KiB
 const LOG_INFO_OFFSET: usize = 256;
 const WRITE_CHANNEL_SIZE: usize = 1024;
 const WRITE_TIMEOUT_MS: u64 = 2000;
 const CONNECTION_TIMEOUT_MS: u64 = 5000;
+
+// Fields to keep when over size
+static FIELDS_TO_KEEP: &[&str] = &["error"];
 
 #[derive(Default, Serialize)]
 pub struct StructuredLogEntry {
@@ -78,9 +80,12 @@ pub struct StructuredLogEntry {
     /// time of the log
     #[serde(skip_serializing_if = "Option::is_none")]
     timestamp: Option<String>,
-    /// warning or critical
+    /// warning or critical TODO: Remove once alarms are migrated (https://github.com/libra/libra/issues/5484)
     #[serde(skip_serializing_if = "Option::is_none")]
-    severity: Option<usize>,
+    severity: Option<LogLevel>,
+    /// Log level
+    #[serde(skip_serializing_if = "Option::is_none")]
+    level: Option<LogLevel>,
     /// arbitrary data that can be logged
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     data: HashMap<&'static str, Value>,
@@ -113,6 +118,7 @@ impl StructuredLogEntry {
             git_rev: self.git_rev,
             timestamp: self.timestamp.clone(),
             severity: self.severity,
+            level: self.level,
             data: HashMap::new(),
         }
     }
@@ -148,20 +154,35 @@ impl StructuredLogEntry {
                     format!("Message exceeded MAX_LOG_LINE_SIZE {}", MAX_LOG_LINE_SIZE),
                 )
                 .data("OriginalLength", json_string.len());
+
+            // Keep important values around
+            // TODO: We should work on decreasing log sizes, as this isn't sustainable
+            for field in FIELDS_TO_KEEP {
+                if let Some(value) = self.data.get(field) {
+                    entry = entry.json_data(field, value.clone());
+                }
+            }
+
             json_string = entry.to_json()?.to_string();
         }
 
         Ok(json_string)
     }
 
-    pub fn critical(mut self) -> Self {
-        self.severity = Some(SEVERITY_CRITICAL);
+    /// Sets the log level of the log
+    pub fn level(mut self, level: LogLevel) -> Self {
+        self.severity = Some(level);
+        self.level = Some(level);
         self
     }
 
-    pub fn warning(mut self) -> Self {
-        self.severity = Some(SEVERITY_WARNING);
-        self
+    // TODO: Remove in favor of level (https://github.com/libra/libra/issues/5484)
+    pub fn critical(self) -> Self {
+        self.level(crate::LogLevel::Critical)
+    }
+
+    pub fn warning(self) -> Self {
+        self.level(crate::LogLevel::Warning)
     }
 
     pub fn json_data(mut self, key: &'static str, value: Value) -> Self {
@@ -455,17 +476,13 @@ impl TCPStructLogThread {
             };
 
             // If we fail to write, exit out and create a new stream
-            if let Err(e) = stream.write(json_string.as_bytes()) {
+            if let Err(e) = Self::write_log_line(stream, json_string) {
                 STRUCT_LOG_SEND_ERROR_COUNT.inc();
-                println!(
+                log::error!(
                     "[Logging] Error while sending data to logstash({}): {}",
-                    self.address, e
+                    self.address,
+                    e
                 );
-
-                // Attempt to clear the buffer and send whatever we can
-                if let Err(e) = stream.flush() {
-                    println!("[Logging] Failed to flush rest of buffer: {}", e);
-                }
 
                 // Start over stream
                 return;
@@ -491,12 +508,18 @@ impl TCPStructLogThread {
         Err(last_error)
     }
 
-    pub fn write_control_msg(stream: &mut TcpStream, msg: &'static str) -> io::Result<usize> {
+    /// Writes a log line into json_lines logstash format, which has a newline at the end
+    fn write_log_line(stream: &mut TcpStream, message: String) -> io::Result<()> {
+        let message = message + "\n";
+        stream.write_all(message.as_bytes())
+    }
+
+    fn write_control_msg(stream: &mut TcpStream, msg: &'static str) -> io::Result<()> {
         let entry = StructuredLogEntry::new_named("logger", msg);
         let entry = entry
             .to_json_string()
             .map_err(|err| io::Error::new(io::ErrorKind::Other, err.to_string()))?;
-        stream.write(entry.as_bytes())
+        Self::write_log_line(stream, entry)
     }
 
     pub fn run(mut self) {
@@ -513,14 +536,14 @@ impl TCPStructLogThread {
                         stream.set_write_timeout(Some(Duration::from_millis(WRITE_TIMEOUT_MS)))
                     {
                         STRUCT_LOG_CONNECT_ERROR_COUNT.inc();
-                        println!("[Logging] Failed to set write timeout: {}", err);
+                        log::error!("[Logging] Failed to set write timeout: {}", err);
                         continue;
                     }
 
                     // Write a log signifying that the logger connected, and test the stream
                     if let Err(err) = Self::write_control_msg(stream, "connected") {
                         STRUCT_LOG_CONNECT_ERROR_COUNT.inc();
-                        println!("[Logging] control message failed: {}", err);
+                        log::error!("[Logging] control message failed: {}", err);
                         continue;
                     }
 
@@ -528,9 +551,10 @@ impl TCPStructLogThread {
                 }
                 Err(err) => {
                     STRUCT_LOG_CONNECT_ERROR_COUNT.inc();
-                    println!(
+                    log::error!(
                         "[Logging] Failed to connect to {}, cause {}",
-                        self.address, err
+                        self.address,
+                        err
                     )
                 }
             }

@@ -47,6 +47,7 @@ impl AmountView {
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+#[serde(tag = "type")]
 pub enum AccountRoleView {
     #[serde(rename = "unknown")]
     Unknown,
@@ -350,7 +351,14 @@ impl From<&Vec<u8>> for BytesView {
     }
 }
 
+impl From<Vec<u8>> for BytesView {
+    fn from(bytes: Vec<u8>) -> Self {
+        Self(hex::encode(bytes))
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(tag = "type")]
 pub enum VMStatusView {
     #[serde(rename = "executed")]
     Executed,
@@ -401,6 +409,7 @@ pub struct TransactionView {
     pub version: u64,
     pub transaction: TransactionDataView,
     pub hash: String,
+    pub bytes: BytesView,
     pub events: Vec<EventView>,
     pub vm_status: VMStatusView,
     pub gas_used: u64,
@@ -427,6 +436,7 @@ pub enum TransactionDataView {
         gas_currency: String,
         expiration_timestamp_secs: u64,
         script_hash: String,
+        script_bytes: BytesView,
         script: ScriptView,
     },
     #[serde(rename = "unknown")]
@@ -476,6 +486,12 @@ impl From<Transaction> for TransactionDataView {
                 }
                 .to_hex();
 
+                let script_bytes: BytesView = match t.payload() {
+                    TransactionPayload::Script(s) => lcs::to_bytes(s).unwrap_or_default(),
+                    _ => vec![],
+                }
+                .into();
+
                 Ok(TransactionDataView::UserTransaction {
                     sender: t.sender().to_string(),
                     signature_scheme: t.authenticator().scheme().to_string(),
@@ -488,6 +504,7 @@ impl From<Transaction> for TransactionDataView {
                     gas_currency: t.gas_currency_code().to_string(),
                     expiration_timestamp_secs: t.expiration_timestamp_secs(),
                     script_hash,
+                    script_bytes,
                     script: t.into_raw_transaction().into_payload().into(),
                 })
             }

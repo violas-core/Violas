@@ -3,7 +3,7 @@
 
 //! Module contains RPC method handlers for Full Node JSON-RPC interface
 use crate::{
-    errors::{ErrorData, ExceedSizeLimit, InvalidArguments, JsonRpcError},
+    errors::JsonRpcError,
     views::{
         AccountStateWithProofView, AccountView, BlockMetadata, CurrencyInfoView, EventView,
         StateProofView, TransactionView,
@@ -27,9 +27,10 @@ use libra_types::{
     transaction::SignedTransaction,
 };
 use network::counters;
+use serde::de::DeserializeOwned;
 use serde_json::Value;
-use std::{cmp::min, collections::HashMap, convert::TryFrom, pin::Pin, str::FromStr, sync::Arc};
-use storage_interface::DbReader;
+use std::{cmp::min, collections::HashMap, convert::TryFrom, pin::Pin, sync::Arc};
+use storage_interface::{DbReader, Order};
 
 #[derive(Clone)]
 pub(crate) struct JsonRpcService {
@@ -78,12 +79,9 @@ impl JsonRpcService {
 
     fn validate_size_limit(&self, name: &str, limit: u16, size: usize) -> Result<(), JsonRpcError> {
         if size > limit as usize {
-            Err(JsonRpcError::invalid_request_with_data(Some(
-                ErrorData::ExceedSizeLimit(ExceedSizeLimit {
-                    limit,
-                    size,
-                    name: name.to_string(),
-                }),
+            Err(JsonRpcError::invalid_request_with_msg(format!(
+                "{} = {}, exceed limit {}",
+                name, size, limit
             )))
         } else {
             Ok(())
@@ -120,12 +118,65 @@ impl JsonRpcRequest {
     fn version(&self) -> u64 {
         self.ledger_info.ledger_info().version()
     }
+
+    /// Return AccountAddress by try parse from params[index]
+    fn parse_account_address(&self, index: usize) -> Result<AccountAddress> {
+        self.try_parse_param(index, "account address")
+    }
+
+    /// Return type T instance with 2 steps parsing:
+    ///   1. deserialize params[index] into String type.
+    ///   2. call TryFrom<String> to create target T instance.
+    /// The name argument is for creating helpful error messsage in case deserialization
+    /// failed.
+    fn try_parse_param<T>(&self, index: usize, name: &str) -> Result<T>
+    where
+        T: TryFrom<String>,
+    {
+        let raw_str: String = self.parse_param(index, name)?;
+        Ok(T::try_from(raw_str).map_err(|_| invalid_param(index, name))?)
+    }
+
+    /// Return native type of params[index] deserialized by from json value.
+    /// The name argument is for creating helpful error messsage in case deserialization
+    /// failed.
+    fn parse_param<T>(&self, index: usize, name: &str) -> Result<T>
+    where
+        T: DeserializeOwned,
+    {
+        Ok(
+            serde_json::from_value(self.get_param(index))
+                .map_err(|_| invalid_param(index, name))?,
+        )
+    }
+
+    fn _parse_event_key(&self, val: Value) -> Result<EventKey> {
+        let raw: String = serde_json::from_value(val)?;
+        Ok(EventKey::try_from(&hex::decode(raw)?[..])?)
+    }
+
+    fn _parse_signed_trasaction(&self, val: Value) -> Result<SignedTransaction> {
+        let raw: String = serde_json::from_value(val)?;
+        Ok(lcs::from_bytes(&hex::decode(raw)?)?)
+    }
+
+    fn parse_signed_transaction(&self, index: usize, name: &str) -> Result<SignedTransaction> {
+        Ok(self
+            ._parse_signed_trasaction(self.get_param(index))
+            .map_err(|_| invalid_param(index, name))?)
+    }
+
+    fn parse_event_key(&self, index: usize, name: &str) -> Result<EventKey> {
+        Ok(self
+            ._parse_event_key(self.get_param(index))
+            .map_err(|_| invalid_param(index, name))?)
+    }
 }
 
 /// Submits transaction to full node
 async fn submit(mut service: JsonRpcService, request: JsonRpcRequest) -> Result<()> {
-    let txn_payload: String = serde_json::from_value(request.get_param(0))?;
-    let transaction: SignedTransaction = lcs::from_bytes(&hex::decode(txn_payload)?)?;
+    let transaction = request.parse_signed_transaction(0, "data")?;
+
     trace_code_block!("json-rpc::submit", {"txn", transaction.sender(), transaction.sequence_number()});
 
     let (req_sender, callback) = oneshot::channel();
@@ -149,8 +200,7 @@ async fn get_account(
     service: JsonRpcService,
     request: JsonRpcRequest,
 ) -> Result<Option<AccountView>> {
-    let address: String = serde_json::from_value(request.get_param(0))?;
-    let account_address = AccountAddress::from_str(&address)?;
+    let account_address: AccountAddress = request.parse_account_address(0)?;
     let account_state_blob = service
         .db
         .get_account_state_with_proof_by_version(account_address, request.version())?
@@ -210,9 +260,9 @@ async fn get_transactions(
     service: JsonRpcService,
     request: JsonRpcRequest,
 ) -> Result<Vec<TransactionView>> {
-    let start_version: u64 = serde_json::from_value(request.get_param(0))?;
-    let limit: u64 = serde_json::from_value(request.get_param(1))?;
-    let include_events: bool = serde_json::from_value(request.get_param(2))?;
+    let start_version: u64 = request.parse_param(0, "start_version")?;
+    let limit: u64 = request.parse_param(1, "limit")?;
+    let include_events: bool = request.parse_param(2, "include_events")?;
 
     service.validate_page_size_limit(limit as usize)?;
 
@@ -251,6 +301,7 @@ async fn get_transactions(
         result.push(TransactionView {
             version: start_version + v as u64,
             hash: tx.hash().to_hex(),
+            bytes: lcs::to_bytes(&tx)?.into(),
             transaction: tx.into(),
             events,
             vm_status: info.status().into(),
@@ -265,11 +316,9 @@ async fn get_account_transaction(
     service: JsonRpcService,
     request: JsonRpcRequest,
 ) -> Result<Option<TransactionView>> {
-    let p_account: String = serde_json::from_value(request.get_param(0))?;
-    let sequence: u64 = serde_json::from_value(request.get_param(1))?;
-    let include_events: bool = serde_json::from_value(request.get_param(2))?;
-
-    let account = AccountAddress::try_from(p_account)?;
+    let account: AccountAddress = request.parse_account_address(0)?;
+    let sequence: u64 = request.parse_param(1, "account sequence number")?;
+    let include_events: bool = request.parse_param(2, "include_events")?;
 
     let tx = service
         .db
@@ -294,6 +343,7 @@ async fn get_account_transaction(
         Ok(Some(TransactionView {
             version: tx_version,
             hash: tx.transaction.hash().to_hex(),
+            bytes: lcs::to_bytes(&tx.transaction)?.into(),
             transaction: tx.transaction.into(),
             events,
             vm_status: tx.proof.transaction_info().status().into(),
@@ -306,14 +356,16 @@ async fn get_account_transaction(
 
 /// Returns events by given access path
 async fn get_events(service: JsonRpcService, request: JsonRpcRequest) -> Result<Vec<EventView>> {
-    let raw_event_key: String = serde_json::from_value(request.get_param(0))?;
-    let start: u64 = serde_json::from_value(request.get_param(1))?;
-    let limit: u64 = serde_json::from_value(request.get_param(2))?;
+    let event_key = request.parse_event_key(0, "event key")?;
+
+    let start: u64 = request.parse_param(1, "start")?;
+    let limit: u64 = request.parse_param(2, "limit")?;
 
     service.validate_page_size_limit(limit as usize)?;
 
-    let event_key = EventKey::try_from(&hex::decode(raw_event_key)?[..])?;
-    let events_with_proof = service.db.get_events(&event_key, start, true, limit)?;
+    let events_with_proof = service
+        .db
+        .get_events(&event_key, start, Order::Ascending, limit)?;
 
     let req_version = request.version();
     let events = events_with_proof
@@ -350,14 +402,13 @@ async fn get_account_transactions(
     service: JsonRpcService,
     request: JsonRpcRequest,
 ) -> Result<Vec<TransactionView>> {
-    let p_account: String = serde_json::from_value(request.get_param(0))?;
-    let start: u64 = serde_json::from_value(request.get_param(1))?;
-    let limit: u64 = serde_json::from_value(request.get_param(2))?;
-    let include_events: bool = serde_json::from_value(request.get_param(3))?;
+    let account = request.parse_account_address(0)?;
+    let start: u64 = request.parse_param(1, "start")?;
+    let limit: u64 = request.parse_param(2, "limit")?;
+    let include_events: bool = request.parse_param(3, "include_events")?;
 
     service.validate_page_size_limit(limit as usize)?;
 
-    let account = AccountAddress::try_from(p_account)?;
     let account_seq = AccountResource::try_from(
         &service
             .db
@@ -402,6 +453,7 @@ async fn get_account_transactions(
         all_txs.push(TransactionView {
             version: tx.version,
             hash: tx.transaction.hash().to_hex(),
+            bytes: lcs::to_bytes(&tx.transaction)?.into(),
             transaction: tx.transaction.into(),
             events,
             vm_status: tx.proof.transaction_info().status().into(),
@@ -417,7 +469,7 @@ async fn get_state_proof(
     service: JsonRpcService,
     request: JsonRpcRequest,
 ) -> Result<StateProofView> {
-    let known_version: u64 = serde_json::from_value(request.get_param(0))?;
+    let known_version: u64 = request.parse_param(0, "known version")?;
     let proofs = service
         .db
         .get_state_proof_with_ledger_info(known_version, request.ledger_info.clone())?;
@@ -431,8 +483,7 @@ async fn get_account_state_with_proof(
     service: JsonRpcService,
     request: JsonRpcRequest,
 ) -> Result<AccountStateWithProofView> {
-    let address: String = serde_json::from_value(request.get_param(0))?;
-    let account_address = AccountAddress::from_str(&address)?;
+    let account_address = request.parse_account_address(0)?;
 
     // If versions are specified by the request parameters, use them, otherwise use the defaults
     let version =
@@ -494,4 +545,21 @@ pub(crate) fn build_registry() -> RpcRegistry {
     register_rpc_method!(registry, "get_network_status", get_network_status, 0, 0);
 
     registry
+}
+
+/// Returns invalid param JsonRpcError for the param[index] with name and type info
+fn invalid_param(index: usize, name: &str) -> JsonRpcError {
+    let type_info = match name {
+        "start" => "unsigned int64",
+        "start_version" => "unsigned int64",
+        "limit" => "unsigned int64",
+        "account sequence number" => "unsigned int64",
+        "include_events" => "boolean",
+        "account address" => "hex-encoded string",
+        "event key" => "hex-encoded string",
+        "known version" => "unsigned int64",
+        "data" => "hex-encoded string of LCS serialized Libra SignedTransaction type",
+        _ => "unknown",
+    };
+    JsonRpcError::invalid_param(index, name, type_info)
 }

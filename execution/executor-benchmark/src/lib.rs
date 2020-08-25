@@ -1,7 +1,10 @@
 // Copyright (c) The Libra Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use executor::{db_bootstrapper::bootstrap_db_if_empty, Executor};
+use executor::{
+    db_bootstrapper::{generate_waypoint, maybe_bootstrap},
+    Executor,
+};
 use executor_types::BlockExecutor;
 use libra_config::{config::NodeConfig, utils::get_genesis_txn};
 use libra_crypto::{
@@ -36,7 +39,6 @@ use storage_interface::{DbReader, DbReaderWriter};
 use storage_service::start_storage_service_with_db;
 use transaction_builder::{
     encode_create_testing_account_script, encode_peer_to_peer_with_metadata_script,
-    encode_testnet_mint_script,
 };
 
 struct AccountData {
@@ -148,7 +150,13 @@ impl TransactionGenerator {
                     (i * block_size + j) as u64,
                     &self.genesis_key,
                     self.genesis_key.public_key(),
-                    encode_testnet_mint_script(coin1_tag(), account.address, init_account_balance),
+                    encode_peer_to_peer_with_metadata_script(
+                        coin1_tag(),
+                        account.address,
+                        init_account_balance,
+                        vec![],
+                        vec![],
+                    ),
                 );
                 transactions.push(txn);
             }
@@ -301,7 +309,8 @@ fn create_storage_service_and_executor(
         )
         .expect("DB should open."),
     );
-    bootstrap_db_if_empty::<LibraVM>(&db_rw, get_genesis_txn(config).unwrap()).unwrap();
+    let waypoint = generate_waypoint::<LibraVM>(&db_rw, get_genesis_txn(config).unwrap()).unwrap();
+    maybe_bootstrap::<LibraVM>(&db_rw, get_genesis_txn(config).unwrap(), waypoint).unwrap();
 
     let _handle = start_storage_service_with_db(config, db.clone());
     let executor = Executor::new(

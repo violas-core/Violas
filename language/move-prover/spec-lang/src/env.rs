@@ -183,8 +183,10 @@ impl Loc {
         let mut start = loc.span.start();
         let mut end = loc.span.end();
         for l in locs.iter().skip(1) {
-            start = std::cmp::min(start, l.span().start());
-            end = std::cmp::max(end, l.span().end());
+            if l.file_id() == loc.file_id() {
+                start = std::cmp::min(start, l.span().start());
+                end = std::cmp::max(end, l.span().end());
+            }
         }
         Loc::new(loc.file_id(), Span::new(start, end))
     }
@@ -421,7 +423,7 @@ pub struct GlobalEnv {
     /// A map from global memories to global invariants which refer to them.
     global_invariants_for_memory: BTreeMap<QualifiedId<StructId>, BTreeSet<GlobalId>>,
     /// A set containing spec functions which are called/used in specs.
-    used_spec_funs: BTreeSet<QualifiedId<SpecFunId>>,
+    pub used_spec_funs: BTreeSet<QualifiedId<SpecFunId>>,
 }
 
 /// Information about a verification condition stored in the environment.
@@ -695,9 +697,10 @@ impl GlobalEnv {
             .unwrap_or_else(Default::default)
     }
 
-    /// Adds a spec function to used_spec_funs set.
-    pub fn add_used_spec_fun(&mut self, module_id: ModuleId, spec_fun_id: SpecFunId) {
-        self.used_spec_funs.insert(module_id.qualified(spec_fun_id));
+    /// Returns true if a spec fun is used in specs.
+    pub fn is_spec_fun_used(&self, module_id: ModuleId, spec_fun_id: SpecFunId) -> bool {
+        self.used_spec_funs
+            .contains(&module_id.qualified(spec_fun_id))
     }
 
     /// Adds a new module to the environment. StructData and FunctionData need to be provided

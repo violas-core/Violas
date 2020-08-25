@@ -13,6 +13,7 @@
 -  [Struct `SentPaymentEvent`](#0x1_LibraAccount_SentPaymentEvent)
 -  [Struct `ReceivedPaymentEvent`](#0x1_LibraAccount_ReceivedPaymentEvent)
 -  [Function `initialize`](#0x1_LibraAccount_initialize)
+-  [Function `has_published_account_limits`](#0x1_LibraAccount_has_published_account_limits)
 -  [Function `should_track_limits_for_account`](#0x1_LibraAccount_should_track_limits_for_account)
 -  [Function `staple_lbr`](#0x1_LibraAccount_staple_lbr)
 -  [Function `unstaple_lbr`](#0x1_LibraAccount_unstaple_lbr)
@@ -32,7 +33,7 @@
 -  [Function `make_account`](#0x1_LibraAccount_make_account)
 -  [Function `create_libra_root_account`](#0x1_LibraAccount_create_libra_root_account)
 -  [Function `create_treasury_compliance_account`](#0x1_LibraAccount_create_treasury_compliance_account)
--  [Function `create_violas_system_account`](#0x1_LibraAccount_create_violas_system_account)
+-  [Function `update_account_authentication_key`](#0x1_LibraAccount_update_account_authentication_key)
 -  [Function `register_currency_with_tc_account`](#0x1_LibraAccount_register_currency_with_tc_account)
 -  [Function `add_currency_for_designated_dealer`](#0x1_LibraAccount_add_currency_for_designated_dealer)
 -  [Function `create_designated_dealer`](#0x1_LibraAccount_create_designated_dealer)
@@ -42,7 +43,6 @@
 -  [Function `destroy_signer`](#0x1_LibraAccount_destroy_signer)
 -  [Function `balance_for`](#0x1_LibraAccount_balance_for)
 -  [Function `balance`](#0x1_LibraAccount_balance)
--  [Function `has_published_account_limits`](#0x1_LibraAccount_has_published_account_limits)
 -  [Function `add_currency`](#0x1_LibraAccount_add_currency)
 -  [Function `accepts_currency`](#0x1_LibraAccount_accepts_currency)
 -  [Function `sequence_number_for_account`](#0x1_LibraAccount_sequence_number_for_account)
@@ -405,6 +405,35 @@ Initialize this module. This is only callable from genesis.
 
 </details>
 
+<a name="0x1_LibraAccount_has_published_account_limits"></a>
+
+## Function `has_published_account_limits`
+
+Return
+<code><b>true</b></code> if
+<code>addr</code> has already published account limits for
+<code>Token</code>
+
+
+<pre><code><b>fun</b> <a href="#0x1_LibraAccount_has_published_account_limits">has_published_account_limits</a>&lt;Token&gt;(addr: address): bool
+</code></pre>
+
+
+
+<details>
+<summary>Implementation</summary>
+
+
+<pre><code><b>fun</b> <a href="#0x1_LibraAccount_has_published_account_limits">has_published_account_limits</a>&lt;Token&gt;(addr: address): bool {
+    <b>if</b> (<a href="VASP.md#0x1_VASP_is_vasp">VASP::is_vasp</a>(addr)) <a href="VASP.md#0x1_VASP_has_account_limits">VASP::has_account_limits</a>&lt;Token&gt;(addr)
+    <b>else</b> <a href="AccountLimits.md#0x1_AccountLimits_has_window_published">AccountLimits::has_window_published</a>&lt;Token&gt;(addr)
+}
+</code></pre>
+
+
+
+</details>
+
 <a name="0x1_LibraAccount_should_track_limits_for_account"></a>
 
 ## Function `should_track_limits_for_account`
@@ -420,7 +449,7 @@ Depending on the
 <code>any-&gt;<a href="VASP.md#0x1_VASP">VASP</a></code> transfers are tracked in the VASP.
 
 
-<pre><code><b>fun</b> <a href="#0x1_LibraAccount_should_track_limits_for_account">should_track_limits_for_account</a>(payer: address, payee: address, is_withdrawal: bool): bool
+<pre><code><b>fun</b> <a href="#0x1_LibraAccount_should_track_limits_for_account">should_track_limits_for_account</a>&lt;Token&gt;(payer: address, payee: address, is_withdrawal: bool): bool
 </code></pre>
 
 
@@ -429,11 +458,17 @@ Depending on the
 <summary>Implementation</summary>
 
 
-<pre><code><b>fun</b> <a href="#0x1_LibraAccount_should_track_limits_for_account">should_track_limits_for_account</a>(payer: address, payee: address, is_withdrawal: bool): bool {
+<pre><code><b>fun</b> <a href="#0x1_LibraAccount_should_track_limits_for_account">should_track_limits_for_account</a>&lt;Token&gt;(
+    payer: address, payee: address, is_withdrawal: bool
+): bool {
     <b>if</b> (is_withdrawal) {
-        <a href="VASP.md#0x1_VASP_is_vasp">VASP::is_vasp</a>(payer) && (!<a href="VASP.md#0x1_VASP_is_vasp">VASP::is_vasp</a>(payee) || !<a href="VASP.md#0x1_VASP_is_same_vasp">VASP::is_same_vasp</a>(payer, payee))
+        <a href="#0x1_LibraAccount_has_published_account_limits">has_published_account_limits</a>&lt;Token&gt;(payer) &&
+        <a href="VASP.md#0x1_VASP_is_vasp">VASP::is_vasp</a>(payer) &&
+        (!<a href="VASP.md#0x1_VASP_is_vasp">VASP::is_vasp</a>(payee) || !<a href="VASP.md#0x1_VASP_is_same_vasp">VASP::is_same_vasp</a>(payer, payee))
     } <b>else</b> {
-        <a href="VASP.md#0x1_VASP_is_vasp">VASP::is_vasp</a>(payee) && (!<a href="VASP.md#0x1_VASP_is_vasp">VASP::is_vasp</a>(payer) || !<a href="VASP.md#0x1_VASP_is_same_vasp">VASP::is_same_vasp</a>(payee, payer))
+        <a href="#0x1_LibraAccount_has_published_account_limits">has_published_account_limits</a>&lt;Token&gt;(payee) &&
+        <a href="VASP.md#0x1_VASP_is_vasp">VASP::is_vasp</a>(payee) &&
+        (!<a href="VASP.md#0x1_VASP_is_vasp">VASP::is_vasp</a>(payer) || !<a href="VASP.md#0x1_VASP_is_same_vasp">VASP::is_same_vasp</a>(payee, payer))
     }
 }
 </code></pre>
@@ -574,7 +609,7 @@ Record a payment of
     );
     // Ensure that this deposit is compliant with the account limits on
     // this account.
-    <b>if</b> (<a href="#0x1_LibraAccount_should_track_limits_for_account">should_track_limits_for_account</a>(payer, payee, <b>false</b>)) {
+    <b>if</b> (<a href="#0x1_LibraAccount_should_track_limits_for_account">should_track_limits_for_account</a>&lt;Token&gt;(payer, payee, <b>false</b>)) {
         <b>assert</b>(
             <a href="AccountLimits.md#0x1_AccountLimits_update_deposit_limits">AccountLimits::update_deposit_limits</a>&lt;Token&gt;(
                 deposit_value,
@@ -698,7 +733,7 @@ Helper to withdraw
     <b>assert</b>(!<a href="AccountFreezing.md#0x1_AccountFreezing_account_is_frozen">AccountFreezing::account_is_frozen</a>(payer), EACCOUNT_FROZEN);
     // Make sure that this withdrawal is compliant with the limits on
     // the account <b>if</b> it's a inter-<a href="VASP.md#0x1_VASP">VASP</a> transfer,
-    <b>if</b> (<a href="#0x1_LibraAccount_should_track_limits_for_account">should_track_limits_for_account</a>(payer, payee, <b>true</b>)) {
+    <b>if</b> (<a href="#0x1_LibraAccount_should_track_limits_for_account">should_track_limits_for_account</a>&lt;Token&gt;(payer, payee, <b>true</b>)) {
         <b>let</b> can_withdraw = <a href="AccountLimits.md#0x1_AccountLimits_update_withdrawal_limits">AccountLimits::update_withdrawal_limits</a>&lt;Token&gt;(
                 amount,
                 <a href="VASP.md#0x1_VASP_parent_address">VASP::parent_address</a>(payer),
@@ -1164,13 +1199,13 @@ Create a treasury/compliance account at
 
 </details>
 
-<a name="0x1_LibraAccount_create_violas_system_account"></a>
+<a name="0x1_LibraAccount_update_account_authentication_key"></a>
 
-## Function `create_violas_system_account`
+## Function `update_account_authentication_key`
 
 
 
-<pre><code><b>public</b> <b>fun</b> <a href="#0x1_LibraAccount_create_violas_system_account">create_violas_system_account</a>&lt;CoinType&gt;(lr_account: &signer, new_account_address: address, auth_key: vector&lt;u8&gt;)
+<pre><code><b>public</b> <b>fun</b> <a href="#0x1_LibraAccount_update_account_authentication_key">update_account_authentication_key</a>(lr_account: &signer, account_address: address, auth_key: vector&lt;u8&gt;)
 </code></pre>
 
 
@@ -1179,26 +1214,17 @@ Create a treasury/compliance account at
 <summary>Implementation</summary>
 
 
-<pre><code><b>public</b> <b>fun</b> <a href="#0x1_LibraAccount_create_violas_system_account">create_violas_system_account</a>&lt;CoinType&gt;(
+<pre><code><b>public</b> <b>fun</b> <a href="#0x1_LibraAccount_update_account_authentication_key">update_account_authentication_key</a>(
     lr_account: &signer,
-    new_account_address: address,
+    account_address: address,
     auth_key: vector&lt;u8&gt;,
 ) <b>acquires</b> <a href="#0x1_LibraAccount">LibraAccount</a>
 {
     <b>assert</b>(<a href="Roles.md#0x1_Roles_has_libra_root_role">Roles::has_libra_root_role</a>(lr_account), ENOT_LIBRA_ROOT);
-
-    <b>let</b> dummy_auth_key_prefix = x"00000000000000000000000000000000";
-    <b>let</b> new_account = <a href="#0x1_LibraAccount_create_signer">create_signer</a>(<b>copy</b> new_account_address);
-
-    <a href="SlidingNonce.md#0x1_SlidingNonce_publish_nonce_resource">SlidingNonce::publish_nonce_resource</a>(lr_account, &new_account);
-    <a href="Event.md#0x1_Event_publish_generator">Event::publish_generator</a>(&new_account);
-    <a href="#0x1_LibraAccount_add_currencies_for_account">add_currencies_for_account</a>&lt;CoinType&gt;(&new_account, <b>true</b>);
-
-    <a href="#0x1_LibraAccount_make_account">make_account</a>(new_account, dummy_auth_key_prefix);
     //
     //  rotate the authentication key
     //
-    new_account = <a href="#0x1_LibraAccount_create_signer">create_signer</a>(new_account_address);
+    <b>let</b> new_account = <a href="#0x1_LibraAccount_create_signer">create_signer</a>(account_address);
 
     <b>let</b> rotate_key_cap = <a href="#0x1_LibraAccount_extract_key_rotation_capability">extract_key_rotation_capability</a>(&new_account);
     <a href="#0x1_LibraAccount_rotate_authentication_key">rotate_authentication_key</a>(&rotate_key_cap, auth_key);
@@ -1535,43 +1561,12 @@ Return the current balance of the account at
 
 </details>
 
-<a name="0x1_LibraAccount_has_published_account_limits"></a>
-
-## Function `has_published_account_limits`
-
-Return
-<code><b>true</b></code> if
-<code>addr</code> has already published account limits for
-<code>Token</code>
-
-
-<pre><code><b>fun</b> <a href="#0x1_LibraAccount_has_published_account_limits">has_published_account_limits</a>&lt;Token&gt;(addr: address): bool
-</code></pre>
-
-
-
-<details>
-<summary>Implementation</summary>
-
-
-<pre><code><b>fun</b> <a href="#0x1_LibraAccount_has_published_account_limits">has_published_account_limits</a>&lt;Token&gt;(addr: address): bool {
-    <b>if</b> (<a href="VASP.md#0x1_VASP_is_vasp">VASP::is_vasp</a>(addr)) <a href="VASP.md#0x1_VASP_has_account_limits">VASP::has_account_limits</a>&lt;Token&gt;(addr)
-    <b>else</b> <a href="AccountLimits.md#0x1_AccountLimits_has_window_published">AccountLimits::has_window_published</a>&lt;Token&gt;(addr)
-}
-</code></pre>
-
-
-
-</details>
-
 <a name="0x1_LibraAccount_add_currency"></a>
 
 ## Function `add_currency`
 
 Add a balance of
-<code>Token</code> type to the sending account.
-If the account has a role that is subject to limits, it may need to publish account limits
-as well
+<code>Token</code> type to the sending account
 
 
 <pre><code><b>public</b> <b>fun</b> <a href="#0x1_LibraAccount_add_currency">add_currency</a>&lt;Token&gt;(account: &signer)
@@ -1591,14 +1586,6 @@ as well
     // aborts <b>if</b> this account already has a balance in `Token`
     <b>let</b> addr = <a href="Signer.md#0x1_Signer_address_of">Signer::address_of</a>(account);
     <b>assert</b>(!exists&lt;<a href="#0x1_LibraAccount_Balance">Balance</a>&lt;Token&gt;&gt;(addr), EADD_EXISTING_CURRENCY);
-    // Check whether account limits are needed and add them <b>if</b> so
-    <b>if</b> (<a href="Roles.md#0x1_Roles_needs_account_limits">Roles::needs_account_limits</a>(account) && !<a href="#0x1_LibraAccount_has_published_account_limits">has_published_account_limits</a>&lt;Token&gt;(addr)) {
-        <b>if</b> (<a href="VASP.md#0x1_VASP_is_vasp">VASP::is_vasp</a>(addr)) {
-            <a href="VASP.md#0x1_VASP_add_account_limits">VASP::add_account_limits</a>&lt;Token&gt;(account)
-        } <b>else</b> {
-            // TODO(shb): need <b>to</b> add limits <b>to</b> unhosted <b>as</b> well
-        }
-    };
 
     move_to(account, <a href="#0x1_LibraAccount_Balance">Balance</a>&lt;Token&gt;{ coin: <a href="Libra.md#0x1_Libra_zero">Libra::zero</a>&lt;Token&gt;() })
 }
@@ -2136,27 +2123,38 @@ a writeset transaction is committed.
 ### Function `should_track_limits_for_account`
 
 
-<pre><code><b>fun</b> <a href="#0x1_LibraAccount_should_track_limits_for_account">should_track_limits_for_account</a>(payer: address, payee: address, is_withdrawal: bool): bool
+<pre><code><b>fun</b> <a href="#0x1_LibraAccount_should_track_limits_for_account">should_track_limits_for_account</a>&lt;Token&gt;(payer: address, payee: address, is_withdrawal: bool): bool
 </code></pre>
 
 
 
 
 <pre><code>pragma opaque = <b>true</b>;
-<b>ensures</b> result == <a href="#0x1_LibraAccount_spec_should_track_limits_for_account">spec_should_track_limits_for_account</a>(payer, payee, is_withdrawal);
+<b>ensures</b> result == <a href="#0x1_LibraAccount_spec_should_track_limits_for_account">spec_should_track_limits_for_account</a>&lt;Token&gt;(payer, payee, is_withdrawal);
 </code></pre>
 
 
 
 
+<a name="0x1_LibraAccount_spec_has_published_account_limits"></a>
+
+
+<pre><code><b>define</b> <a href="#0x1_LibraAccount_spec_has_published_account_limits">spec_has_published_account_limits</a>&lt;Token&gt;(addr: address): bool {
+    <b>if</b> (<a href="VASP.md#0x1_VASP_is_vasp">VASP::is_vasp</a>(addr)) <a href="VASP.md#0x1_VASP_spec_has_account_limits">VASP::spec_has_account_limits</a>&lt;Token&gt;(addr)
+    <b>else</b> <a href="AccountLimits.md#0x1_AccountLimits_has_window_published">AccountLimits::has_window_published</a>&lt;Token&gt;(addr)
+}
 <a name="0x1_LibraAccount_spec_should_track_limits_for_account"></a>
-
-
-<pre><code><b>define</b> <a href="#0x1_LibraAccount_spec_should_track_limits_for_account">spec_should_track_limits_for_account</a>(payer: address, payee: address, is_withdrawal: bool): bool {
+<b>define</b> <a href="#0x1_LibraAccount_spec_should_track_limits_for_account">spec_should_track_limits_for_account</a>&lt;Token&gt;(
+    payer: address, payee: address, is_withdrawal: bool
+): bool {
     <b>if</b> (is_withdrawal) {
-        <a href="VASP.md#0x1_VASP_spec_is_vasp">VASP::spec_is_vasp</a>(payer) && (!<a href="VASP.md#0x1_VASP_spec_is_vasp">VASP::spec_is_vasp</a>(payee) || !<a href="VASP.md#0x1_VASP_spec_is_same_vasp">VASP::spec_is_same_vasp</a>(payer, payee))
+        <a href="#0x1_LibraAccount_spec_has_published_account_limits">spec_has_published_account_limits</a>&lt;Token&gt;(payer) &&
+        <a href="VASP.md#0x1_VASP_is_vasp">VASP::is_vasp</a>(payer) &&
+        (!<a href="VASP.md#0x1_VASP_is_vasp">VASP::is_vasp</a>(payee) || !<a href="VASP.md#0x1_VASP_spec_is_same_vasp">VASP::spec_is_same_vasp</a>(payer, payee))
     } <b>else</b> {
-        <a href="VASP.md#0x1_VASP_spec_is_vasp">VASP::spec_is_vasp</a>(payee) && (!<a href="VASP.md#0x1_VASP_spec_is_vasp">VASP::spec_is_vasp</a>(payer) || !<a href="VASP.md#0x1_VASP_spec_is_same_vasp">VASP::spec_is_same_vasp</a>(payee, payer))
+        <a href="#0x1_LibraAccount_spec_has_published_account_limits">spec_has_published_account_limits</a>&lt;Token&gt;(payee) &&
+        <a href="VASP.md#0x1_VASP_is_vasp">VASP::is_vasp</a>(payee) &&
+        (!<a href="VASP.md#0x1_VASP_is_vasp">VASP::is_vasp</a>(payer) || !<a href="VASP.md#0x1_VASP_spec_is_same_vasp">VASP::spec_is_same_vasp</a>(payee, payer))
     }
 }
 </code></pre>
@@ -2194,15 +2192,15 @@ a writeset transaction is committed.
     <b>aborts_if</b> amount == 0;
     <b>include</b> <a href="DualAttestation.md#0x1_DualAttestation_AssertPaymentOkAbortsIf">DualAttestation::AssertPaymentOkAbortsIf</a>&lt;Token&gt;{value: amount};
     <b>aborts_if</b>
-        <a href="#0x1_LibraAccount_spec_should_track_limits_for_account">spec_should_track_limits_for_account</a>(payer, payee, <b>false</b>) &&
+        <a href="#0x1_LibraAccount_spec_should_track_limits_for_account">spec_should_track_limits_for_account</a>&lt;Token&gt;(payer, payee, <b>false</b>) &&
         !<a href="#0x1_LibraAccount_spec_has_account_operations_cap">spec_has_account_operations_cap</a>();
     <b>include</b>
-        <a href="#0x1_LibraAccount_spec_should_track_limits_for_account">spec_should_track_limits_for_account</a>(payer, payee, <b>false</b>) ==&gt;
+        <a href="#0x1_LibraAccount_spec_should_track_limits_for_account">spec_should_track_limits_for_account</a>&lt;Token&gt;(payer, payee, <b>false</b>) ==&gt;
         <a href="AccountLimits.md#0x1_AccountLimits_UpdateDepositLimitsAbortsIf">AccountLimits::UpdateDepositLimitsAbortsIf</a>&lt;Token&gt; {
             addr: <a href="VASP.md#0x1_VASP_spec_parent_address">VASP::spec_parent_address</a>(payee),
         };
     <b>aborts_if</b>
-        <a href="#0x1_LibraAccount_spec_should_track_limits_for_account">spec_should_track_limits_for_account</a>(payer, payee, <b>false</b>) &&
+        <a href="#0x1_LibraAccount_spec_should_track_limits_for_account">spec_should_track_limits_for_account</a>&lt;Token&gt;(payer, payee, <b>false</b>) &&
         !<a href="AccountLimits.md#0x1_AccountLimits_spec_update_deposit_limits">AccountLimits::spec_update_deposit_limits</a>&lt;Token&gt;(amount, <a href="VASP.md#0x1_VASP_spec_parent_address">VASP::spec_parent_address</a>(payee));
     <b>aborts_if</b> !exists&lt;<a href="#0x1_LibraAccount_Balance">Balance</a>&lt;Token&gt;&gt;(payee);
     <b>aborts_if</b> <b>global</b>&lt;<a href="#0x1_LibraAccount_Balance">Balance</a>&lt;Token&gt;&gt;(payee).coin.value + amount &gt; max_u64();
@@ -2255,12 +2253,12 @@ a writeset transaction is committed.
     amount: u64;
     <b>aborts_if</b> <a href="AccountFreezing.md#0x1_AccountFreezing_spec_account_is_frozen">AccountFreezing::spec_account_is_frozen</a>(payer);
     <b>include</b>
-        <a href="#0x1_LibraAccount_spec_should_track_limits_for_account">spec_should_track_limits_for_account</a>(payer, payee, <b>true</b>) ==&gt;
+        <a href="#0x1_LibraAccount_spec_should_track_limits_for_account">spec_should_track_limits_for_account</a>&lt;Token&gt;(payer, payee, <b>true</b>) ==&gt;
         <a href="AccountLimits.md#0x1_AccountLimits_UpdateWithdrawalLimitsAbortsIf">AccountLimits::UpdateWithdrawalLimitsAbortsIf</a>&lt;Token&gt; {
             addr: <a href="VASP.md#0x1_VASP_spec_parent_address">VASP::spec_parent_address</a>(payer),
         };
     <b>aborts_if</b>
-        <a href="#0x1_LibraAccount_spec_should_track_limits_for_account">spec_should_track_limits_for_account</a>(payer, payee, <b>true</b>) &&
+        <a href="#0x1_LibraAccount_spec_should_track_limits_for_account">spec_should_track_limits_for_account</a>&lt;Token&gt;(payer, payee, <b>true</b>) &&
         (   !<a href="#0x1_LibraAccount_spec_has_account_operations_cap">spec_has_account_operations_cap</a>() ||
             !<a href="AccountLimits.md#0x1_AccountLimits_spec_update_withdrawal_limits">AccountLimits::spec_update_withdrawal_limits</a>&lt;Token&gt;(amount, <a href="VASP.md#0x1_VASP_spec_parent_address">VASP::spec_parent_address</a>(payer))
         );
@@ -2326,8 +2324,8 @@ a writeset transaction is committed.
 
 
 <pre><code><b>aborts_if</b> !exists&lt;<a href="#0x1_LibraAccount">LibraAccount</a>&gt;(<a href="Signer.md#0x1_Signer_spec_address_of">Signer::spec_address_of</a>(account));
-<b>aborts_if</b> <a href="#0x1_LibraAccount_spec_delegated_key_rotation_capability">spec_delegated_key_rotation_capability</a>(<a href="Signer.md#0x1_Signer_spec_address_of">Signer::spec_address_of</a>(account));
-<b>ensures</b> <a href="#0x1_LibraAccount_spec_delegated_key_rotation_capability">spec_delegated_key_rotation_capability</a>(<a href="Signer.md#0x1_Signer_spec_address_of">Signer::spec_address_of</a>(account));
+<b>aborts_if</b> <a href="#0x1_LibraAccount_delegated_key_rotation_capability">delegated_key_rotation_capability</a>(<a href="Signer.md#0x1_Signer_spec_address_of">Signer::spec_address_of</a>(account));
+<b>ensures</b> <a href="#0x1_LibraAccount_delegated_key_rotation_capability">delegated_key_rotation_capability</a>(<a href="Signer.md#0x1_Signer_spec_address_of">Signer::spec_address_of</a>(account));
 </code></pre>
 
 
@@ -2344,7 +2342,7 @@ a writeset transaction is committed.
 
 
 <pre><code><b>aborts_if</b> !exists&lt;<a href="#0x1_LibraAccount">LibraAccount</a>&gt;(cap.account_address);
-<b>aborts_if</b> !<a href="#0x1_LibraAccount_spec_delegated_key_rotation_capability">spec_delegated_key_rotation_capability</a>(cap.account_address);
+<b>aborts_if</b> !<a href="#0x1_LibraAccount_delegated_key_rotation_capability">delegated_key_rotation_capability</a>(cap.account_address);
 <b>ensures</b> <a href="#0x1_LibraAccount_spec_holds_own_key_rotation_cap">spec_holds_own_key_rotation_cap</a>(cap.account_address);
 </code></pre>
 
@@ -2395,27 +2393,9 @@ Returns true if the LibraAccount at
 
 
 <pre><code><b>define</b> <a href="#0x1_LibraAccount_spec_holds_own_key_rotation_cap">spec_holds_own_key_rotation_cap</a>(addr: address): bool {
-    <a href="Option.md#0x1_Option_spec_is_some">Option::spec_is_some</a>(<a href="#0x1_LibraAccount_spec_get_key_rotation_cap">spec_get_key_rotation_cap</a>(addr))
-    && addr == <a href="Option.md#0x1_Option_spec_get">Option::spec_get</a>(
+    <a href="Option.md#0x1_Option_is_some">Option::is_some</a>(<a href="#0x1_LibraAccount_spec_get_key_rotation_cap">spec_get_key_rotation_cap</a>(addr))
+    && addr == <a href="Option.md#0x1_Option_borrow">Option::borrow</a>(
         <a href="#0x1_LibraAccount_spec_get_key_rotation_cap">spec_get_key_rotation_cap</a>(addr)).account_address
-}
-<a name="0x1_LibraAccount_spec_key_rotation_capability_address"></a>
-<b>define</b> <a href="#0x1_LibraAccount_spec_key_rotation_capability_address">spec_key_rotation_capability_address</a>(cap: <a href="#0x1_LibraAccount_KeyRotationCapability">KeyRotationCapability</a>): address {
-    cap.account_address
-}
-</code></pre>
-
-
-Returns true if the LibraAccount at
-<code>addr</code> holds a
-<code><a href="#0x1_LibraAccount_KeyRotationCapability">KeyRotationCapability</a></code>.
-
-
-<a name="0x1_LibraAccount_spec_delegated_key_rotation_capability"></a>
-
-
-<pre><code><b>define</b> <a href="#0x1_LibraAccount_spec_delegated_key_rotation_capability">spec_delegated_key_rotation_capability</a>(addr: address): bool {
-    <a href="Option.md#0x1_Option_spec_is_none">Option::spec_is_none</a>(<a href="#0x1_LibraAccount_spec_get_key_rotation_cap">spec_get_key_rotation_cap</a>(addr))
 }
 </code></pre>
 
@@ -2432,11 +2412,50 @@ Returns true if
 }
 <a name="0x1_LibraAccount_spec_has_key_rotation_cap"></a>
 <b>define</b> <a href="#0x1_LibraAccount_spec_has_key_rotation_cap">spec_has_key_rotation_cap</a>(addr: address): bool {
-    <a href="Option.md#0x1_Option_spec_is_some">Option::spec_is_some</a>(<b>global</b>&lt;<a href="#0x1_LibraAccount">LibraAccount</a>&gt;(addr).key_rotation_capability)
+    <a href="Option.md#0x1_Option_is_some">Option::is_some</a>(<b>global</b>&lt;<a href="#0x1_LibraAccount">LibraAccount</a>&gt;(addr).key_rotation_capability)
 }
+</code></pre>
+
+
+Returns field
+<code>withdrawal_capability</code> of LibraAccount under
+<code>addr</code>.
+
+
+<a name="0x1_LibraAccount_spec_get_withdraw_cap"></a>
+
+
+<pre><code><b>define</b> <a href="#0x1_LibraAccount_spec_get_withdraw_cap">spec_get_withdraw_cap</a>(addr: address): <a href="Option.md#0x1_Option">Option</a>&lt;<a href="#0x1_LibraAccount_WithdrawCapability">WithdrawCapability</a>&gt; {
+    <b>global</b>&lt;<a href="#0x1_LibraAccount">LibraAccount</a>&gt;(addr).withdrawal_capability
+}
+</code></pre>
+
+
+Returns true if the LibraAccount at
+<code>addr</code> holds a
+<code><a href="#0x1_LibraAccount_WithdrawCapability">WithdrawCapability</a></code>.
+
+
 <a name="0x1_LibraAccount_spec_has_withdraw_cap"></a>
-<b>define</b> <a href="#0x1_LibraAccount_spec_has_withdraw_cap">spec_has_withdraw_cap</a>(addr: address): bool {
-    <a href="Option.md#0x1_Option_spec_is_some">Option::spec_is_some</a>(<b>global</b>&lt;<a href="#0x1_LibraAccount">LibraAccount</a>&gt;(addr).withdrawal_capability)
+
+
+<pre><code><b>define</b> <a href="#0x1_LibraAccount_spec_has_withdraw_cap">spec_has_withdraw_cap</a>(addr: address): bool {
+    <a href="Option.md#0x1_Option_is_some">Option::is_some</a>(<a href="#0x1_LibraAccount_spec_get_withdraw_cap">spec_get_withdraw_cap</a>(addr))
+}
+</code></pre>
+
+
+Returns true if the LibraAccount at
+<code>addr</code> holds
+<code><a href="#0x1_LibraAccount_WithdrawCapability">WithdrawCapability</a></code> for itself.
+
+
+<a name="0x1_LibraAccount_spec_holds_own_withdraw_cap"></a>
+
+
+<pre><code><b>define</b> <a href="#0x1_LibraAccount_spec_holds_own_withdraw_cap">spec_holds_own_withdraw_cap</a>(addr: address): bool {
+    <a href="#0x1_LibraAccount_spec_has_withdraw_cap">spec_has_withdraw_cap</a>(addr)
+    && addr == <a href="Option.md#0x1_Option_borrow">Option::borrow</a>(<a href="#0x1_LibraAccount_spec_get_withdraw_cap">spec_get_withdraw_cap</a>(addr)).account_address
 }
 </code></pre>
 
@@ -2477,4 +2496,23 @@ the permission "WithdrawalCapability(addr)" is granted to the account at addr [B
 
 
 <pre><code><b>apply</b> <a href="#0x1_LibraAccount_EnsuresWithdrawalCap">EnsuresWithdrawalCap</a>{account: new_account} <b>to</b> make_account;
+</code></pre>
+
+
+
+The LibraAccount under addr holds either no withdraw capability
+(withdraw cap has been delegated) or the withdraw capability for addr itself.
+
+
+<pre><code><b>invariant</b> [<b>global</b>] forall addr1: address where exists&lt;<a href="#0x1_LibraAccount">LibraAccount</a>&gt;(addr1):
+    <a href="#0x1_LibraAccount_delegated_withdraw_capability">delegated_withdraw_capability</a>(addr1) || <a href="#0x1_LibraAccount_spec_holds_own_withdraw_cap">spec_holds_own_withdraw_cap</a>(addr1);
+</code></pre>
+
+
+The LibraAccount under addr holds either no key rotation capability
+(key rotation cap has been delegated) or the key rotation capability for addr itself.
+
+
+<pre><code><b>invariant</b> [<b>global</b>] forall addr1: address where exists&lt;<a href="#0x1_LibraAccount">LibraAccount</a>&gt;(addr1):
+    <a href="#0x1_LibraAccount_delegated_key_rotation_capability">delegated_key_rotation_capability</a>(addr1) || <a href="#0x1_LibraAccount_spec_holds_own_key_rotation_cap">spec_holds_own_key_rotation_cap</a>(addr1);
 </code></pre>

@@ -1,31 +1,36 @@
 // Copyright (c) The Libra Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::peer_manager::{PeerManager, PeerScoreUpdateType};
+use crate::request_manager::{PeerScoreUpdateType, RequestManager};
 use libra_config::config::{PeerNetworkId, UpstreamConfig};
 use netcore::transport::ConnectionOrigin;
-use std::collections::HashMap;
+use std::{collections::HashMap, time::Duration};
 
 #[test]
-fn test_peer_manager() {
+fn test_request_manager() {
     let peers = vec![
         PeerNetworkId::random_validator(),
         PeerNetworkId::random_validator(),
         PeerNetworkId::random_validator(),
         PeerNetworkId::random_validator(),
     ];
-    let mut peer_manager = PeerManager::new(UpstreamConfig::default());
+    let mut request_manager = RequestManager::new(
+        UpstreamConfig::default(),
+        Duration::from_secs(10),
+        Duration::from_secs(30),
+        HashMap::new(),
+    );
     for peer_id in peers.clone() {
-        peer_manager.enable_peer(peer_id, ConnectionOrigin::Outbound);
+        request_manager.enable_peer(peer_id, ConnectionOrigin::Outbound);
     }
 
     for _ in 0..50 {
-        peer_manager.update_score(&peers[0], PeerScoreUpdateType::InvalidChunk);
+        request_manager.update_score(&peers[0], PeerScoreUpdateType::InvalidChunk);
     }
 
     let mut pick_counts = HashMap::new();
     for _ in 0..1000 {
-        let picked_peer_id = peer_manager.pick_peer().unwrap();
+        let picked_peer_id = request_manager.pick_peers()[0].clone();
         let counter = pick_counts.entry(picked_peer_id).or_insert(0);
         *counter += 1;
     }
@@ -43,44 +48,55 @@ fn test_remove_requests() {
         PeerNetworkId::random_validator(),
         PeerNetworkId::random_validator(),
     ];
-    let mut peer_manager = PeerManager::new(UpstreamConfig::default());
+    let mut request_manager = RequestManager::new(
+        UpstreamConfig::default(),
+        Duration::from_secs(0),
+        Duration::from_secs(30),
+        HashMap::new(),
+    );
     for peer in peers.iter() {
-        peer_manager.enable_peer(peer.clone(), ConnectionOrigin::Outbound);
+        request_manager.enable_peer(peer.clone(), ConnectionOrigin::Outbound);
     }
 
-    peer_manager.process_request(1, peers[0].clone());
-    peer_manager.process_request(3, peers[1].clone());
-    peer_manager.process_request(5, peers[0].clone());
-    peer_manager.process_request(10, peers[0].clone());
-    peer_manager.process_request(12, peers[1].clone());
+    request_manager.add_request(1, vec![peers[0].clone()]);
+    request_manager.add_request(3, vec![peers[1].clone()]);
+    request_manager.add_request(5, vec![peers[0].clone()]);
+    request_manager.add_request(10, vec![peers[0].clone()]);
+    request_manager.add_request(12, vec![peers[1].clone()]);
 
-    peer_manager.remove_requests(5);
+    request_manager.remove_requests(5);
 
-    assert!(peer_manager.get_last_request_time(1).is_none());
-    assert!(peer_manager.get_last_request_time(3).is_none());
-    assert!(peer_manager.get_last_request_time(5).is_none());
-    assert!(peer_manager.get_last_request_time(10).is_some());
-    assert!(peer_manager.get_last_request_time(12).is_some());
+    assert!(request_manager.get_last_request_time(1).is_none());
+    assert!(request_manager.get_last_request_time(3).is_none());
+    assert!(request_manager.get_last_request_time(5).is_none());
+    assert!(request_manager.get_last_request_time(10).is_some());
+    assert!(request_manager.get_last_request_time(12).is_some());
 }
 
 #[test]
-fn test_peer_manager_request_metadata() {
+fn test_request_manager_request_metadata() {
     let peers = vec![
         PeerNetworkId::random_validator(),
         PeerNetworkId::random_validator(),
     ];
-    let mut peer_manager = PeerManager::new(UpstreamConfig::default());
+    let mut request_manager = RequestManager::new(
+        UpstreamConfig::default(),
+        Duration::from_secs(0),
+        Duration::from_secs(30),
+        HashMap::new(),
+    );
     for peer in peers.iter() {
-        peer_manager.enable_peer(peer.clone(), ConnectionOrigin::Outbound);
+        request_manager.enable_peer(peer.clone(), ConnectionOrigin::Outbound);
     }
-    assert!(peer_manager.get_first_request_time(1).is_none());
-    peer_manager.process_request(1, peers[0].clone());
-    peer_manager.process_timeout(1);
-    peer_manager.process_request(1, peers[1].clone());
-    assert!(peer_manager.peer_score(&peers[0]).unwrap() < 99.0);
-    assert!(peer_manager.peer_score(&peers[1]).unwrap() > 99.0);
+    assert!(request_manager.get_first_request_time(1).is_none());
+
+    request_manager.add_request(1, vec![peers[0].clone()]);
+    request_manager.check_timeout(1);
+    request_manager.add_request(1, vec![peers[1].clone()]);
+    assert!(request_manager.peer_score(&peers[0]).unwrap() < 99.0);
+    assert!(request_manager.peer_score(&peers[1]).unwrap() > 99.0);
     assert!(
-        peer_manager.get_first_request_time(1).unwrap()
-            <= peer_manager.get_last_request_time(1).unwrap()
+        request_manager.get_first_request_time(1).unwrap()
+            <= request_manager.get_last_request_time(1).unwrap()
     );
 }

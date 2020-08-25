@@ -56,6 +56,28 @@ impl StartupInfo {
         }
     }
 
+    #[cfg(any(test, feature = "fuzzing"))]
+    pub fn new_for_testing() -> Self {
+        use libra_types::on_chain_config::ValidatorSet;
+
+        let latest_ledger_info =
+            LedgerInfoWithSignatures::genesis(HashValue::zero(), ValidatorSet::empty());
+        let latest_epoch_state = None;
+        let committed_tree_state = TreeState {
+            num_transactions: 0,
+            ledger_frozen_subtree_hashes: Vec::new(),
+            account_state_root_hash: HashValue::zero(),
+        };
+        let synced_tree_state = None;
+
+        Self {
+            latest_ledger_info,
+            latest_epoch_state,
+            committed_tree_state,
+            synced_tree_state,
+        }
+    }
+
     pub fn get_epoch_state(&self) -> &EpochState {
         self.latest_ledger_info
             .ledger_info()
@@ -92,6 +114,22 @@ impl TreeState {
         self.num_transactions == 0
             && self.account_state_root_hash == *SPARSE_MERKLE_PLACEHOLDER_HASH
     }
+
+    pub fn describe(&self) -> String {
+        if self.num_transactions != 0 {
+            format!(
+                "DB has {} transactions in it, state root hash is {}.",
+                self.num_transactions, self.account_state_root_hash
+            )
+        } else if self.account_state_root_hash != *SPARSE_MERKLE_PLACEHOLDER_HASH {
+            format!(
+                "DB has no transactions in it, but has pre-genesis state, state root hash is {}.",
+                self.account_state_root_hash
+            )
+        } else {
+            "DB is empty, has no transactions or state.".into()
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Error, PartialEq, Serialize)]
@@ -125,6 +163,12 @@ impl From<libra_secure_net::Error> for Error {
     }
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub enum Order {
+    Ascending,
+    Descending,
+}
+
 /// Trait that is implemented by a DB that supports certain public (to client) read APIs
 /// expected of a Libra DB
 pub trait DbReader: Send + Sync {
@@ -154,7 +198,7 @@ pub trait DbReader: Send + Sync {
         &self,
         event_key: &EventKey,
         start: u64,
-        ascending: bool,
+        order: Order,
         limit: u64,
     ) -> Result<Vec<(u64, ContractEvent)>>;
 

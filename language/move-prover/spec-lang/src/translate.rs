@@ -83,6 +83,8 @@ pub struct Translator<'env> {
     fun_table: BTreeMap<QualifiedSymbol, FunEntry>,
     /// A symbol table for constants.
     const_table: BTreeMap<QualifiedSymbol, ConstEntry>,
+    /// A call graph mapping callers to callees that are move functions.
+    move_fun_call_graph: BTreeMap<QualifiedId<SpecFunId>, BTreeSet<QualifiedId<SpecFunId>>>,
 }
 
 /// A declaration of a specification function or operator in the translator state.
@@ -168,6 +170,7 @@ impl<'env> Translator<'env> {
             reverse_struct_table: BTreeMap::new(),
             fun_table: BTreeMap::new(),
             const_table: BTreeMap::new(),
+            move_fun_call_graph: BTreeMap::new(),
         };
         translator.declare_builtins();
         translator
@@ -774,9 +777,53 @@ impl<'env> Translator<'env> {
         self.env.symbol_pool().make("old")
     }
 
+    /// Returns the symbol for the builtin move function `assert`.
+    fn assert_symbol(&self) -> Symbol {
+        self.env.symbol_pool().make("assert")
+    }
+
     /// Returns the name for the pseudo builtin module.
     pub fn builtin_module(&self) -> ModuleName {
         ModuleName::new(BigUint::default(), self.env.symbol_pool().make("$$"))
+    }
+}
+
+/// # Usage of move functions
+
+impl<'env> Translator<'env> {
+    /// Adds a spec function to used_spec_funs set.
+    pub fn add_used_spec_fun(&mut self, module_id: ModuleId, spec_fun_id: SpecFunId) {
+        let qid = module_id.qualified(spec_fun_id);
+        self.env.used_spec_funs.insert(qid);
+        self.propagate_move_fun_usage(qid);
+    }
+
+    /// Adds an edge from the caller to the callee to the move fun call graph.
+    pub fn add_edge_to_move_fun_call_graph(
+        &mut self,
+        caller_mid: ModuleId,
+        caller_fid: SpecFunId,
+        callee_mid: ModuleId,
+        callee_fid: SpecFunId,
+    ) {
+        self.move_fun_call_graph
+            .entry(caller_mid.qualified(caller_fid))
+            .or_insert_with(BTreeSet::new)
+            .insert(callee_mid.qualified(callee_fid));
+    }
+
+    /// Runs DFS to propagate the usage of move functions from callers
+    /// to callees on the call graph.
+    pub fn propagate_move_fun_usage(&mut self, qid: QualifiedId<SpecFunId>) {
+        if let Some(neighbors) = self.move_fun_call_graph.get(&qid) {
+            neighbors.clone().iter().for_each(|n| {
+                if self.env.used_spec_funs.insert(*n) {
+                    // If the callee's usage has not been recorded, recursively
+                    // propagate the usage to the callee's callees, and so on.
+                    self.propagate_move_fun_usage(*n);
+                }
+            });
+        }
     }
 }
 
@@ -1102,7 +1149,7 @@ impl<'env, 'translator> ModuleTranslator<'env, 'translator> {
 
         // Add $ to the name so the spec version does not name clash with the move version.
         let name = self.symbol_pool().make(&format!("${}", name.0.value));
-        let fun_decl = SpecFunDecl {
+        let mut fun_decl = SpecFunDecl {
             loc,
             name,
             type_params,
@@ -1113,8 +1160,12 @@ impl<'env, 'translator> ModuleTranslator<'env, 'translator> {
             used_memory: BTreeSet::new(),
             uninterpreted: false,
             is_move_fun: true,
+            is_native: false,
             body: None,
         };
+        if let EA::FunctionBody_::Native = def.body.value {
+            fun_decl.is_native = true;
+        }
         self.spec_funs.push(fun_decl);
     }
 
@@ -1187,6 +1238,7 @@ impl<'env, 'translator> ModuleTranslator<'env, 'translator> {
             used_memory: BTreeSet::new(),
             uninterpreted,
             is_move_fun: false,
+            is_native: false,
             body: None,
         };
         self.spec_funs.push(fun_decl);
@@ -1287,8 +1339,25 @@ impl<'env, 'translator> ModuleTranslator<'env, 'translator> {
         }
 
         // Analyze all functions.
-        for (name, fun_def) in &module_def.functions {
-            self.def_ana_fun(&name, &fun_def.body);
+        for (idx, (name, fun_def)) in module_def.functions.iter().enumerate() {
+            self.def_ana_fun(&name, &fun_def.body, idx);
+        }
+
+        // Propagate the impurity of functions: a move function which calls an
+        // impure move function is also considered impure.
+        let mut visited = BTreeMap::new();
+        for (idx, (name, _)) in module_def.functions.iter().enumerate() {
+            let is_pure = self.propagate_function_impurity(&mut visited, SpecFunId::new(idx));
+            let full_name = self.qualified_by_module_from_name(&name.0);
+            if is_pure {
+                // Modify the types of parameters, return values and expressions
+                // of pure move functions so they no longer have references.
+                self.deref_move_fun_types(full_name.clone(), idx);
+            }
+            self.parent
+                .fun_table
+                .entry(full_name)
+                .and_modify(|e| e.is_pure = is_pure);
         }
 
         // Analyze all schemas. This must be done before other things because schemas need to be
@@ -1423,7 +1492,7 @@ impl<'env, 'translator> ModuleTranslator<'env, 'translator> {
 impl<'env, 'translator> ModuleTranslator<'env, 'translator> {
     /// Definition analysis for move functions.
     /// If the function is pure, we translate its body.
-    fn def_ana_fun(&mut self, name: &PA::FunctionName, body: &EA::FunctionBody) {
+    fn def_ana_fun(&mut self, name: &PA::FunctionName, body: &EA::FunctionBody, fun_idx: usize) {
         if let EA::FunctionBody_::Defined(seq) = &body.value {
             let full_name = self.qualified_by_module_from_name(&name.0);
             let entry = self
@@ -1446,20 +1515,113 @@ impl<'env, 'translator> ModuleTranslator<'env, 'translator> {
             }
             let translated = et.translate_seq(&loc, &seq, &result_type);
             et.finalize_types();
-            // TODO(emmazzz): right now we can't detect a pure-looking move
-            // function which calls an impure move function. Later we need
-            // to come up with more general algorithm for detecting impure
-            // move functions.
             // If no errors were generated, then the function is considered pure.
             if !*et.errors_generated.borrow() {
+                // Rewrite all type annotations in expressions to skip references.
+                for node_id in translated.node_ids() {
+                    et.parent
+                        .type_map
+                        .entry(node_id)
+                        .and_modify(|ty| *ty = ty.skip_reference().clone());
+                }
+                et.called_spec_funs.iter().for_each(|(mid, fid)| {
+                    self.parent.add_edge_to_move_fun_call_graph(
+                        self.module_id,
+                        SpecFunId::new(fun_idx),
+                        *mid,
+                        *fid,
+                    );
+                });
                 self.spec_funs[self.spec_fun_index].body = Some(translated);
-                self.parent
-                    .fun_table
-                    .entry(full_name)
-                    .and_modify(|e| e.is_pure = true);
             }
         }
         self.spec_fun_index += 1;
+    }
+
+    /// Propagate the impurity of move functions from callees to callers so
+    /// that we can detect pure-looking move functions which calls impure
+    /// move functions.
+    fn propagate_function_impurity(
+        &mut self,
+        mut visited: &mut BTreeMap<SpecFunId, bool>,
+        spec_fun_id: SpecFunId,
+    ) -> bool {
+        if let Some(is_pure) = visited.get(&spec_fun_id) {
+            return *is_pure;
+        }
+        let spec_fun_idx = spec_fun_id.as_usize();
+        let body = if self.spec_funs[spec_fun_idx].body.is_some() {
+            std::mem::replace(&mut self.spec_funs[spec_fun_idx].body, None).unwrap()
+        } else {
+            // If the function is native and contains no mutable references
+            // as parameters, consider it pure.
+            // Otherwise the function is non-native, its body cannot be parsed
+            // so we consider it impure.
+            // TODO(emmazzz) right now all the native move functions without
+            // parameters of type mutable references are considered pure.
+            // In the future we might want to only allow a certain subset of the
+            // native move functions, through something similar to an allow list or
+            // a pragma.
+            let no_mut_ref_param = self.spec_funs[spec_fun_idx]
+                .params
+                .iter()
+                .map(|(_, ty)| !ty.is_mutable_reference())
+                .all(|b| b); // `no_mut_ref_param` if none of the types are mut refs.
+            return self.spec_funs[spec_fun_idx].is_native && no_mut_ref_param;
+        };
+        let mut is_pure = true;
+        body.visit(&mut |e: &Exp| {
+            if let Exp::Call(_, Operation::Function(mid, fid), _) = e {
+                if mid.to_usize() < self.module_id.to_usize() {
+                    // This is calling a function from another module we already have
+                    // translated. In this case, the impurity has already been propagated
+                    // in translate_call.
+                } else {
+                    // This is calling a function from the module we are currently translating.
+                    // Need to recursively ensure we have propagated impurity because of
+                    // arbitrary call graphs, including cyclic.
+                    if !self.propagate_function_impurity(&mut visited, *fid) {
+                        is_pure = false;
+                    }
+                }
+            }
+        });
+        if is_pure {
+            // Restore the function body if the move function is pure.
+            self.spec_funs[spec_fun_idx].body = Some(body);
+        }
+        visited.insert(spec_fun_id, is_pure);
+        is_pure
+    }
+
+    fn deref_move_fun_types(&mut self, full_name: QualifiedSymbol, spec_fun_idx: usize) {
+        self.parent.spec_fun_table.entry(full_name).and_modify(|e| {
+            assert!(e.len() == 1);
+            e[0].arg_types = e[0]
+                .arg_types
+                .iter()
+                .map(|ty| ty.skip_reference().clone())
+                .collect_vec();
+            e[0].type_params = e[0]
+                .type_params
+                .iter()
+                .map(|ty| ty.skip_reference().clone())
+                .collect_vec();
+            e[0].result_type = e[0].result_type.skip_reference().clone();
+        });
+
+        let spec_fun_decl = &mut self.spec_funs[spec_fun_idx];
+        spec_fun_decl.params = spec_fun_decl
+            .params
+            .iter()
+            .map(|(s, ty)| (*s, ty.skip_reference().clone()))
+            .collect_vec();
+        spec_fun_decl.type_params = spec_fun_decl
+            .type_params
+            .iter()
+            .map(|(s, ty)| (*s, ty.skip_reference().clone()))
+            .collect_vec();
+        spec_fun_decl.result_type = spec_fun_decl.result_type.skip_reference().clone();
     }
 }
 /// ## Spec Block Definition Analysis
@@ -1597,6 +1759,7 @@ impl<'env, 'translator> ModuleTranslator<'env, 'translator> {
             used_memory: Default::default(),
             uninterpreted: false,
             is_move_fun: false,
+            is_native: false,
             body: Some(def),
         });
 
@@ -2275,6 +2438,7 @@ impl<'env, 'translator> ModuleTranslator<'env, 'translator> {
         }
 
         // Now process all conditions and invariants.
+        assert!(self.spec_block_lets.is_empty());
         for member in &block.value.members {
             let member_loc = self.parent.to_loc(&member.loc);
             match &member.value {
@@ -2282,6 +2446,13 @@ impl<'env, 'translator> ModuleTranslator<'env, 'translator> {
                     is_global: false, ..
                 } => { /* handled during decl analysis */ }
                 EA::SpecBlockMember_::Include { .. } => { /* handled above */ }
+                EA::SpecBlockMember_::Let {
+                    name: let_name,
+                    def,
+                } => {
+                    let context = SpecBlockContext::Schema(name.clone());
+                    self.def_ana_let(&context, &member_loc, let_name, def);
+                }
                 EA::SpecBlockMember_::Condition {
                     kind,
                     properties,
@@ -2308,6 +2479,7 @@ impl<'env, 'translator> ModuleTranslator<'env, 'translator> {
                 }
             };
         }
+        self.spec_block_lets.clear();
     }
 
     /// Extracts all schema inclusions from a list of spec block members.
@@ -2619,18 +2791,17 @@ impl<'env, 'translator> ModuleTranslator<'env, 'translator> {
                     self.parent
                         .error(loc, &format!("`{}` cannot be included conditionally", kind));
                 } else {
-                    let path_cond_loc = self.loc_map.get(&cond.node_id()).unwrap_or(loc).clone();
-                    let node_id = self.new_node_id_with_type_loc(&BOOL_TYPE, &path_cond_loc);
                     // In case of AbortsIf, the path condition is combined with the predicate using
                     // &&, otherwise ==>.
-                    exp = Exp::Call(
-                        node_id,
+                    exp = self.make_path_expr(
                         if kind == &ConditionKind::AbortsIf {
                             Operation::And
                         } else {
                             Operation::Implies
                         },
-                        vec![cond.clone(), exp],
+                        cond.node_id(),
+                        cond.clone(),
+                        exp,
                     );
                 }
             }
@@ -2646,6 +2817,29 @@ impl<'env, 'translator> ModuleTranslator<'env, 'translator> {
         self.parent
             .spec_schema_table
             .insert(schema_name, schema_entry);
+    }
+
+    /// Make a path expression. This takes care of keeping virtual operators as top-level
+    /// expressions.
+    fn make_path_expr(&mut self, oper: Operation, node_id: NodeId, cond: Exp, exp: Exp) -> Exp {
+        let path_cond_loc = self.loc_map.get(&node_id).expect("loc defined").clone();
+        let new_node_id = self.new_node_id_with_type_loc(&BOOL_TYPE, &path_cond_loc);
+        match exp {
+            Exp::Call(outer_node_id, Operation::CondWithAbortCode, mut args) => {
+                let exp = args.remove(0);
+                let code = args.remove(0);
+                Exp::Call(
+                    outer_node_id,
+                    Operation::CondWithAbortCode,
+                    vec![Exp::Call(new_node_id, oper, vec![cond, exp]), code],
+                )
+            }
+            Exp::Call(_, Operation::AbortCodes, _) => {
+                self.parent.error(&path_cond_loc, "[implementation restriction] `aborts_with` cannot be included in schema expression context");
+                exp
+            }
+            _ => Exp::Call(new_node_id, oper, vec![cond, exp]),
+        }
     }
 
     /// Creates an expression translator for use in schema expression. This defines the context
@@ -3256,6 +3450,8 @@ pub struct ExpTranslator<'env, 'translator, 'module_translator> {
     translating_fun_as_spec_fun: bool,
     /// A flag to indicate whether errors have been generated so far.
     errors_generated: RefCell<bool>,
+    /// Set containing all the functions called during translation.
+    called_spec_funs: BTreeSet<(ModuleId, SpecFunId)>,
 }
 
 #[derive(Debug, Clone)]
@@ -3294,6 +3490,7 @@ impl<'env, 'translator, 'module_translator> ExpTranslator<'env, 'translator, 'mo
             /// Following flags used to translate pure Move functions.
             translating_fun_as_spec_fun: false,
             errors_generated: RefCell::new(false),
+            called_spec_funs: BTreeSet::new(),
         }
     }
 
@@ -4025,6 +4222,12 @@ impl<'env, 'translator, 'module_translator> ExpTranslator<'env, 'translator, 'mo
         }
         // Next treat this as a call to a global function.
         let (module_name, name) = self.parent.module_access_to_parts(maccess);
+
+        // Ignore assert statement.
+        if name == self.parent.parent.assert_symbol() {
+            return Exp::Call(self.parent.new_node_id(), Operation::NoOp, vec![]);
+        }
+
         let is_old = module_name.is_none() && name == self.parent.parent.old_symbol();
         if is_old {
             match self.old_status {
@@ -4104,6 +4307,16 @@ impl<'env, 'translator, 'module_translator> ExpTranslator<'env, 'translator, 'mo
                             );
                             return Exp::Error(self.parent.new_node_id());
                         }
+                    }
+                }
+                EA::SequenceItem_::Seq(e) => {
+                    let translated = self.translate_exp(e, expected_type);
+                    match translated {
+                        Exp::Call(_, Operation::NoOp, _) => { /* allow assert statement */ }
+                        _ => self.error(
+                            &self.to_loc(&item.loc),
+                            "only binding `let p = e; ...` allowed here",
+                        ),
                     }
                 }
                 _ => self.error(
@@ -4585,10 +4798,7 @@ impl<'env, 'translator, 'module_translator> ExpTranslator<'env, 'translator, 'mo
                     if !self.translating_fun_as_spec_fun {
                         // Record the usage of spec function in specs, used later
                         // in spec translator.
-                        self.parent
-                            .parent
-                            .env
-                            .add_used_spec_fun(module_id, spec_fun_id);
+                        self.parent.parent.add_used_spec_fun(module_id, spec_fun_id);
                     }
                     let module_name = match module {
                         Some(m) => m,
@@ -4602,20 +4812,33 @@ impl<'env, 'translator, 'module_translator> ExpTranslator<'env, 'translator, 'mo
                     // If the spec function called is from a move function,
                     // error if it is not pure.
                     if let Some(entry) = self.parent.parent.fun_table.get(&qsym) {
-                        if !self.translating_fun_as_spec_fun && !entry.is_pure {
-                            let display = self.display_call_target(module, name);
-                            let notes = vec![format!(
-                                "impure function `{}`",
-                                self.display_call_cand(module, name, cand),
-                            )];
-                            self.parent.parent.env.error_with_notes(
-                                loc,
-                                &format!("calling impure function `{}` is not allowed", display),
-                                notes,
-                            );
-                            return self.new_error_exp();
+                        if !entry.is_pure {
+                            if self.translating_fun_as_spec_fun {
+                                // The move function is calling another impure move function,
+                                // so it should be considered impure.
+                                if module_id.to_usize() < self.parent.module_id.to_usize() {
+                                    self.error(loc, "move function calls impure move function");
+                                    return self.new_error_exp();
+                                }
+                            } else {
+                                let display = self.display_call_target(module, name);
+                                let notes = vec![format!(
+                                    "impure function `{}`",
+                                    self.display_call_cand(module, name, cand),
+                                )];
+                                self.parent.parent.env.error_with_notes(
+                                    loc,
+                                    &format!(
+                                        "calling impure function `{}` is not allowed",
+                                        display
+                                    ),
+                                    notes,
+                                );
+                                return self.new_error_exp();
+                            }
                         }
                     }
+                    self.called_spec_funs.insert((module_id, spec_fun_id));
                 }
                 Exp::Call(id, cand.oper.clone(), translated_args)
             }

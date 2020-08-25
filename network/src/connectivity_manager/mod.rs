@@ -28,7 +28,7 @@
 //! using a relay protocol.
 
 use crate::{
-    logging::*,
+    logging::{network_events::DISCOVERY_SOURCE, *},
     peer_manager::{self, conn_notifs_channel, ConnectionRequestSender, PeerManagerError},
 };
 use futures::{
@@ -55,6 +55,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::time;
+use tokio_retry::strategy::jitter;
 
 pub mod builder;
 #[cfg(test)]
@@ -543,10 +544,9 @@ where
         // Only log the total state if anything has actually changed.
         if have_any_changed {
             let peer_addrs = &self.peer_addrs;
-            info!(
-                "{} current addresses: update src: {}, all peer addresses: {}",
-                self.network_context, src, peer_addrs,
-            );
+            send_struct_log!(network_log("peer_addresses_update", &self.network_context)
+                .field(DISCOVERY_SOURCE, &src)
+                .data("peer_addresses", &peer_addrs));
         }
     }
 
@@ -594,11 +594,9 @@ where
             // to generate the new eligible peers set.
             let new_eligible = self.peer_pubkeys.union_all();
 
-            let peer_pubkeys = &self.peer_pubkeys;
-            info!(
-                "{} current pubkeys: update src: {}, all peer pubkeys: {}, new eligible set: {:?}",
-                self.network_context, src, peer_pubkeys, new_eligible,
-            );
+            send_struct_log!(network_log("eligible_peers_update", &self.network_context)
+                .field(DISCOVERY_SOURCE, &src)
+                .data("eligible_peers", &new_eligible));
 
             // Swap in the new eligible peers set. Drop the old set after releasing
             // the write lock.
@@ -893,6 +891,8 @@ where
     }
 
     fn next_backoff_delay(&mut self, max_delay: Duration) -> Duration {
-        min(max_delay, self.backoff.next().unwrap_or(max_delay))
+        let jitter = jitter(Duration::from_millis(100));
+
+        min(max_delay, self.backoff.next().unwrap_or(max_delay)) + jitter
     }
 }

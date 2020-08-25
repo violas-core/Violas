@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::{Error, Result};
-use libra_config::config::{RoleType, DEFAULT_BATCH_SIZE_LIMIT, DEFAULT_PAGE_SIZE_LIMIT};
+use libra_config::config::{
+    RoleType, DEFAULT_BATCH_SIZE_LIMIT, DEFAULT_CONTENT_LENGTH_LIMIT, DEFAULT_PAGE_SIZE_LIMIT,
+};
 use libra_crypto::HashValue;
 use libra_mempool::MempoolClientSender;
 use libra_types::{
@@ -28,7 +30,7 @@ use std::{
     net::SocketAddr,
     sync::Arc,
 };
-use storage_interface::{DbReader, StartupInfo, TreeState};
+use storage_interface::{DbReader, Order, StartupInfo, TreeState};
 use tokio::runtime::Runtime;
 
 /// Creates JSON RPC server for a Validator node
@@ -42,6 +44,7 @@ pub fn test_bootstrap(
         address,
         DEFAULT_BATCH_SIZE_LIMIT,
         DEFAULT_PAGE_SIZE_LIMIT,
+        DEFAULT_CONTENT_LENGTH_LIMIT,
         libra_db,
         mp_sender,
         RoleType::Validator,
@@ -84,7 +87,7 @@ impl DbReader for MockLibraDB {
                     HashValue::zero(),
                     HashValue::zero(),
                     self.version,
-                    *self.timestamps.last().expect("must have"),
+                    self.get_block_timestamp(self.version).unwrap(),
                     None,
                 ),
                 HashValue::zero(),
@@ -192,7 +195,7 @@ impl DbReader for MockLibraDB {
         &self,
         key: &EventKey,
         start: u64,
-        _ascending: bool,
+        _order: Order,
         limit: u64,
     ) -> Result<Vec<(u64, ContractEvent)>> {
         let events = self
@@ -281,6 +284,9 @@ impl DbReader for MockLibraDB {
     }
 
     fn get_block_timestamp(&self, version: u64) -> Result<u64> {
-        Ok(self.timestamps[version as usize])
+        Ok(match self.timestamps.get(version as usize) {
+            Some(t) => *t,
+            None => *self.timestamps.last().unwrap(),
+        })
     }
 }

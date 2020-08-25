@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use futures::{future::try_join_all, lock::Mutex};
 use k8s_openapi::api::core::v1::{ConfigMap, Node, Pod, Service};
 use kube::{
-    api::{Api, PostParams},
+    api::{Api, DeleteParams, PostParams},
     client::Client,
     Config,
 };
@@ -218,7 +218,42 @@ impl ClusterSwarmKube {
             .map_err(|e| format_err!("serde_json::from_value failed: {}", e))
     }
 
-    async fn wait_job_completion(&self, job_name: &str, back_off_limit: u32) -> Result<bool> {
+    fn job_spec(
+        &self,
+        k8s_node: &str,
+        docker_image: &str,
+        command: &str,
+        job_name: &str,
+        back_off_limit: u32,
+    ) -> Result<(Job, String)> {
+        let suffix = thread_rng()
+            .sample_iter(&Alphanumeric)
+            .take(10)
+            .collect::<String>()
+            .to_ascii_lowercase();
+        let job_full_name = format!("{}-{}", job_name, suffix);
+        let job_yaml = format!(
+            include_str!("job_template.yaml"),
+            name = &job_full_name,
+            label = job_name,
+            image = docker_image,
+            node_name = k8s_node,
+            command = command,
+            back_off_limit = back_off_limit,
+        );
+        let job_spec: serde_yaml::Value = serde_yaml::from_str(&job_yaml)?;
+        let job_spec = serde_json::value::to_value(job_spec)?;
+        let job_spec = serde_json::from_value(job_spec)
+            .map_err(|e| format_err!("serde_json::from_value failed: {}", e))?;
+        Ok((job_spec, job_full_name))
+    }
+
+    async fn wait_job_completion(
+        &self,
+        job_name: &str,
+        back_off_limit: u32,
+        killed: bool,
+    ) -> Result<bool> {
         libra_retrier::retry_async(libra_retrier::fixed_retry_strategy(5000, 20), || {
             let job_api: Api<Job> = Api::namespaced(self.client.clone(), DEFAULT_NAMESPACE);
             let job_name = job_name.to_string();
@@ -241,14 +276,45 @@ impl ClusterSwarmKube {
                         }
                         bail!("job in still in progress {}", job_name)
                     }
-                    Err(e) => bail!("job_api.get failed for job {} : {:?}", job_name, e),
+                    Err(e) => {
+                        if killed {
+                            info!("Job {} has been killed already", job_name);
+                            return Ok(true);
+                        }
+                        bail!("job_api.get failed for job {} : {:?}", job_name, e)
+                    }
                 }
             })
         })
         .await
     }
 
-    async fn run_jobs(&self, jobs: Vec<Job>, back_off_limit: u32) -> Result<()> {
+    pub async fn kill_job(&self, job_full_name: &str) -> Result<()> {
+        let dp = DeleteParams::default();
+        let job_api: Api<Job> = Api::namespaced(self.client.clone(), DEFAULT_NAMESPACE);
+        job_api
+            .delete(job_full_name, &dp)
+            .await?
+            .map_left(|o| println!("Deleting Job: {:?}", o.status))
+            .map_right(|s| println!("Deleted Job: {:?}", s));
+        let back_off_limit = 0;
+        // the job night have been deleted already, so we do not handle error
+        match self
+            .wait_job_completion(job_full_name, back_off_limit, true)
+            .await
+        {
+            Ok(_) => info!("Killing job {} returned job_status.success", job_full_name),
+            Err(error) => info!(
+                "Killing job {} returned job_status.failed: {}",
+                job_full_name, error
+            ),
+        }
+
+        Ok(())
+    }
+
+    // just ensures jobs are started, but does not wait on completion
+    async fn start_jobs(&self, jobs: Vec<Job>) -> Result<Vec<String>> {
         let pp = PostParams::default();
         let job_api: Api<Job> = Api::namespaced(self.client.clone(), DEFAULT_NAMESPACE);
         let create_jobs_futures = jobs.iter().map(|job| job_api.create(&pp, job));
@@ -264,9 +330,14 @@ impl ClusterSwarmKube {
                     .clone())
             })
             .collect::<Result<_, _>>()?;
+        Ok(job_names)
+    }
+
+    async fn run_jobs(&self, jobs: Vec<Job>, back_off_limit: u32) -> Result<()> {
+        let job_names: Vec<String> = self.start_jobs(jobs).await?;
         let wait_jobs_futures = job_names
             .iter()
-            .map(|job_name| self.wait_job_completion(job_name, back_off_limit));
+            .map(|job_name| self.wait_job_completion(job_name, back_off_limit, false));
         let wait_jobs_results = try_join_all(wait_jobs_futures).await?;
         if wait_jobs_results.iter().any(|r| !r) {
             bail!("one of the jobs failed")
@@ -292,7 +363,7 @@ impl ClusterSwarmKube {
     {
         debug!("Deleting {} {}", T::KIND, name);
         let resource_api: Api<T> = Api::namespaced(self.client.clone(), DEFAULT_NAMESPACE);
-        libra_retrier::retry_async(libra_retrier::fixed_retry_strategy(5000, 30), || {
+        libra_retrier::retry_async(libra_retrier::fixed_retry_strategy(5000, 60), || {
             let resource_api = resource_api.clone();
             let name = name.to_string();
             Box::pin(async move {
@@ -387,6 +458,21 @@ impl ClusterSwarmKube {
         Ok(workspace.clone())
     }
 
+    pub async fn spawn_job(
+        &self,
+        k8s_node: &str,
+        docker_image: &str,
+        command: &str,
+        job_name: &str,
+    ) -> Result<String> {
+        let back_off_limit = 0;
+        let (job_spec, job_full_name) =
+            self.job_spec(k8s_node, docker_image, command, job_name, back_off_limit)?;
+        debug!("Starting job {} for node {}", job_name, k8s_node);
+        self.start_jobs(vec![job_spec]).await?;
+        Ok(job_full_name)
+    }
+
     pub async fn run(
         &self,
         k8s_node: &str,
@@ -395,25 +481,8 @@ impl ClusterSwarmKube {
         job_name: &str,
     ) -> Result<()> {
         let back_off_limit = 0;
-        let suffix = thread_rng()
-            .sample_iter(&Alphanumeric)
-            .take(10)
-            .collect::<String>()
-            .to_ascii_lowercase();
-        let job_full_name = format!("{}-{}", job_name, suffix);
-        let job_yaml = format!(
-            include_str!("job_template.yaml"),
-            name = &job_full_name,
-            label = job_name,
-            image = docker_image,
-            node_name = k8s_node,
-            command = command,
-            back_off_limit = back_off_limit,
-        );
-        let job_spec: serde_yaml::Value = serde_yaml::from_str(&job_yaml)?;
-        let job_spec = serde_json::value::to_value(job_spec)?;
-        let job_spec = serde_json::from_value(job_spec)
-            .map_err(|e| format_err!("serde_json::from_value failed: {}", e))?;
+        let (job_spec, _) =
+            self.job_spec(k8s_node, docker_image, command, job_name, back_off_limit)?;
         debug!("Running job {} for node {}", job_name, k8s_node);
         self.run_jobs(vec![job_spec], back_off_limit).await
     }
@@ -668,38 +737,6 @@ impl ClusterSwarmKube {
         .await
     }
 
-    async fn put_file(
-        &self,
-        node: &str,
-        pod_name: &str,
-        path: &str,
-        content: Vec<u8>,
-    ) -> Result<()> {
-        let bucket = "toro-cluster-test-flamegraphs";
-        let run_id = env::var("RUN_ID").expect("RUN_ID is not set.");
-        self.s3_client
-            .put_object(PutObjectRequest {
-                bucket: bucket.to_string(),
-                key: format!("data/{}/{}/{}", run_id, pod_name, path),
-                body: Some(content.into()),
-                ..Default::default()
-            })
-            .await?;
-        self.util_cmd(
-            format!(
-                "aws s3 cp s3://{}/data/{}/{}/{path} {path}",
-                bucket,
-                run_id,
-                pod_name,
-                path = path
-            ),
-            node,
-            "put-file",
-        )
-        .await?;
-        Ok(())
-    }
-
     async fn config_fluentbit(&self, input_tag: &str, pod_name: &str, node: &str) -> Result<()> {
         let parsers_config = include_str!("fluent-bit/parsers.conf").to_string();
         let fluentbit_config = format!(
@@ -750,6 +787,47 @@ impl ClusterSwarm for ClusterSwarmKube {
             "http://grafana.{}-k8s-testnet.aws.hlw3truzy4ls.com",
             workspace
         ))
+    }
+
+    async fn put_file(
+        &self,
+        node: &str,
+        pod_name: &str,
+        path: &str,
+        content: Vec<u8>,
+    ) -> Result<()> {
+        let bucket = "toro-cluster-test-flamegraphs";
+        let run_id = env::var("RUN_ID").expect("RUN_ID is not set.");
+        libra_retrier::retry_async(libra_retrier::fixed_retry_strategy(5000, 15), || {
+            let run_id = &run_id;
+            let content = content.clone();
+            Box::pin(async move {
+                self.s3_client
+                    .put_object(PutObjectRequest {
+                        bucket: bucket.to_string(),
+                        key: format!("data/{}/{}/{}", run_id, pod_name, path),
+                        body: Some(content.into()),
+                        ..Default::default()
+                    })
+                    .await
+                    .map_err(|e| format_err!("put_object failed : {}", e))
+            })
+        })
+        .await?;
+        self.util_cmd(
+            format!(
+                "aws s3 cp s3://{}/data/{}/{}/{path} {path}",
+                bucket,
+                run_id,
+                pod_name,
+                path = path
+            ),
+            node,
+            "put-file",
+        )
+        .await
+        .map_err(|e| format_err!("aws s3 cp failed : {}", e))?;
+        Ok(())
     }
 }
 
