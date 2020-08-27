@@ -25,6 +25,7 @@ use libra_json_rpc_client::{
     JsonRpcAsyncClient, JsonRpcBatch, JsonRpcResponse, ResponseAsView,
 };
 use libra_mempool::SubmissionStatus;
+use libra_metrics::get_all_metrics;
 use libra_proptest_helpers::ValueGenerator;
 use libra_types::{
     account_address::AccountAddress,
@@ -658,7 +659,8 @@ fn test_json_rpc_protocol() {
               "libra_ledger_version": version,
               "result": {
                 "timestamp": timestamp,
-                "version": version
+                "version": version,
+                "chain_id": ChainId::test().id(),
               }
             }),
         ),
@@ -673,7 +675,8 @@ fn test_json_rpc_protocol() {
               "libra_ledger_version": version,
               "result": {
                 "timestamp": 0,
-                "version": 0
+                "version": 0,
+                "chain_id": ChainId::test().id(),
               }
             }),
         ),
@@ -730,8 +733,8 @@ fn test_json_rpc_protocol() {
                     "received_events_key": "0100000000000000000000000000000000000000000000dd",
                     "role": {
                         "type": "designated_dealer",
-                        "base_url": "https://libra.org",
-                        "compliance_key": "f66bf0ce5ceb582b93d6780820c2025b9967aedaa259bdbb9f3d0297eced0e18",
+                        "base_url": "",
+                        "compliance_key": "",
                         "expiration_time": 18446744073709551615 as u64,
                         "human_name": "moneybags",
                         "preburn_balances": [
@@ -759,6 +762,54 @@ fn test_json_rpc_protocol() {
         assert_eq!(resp.status(), 200);
         let resp_json: serde_json::Value = resp.json().unwrap();
         assert_eq!(expected, resp_json, "test: {}", name);
+    }
+}
+
+#[test]
+fn test_metrics() {
+    let (_mock_db, _runtime, url, _) = create_db_and_runtime();
+    let calls = vec![
+        (
+            "success single call",
+            json!({"jsonrpc": "2.0", "method": "get_currencies", "params": [], "id": 1}),
+        ),
+        (
+            "success batch call",
+            json!([
+                {"jsonrpc": "2.0", "method": "get_currencies", "params": [], "id": 1},
+                {"jsonrpc": "2.0", "method": "get_currencies", "params": [], "id": 2}
+            ]),
+        ),
+        (
+            "invalid param call",
+            json!({"jsonrpc": "2.0", "method": "get_currencies", "params": ["invalid"], "id": 1}),
+        ),
+    ];
+    let client = reqwest::blocking::Client::new();
+    for (_name, request) in calls {
+        let _ = client.post(&url).json(&request).send();
+    }
+
+    let metrics = get_all_metrics();
+    let expected_metrics = vec![
+        // requests count
+        "libra_client_service_requests_count{result=success,type=get_currencies}",
+        // method latency
+        "libra_client_service_method_latency_seconds{method=get_currencies,type=single}",
+        "libra_client_service_method_latency_seconds{method=get_currencies,type=batch}",
+        // request latency
+        "libra_client_service_request_latency_seconds{type=single}",
+        "libra_client_service_request_latency_seconds{type=batch}",
+        // invalid params
+        "libra_client_service_invalid_requests_count{type=invalid_params}",
+    ];
+    for name in expected_metrics {
+        assert!(
+            metrics.contains_key(name),
+            "metrics {} not found in {:?}",
+            name,
+            metrics
+        );
     }
 }
 

@@ -1,7 +1,7 @@
 //! account: validatorvivian, 10000000Coin1, 0, validator
-//! account: bob, 100000000Coin1, 0, unhosted
-//! account: alice, 100000000Coin1, 0, unhosted
-//! account: otherblessed, 0Coin1, 0, unhosted
+//! account: bob, 100000000Coin1, 0
+//! account: alice, 100000000Coin1, 0
+//! account: otherblessed, 0Coin1, 0
 //! account: otherbob, 0Coin1, 0, address
 
 //! account: moneybags, 1000000000000Coin1
@@ -244,6 +244,6 @@ script {
 //! new-transaction
 //! sender: libraroot
 //! type-args: 0x1::Coin1::Coin1
-//! args: 0, {{otherbob}}, {{otherbob::auth_key}}, b"bob", b"boburl", x"7013b6ed7dde3cfb1251db1b04ae9cd7853470284085693590a75def645a926d", true
+//! args: 0, {{otherbob}}, {{otherbob::auth_key}}, b"bob", true
 stdlib_script::create_parent_vasp_account
 //! check: EXECUTED

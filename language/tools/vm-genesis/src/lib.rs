@@ -45,7 +45,7 @@ use once_cell::sync::Lazy;
 use rand::prelude::*;
 use std::{collections::btree_map::BTreeMap, convert::TryFrom};
 use transaction_builder::encode_create_designated_dealer_script;
-use vm::CompiledModule;
+use vm::{file_format::SignatureToken, CompiledModule};
 
 // The seed is arbitrarily picked to produce a consistent key. XXX make this more formal?
 const GENESIS_SEED: [u8; 32] = [42; 32];
@@ -167,7 +167,7 @@ pub fn encode_genesis_change_set(
     (ChangeSet::new(write_set, events), type_mapping)
 }
 
-/// Convert the transaction arguments into move values.
+/// Convert the transaction arguments into Move values.
 fn convert_txn_args(args: &[TransactionArgument]) -> Vec<Value> {
     args.iter()
         .map(|arg| match arg {
@@ -230,8 +230,14 @@ fn create_and_initialize_main_accounts(
     let root_libra_root_address = account_config::libra_root_address();
     let tc_account_address = account_config::treasury_compliance_account_address();
 
-    let option_bytes =
-        lcs::to_bytes(&publishing_option).expect("Cannot serialize publishing option");
+    let initial_allow_list = Value::constant_vector_generic(
+        publishing_option
+            .script_allow_list
+            .into_iter()
+            .map(|hash| Value::vector_u8(hash.to_vec().into_iter())),
+        &Box::new(SignatureToken::Vector(Box::new(SignatureToken::U8))),
+    )
+    .unwrap();
 
     exec_function(
         session,
@@ -244,7 +250,8 @@ fn create_and_initialize_main_accounts(
             Value::transaction_argument_signer_reference(tc_account_address),
             Value::address(tc_account_address),
             Value::vector_u8(genesis_auth_key.to_vec()),
-            Value::vector_u8(option_bytes),
+            initial_allow_list,
+            Value::bool(publishing_option.is_open_module),
             Value::vector_u8(INITIAL_GAS_SCHEDULE.0.clone()),
             Value::vector_u8(INITIAL_GAS_SCHEDULE.1.clone()),
             Value::u8(chain_id.id()),
@@ -287,10 +294,8 @@ fn create_and_initialize_testnet_minting(
         0,
         account_config::testnet_dd_account_address(),
         genesis_auth_key.prefix().to_vec(),
-        b"moneybags".to_vec(),          // name
-        b"https://libra.org".to_vec(),  // base_url
-        public_key.to_bytes().to_vec(), // compliance_public_key
-        true,                           // add_all_currencies
+        b"moneybags".to_vec(), // name
+        true,                  // add_all_currencies
     );
 
     let mint_max_coin1 = transaction_builder::encode_tiered_mint_script(

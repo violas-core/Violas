@@ -1,5 +1,5 @@
 //! account: parent, 0, 0, address
-//! account: bob, 10000000, 0, unhosted
+//! account: bob, 10000000
 
 // create a parent VASP
 //! new-transaction
@@ -11,7 +11,6 @@ use 0x1::LibraAccount;
 use 0x1::LibraTimestamp;
 use 0x1::VASP;
 fun main(lr_account: &signer) {
-    let pubkey = x"7013b6ed7dde3cfb1251db1b04ae9cd7853470284085693590a75def645a926d";
     let add_all_currencies = false;
 
     LibraAccount::create_parent_vasp_account<LBR>(
@@ -19,8 +18,6 @@ fun main(lr_account: &signer) {
         {{parent}},
         {{parent::auth_key}},
         x"A1",
-        x"A2",
-        copy pubkey,
         add_all_currencies,
     );
 
@@ -29,9 +26,9 @@ fun main(lr_account: &signer) {
     assert(!VASP::is_child({{parent}}), 2003);
 
     assert(VASP::parent_address({{parent}}) == {{parent}}, 2005);
-    assert(DualAttestation::compliance_public_key({{parent}}) == copy pubkey, 2006);
+    assert(DualAttestation::compliance_public_key({{parent}}) == x"", 2006);
     assert(DualAttestation::human_name({{parent}}) == x"A1", 2007);
-    assert(DualAttestation::base_url({{parent}}) == x"A2", 2008);
+    assert(DualAttestation::base_url({{parent}}) == x"", 2008);
     assert(
         DualAttestation::expiration_date({{parent}}) > LibraTimestamp::now_microseconds(),
         2009
@@ -89,7 +86,7 @@ fun main() {
     assert(VASP::parent_address({{bob}}) == {{parent}}, 2016);
 }
 }
-// check: "Keep(ABORTED { code: 88,"
+// check: "Keep(ABORTED { code: 775,"
 
 //! new-transaction
 //! sender: libraroot
@@ -99,7 +96,7 @@ fun main(account: &signer) {
     VASP::initialize(account)
 }
 }
-// check: "Keep(ABORTED { code: 0,"
+// check: "Keep(ABORTED { code: 1,"
 
 //! new-transaction
 script {
@@ -110,7 +107,7 @@ fun main(account: &signer) {
     VASP::initialize(account);
 }
 }
-// check: "Keep(ABORTED { code: 3,"
+// check: "Keep(ABORTED { code: 2,"
 
 //! new-transaction
 //! sender: libraroot
@@ -121,7 +118,7 @@ fun main(account: &signer) {
     abort 99
 }
 }
-// check: "Keep(ABORTED { code: 4,"
+// check: "Keep(ABORTED { code: 771,"
 
 //! new-transaction
 //! sender: blessed
@@ -131,7 +128,7 @@ fun main(account: &signer) {
     VASP::publish_parent_vasp_credential(account, account);
 }
 }
-// check: "Keep(ABORTED { code: 3,"
+// check: "Keep(ABORTED { code: 2,"
 
 //! new-transaction
 //! sender: blessed
@@ -141,7 +138,7 @@ fun main(account: &signer) {
     VASP::publish_child_vasp_credential(account, account);
 }
 }
-// check: "Keep(ABORTED { code: 4,"
+// check: "Keep(ABORTED { code: 771,"
 
 //! new-transaction
 //! sender: blessed
@@ -151,7 +148,7 @@ fun main(account: &signer) {
     VASP::publish_child_vasp_credential(account, account);
 }
 }
-// check: "Keep(ABORTED { code: 4,"
+// check: "Keep(ABORTED { code: 771,"
 
 //! new-transaction
 //! sender: parent
@@ -161,7 +158,7 @@ fun main(account: &signer) {
     VASP::publish_child_vasp_credential(account, account);
 }
 }
-// check: "Keep(ABORTED { code: 7,"
+// check: "Keep(ABORTED { code: 262,"
 
 //! new-transaction
 //! sender: parent

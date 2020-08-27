@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{
+    account_resource::SimplifiedAccountResource,
     command::{Command, CommandName},
     validator_config::DecryptedValidatorConfig,
     validator_set::DecryptedValidatorInfo,
@@ -26,6 +27,25 @@ pub struct OperationalTool {
 impl OperationalTool {
     pub fn new(host: String, chain_id: ChainId) -> OperationalTool {
         OperationalTool { host, chain_id }
+    }
+
+    pub fn account_resource(
+        &self,
+        account_address: AccountAddress,
+    ) -> Result<SimplifiedAccountResource, Error> {
+        let args = format!(
+            "
+                {command}
+                --json-server {json_server}
+                --account-address {account_address}
+            ",
+            command = command(TOOL_NAME, CommandName::AccountResource),
+            json_server = self.host,
+            account_address = account_address,
+        );
+
+        let command = Command::from_iter(args.split_whitespace());
+        command.account_resource()
     }
 
     pub fn set_validator_config(

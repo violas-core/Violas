@@ -54,6 +54,7 @@ mod error;
 mod tests;
 
 pub use self::error::PeerManagerError;
+use crate::logging::network_events::{CONNECTION_METADATA, TRANSPORT_EVENT, TYPE};
 use serde::export::Formatter;
 
 /// Request received by PeerManager from upstream actors.
@@ -385,7 +386,7 @@ where
     /// Start listening on the set address and return a future which runs PeerManager
     pub async fn start(mut self) {
         // Start listening for connections.
-        send_struct_log!(
+        sl_info!(
             network_log(network_events::PEER_MANAGER_LOOP, &self.network_context)
                 .data(network_events::TYPE, network_events::START)
         );
@@ -393,21 +394,21 @@ where
         loop {
             ::futures::select! {
                 connection_event = self.transport_notifs_rx.select_next_some() => {
-                    send_struct_log!(network_log(network_events::PEER_MANAGER_LOOP, &self.network_context)
+                    sl_trace!(network_log(network_events::PEER_MANAGER_LOOP, &self.network_context)
                         .data(network_events::TYPE, "connection_event")
                         .data(network_events::EVENT, &connection_event)
                     );
                     self.handle_connection_event(connection_event);
                 }
                 request = self.requests_rx.select_next_some() => {
-                    send_struct_log!(network_log(network_events::PEER_MANAGER_LOOP, &self.network_context)
+                    sl_trace!(network_log(network_events::PEER_MANAGER_LOOP, &self.network_context)
                         .data(network_events::TYPE, "request")
                         .field(network_events::PEER_MANAGER_REQUEST, &request)
                     );
                     self.handle_request(request).await;
                 }
                 connection_request = self.connection_reqs_rx.select_next_some() => {
-                    send_struct_log!(network_log(network_events::PEER_MANAGER_LOOP, &self.network_context)
+                    sl_trace!(network_log(network_events::PEER_MANAGER_LOOP, &self.network_context)
                         .data(network_events::TYPE, "connection_request")
                         .field(network_events::CONNECTION_REQUEST, &connection_request)
                     );
@@ -415,11 +416,9 @@ where
                 }
                 complete => {
                     // TODO: This should be ok when running in client mode.
-                    send_struct_log!(network_log(network_events::PEER_MANAGER_LOOP, &self.network_context)
+                    sl_error!(network_log(network_events::PEER_MANAGER_LOOP, &self.network_context)
                         .data(network_events::TYPE, network_events::TERMINATION)
-                        .critical()
                     );
-                    crit!("{} Peer manager actor terminated", self.network_context);
                     break;
                 }
             }
@@ -434,10 +433,13 @@ where
         );
         match event {
             TransportNotification::NewConnection(conn) => {
-                info!(
-                    "{} New connection established: {:?}",
-                    self.network_context, conn,
-                );
+                sl_info!(network_log(TRANSPORT_EVENT, &self.network_context)
+                    .log(format!(
+                        "{} New connection established: {}",
+                        self.network_context, conn.metadata
+                    ))
+                    .field(CONNECTION_METADATA, &conn.metadata)
+                    .data(TYPE, "connected"));
                 // Update libra_network_peer counter.
                 self.add_peer(conn);
                 self.update_connected_peers_metrics();
@@ -445,10 +447,14 @@ where
             TransportNotification::Disconnected(lost_conn_metadata, reason) => {
                 // See: https://github.com/libra/libra/issues/3128#issuecomment-605351504 for
                 // detailed reasoning on `Disconnected` events should be handled correctly.
-                info!(
-                    "{} Connection {} closed due to {}",
-                    self.network_context, lost_conn_metadata, reason,
-                );
+                sl_info!(network_log(TRANSPORT_EVENT, &self.network_context)
+                    .log(format!(
+                        "{} Connection {} closed due to {}",
+                        self.network_context, lost_conn_metadata, reason
+                    ))
+                    .field(CONNECTION_METADATA, &lost_conn_metadata)
+                    .data("reason", reason)
+                    .data(TYPE, "disconnected"));
                 let peer_id = lost_conn_metadata.peer_id();
                 // If the active connection with the peer is lost, remove it from `active_peers`.
                 if let Entry::Occupied(entry) = self.active_peers.entry(peer_id) {

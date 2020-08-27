@@ -6,6 +6,9 @@
 ### Table of Contents
 
 -  [Struct `MultiEd25519PublicKey`](#0x1_Authenticator_MultiEd25519PublicKey)
+-  [Const `EZERO_THRESHOLD`](#0x1_Authenticator_EZERO_THRESHOLD)
+-  [Const `ENOT_ENOUGH_KEYS_FOR_THRESHOLD`](#0x1_Authenticator_ENOT_ENOUGH_KEYS_FOR_THRESHOLD)
+-  [Const `ENUM_KEYS_ABOVE_MAX_THRESHOLD`](#0x1_Authenticator_ENUM_KEYS_ABOVE_MAX_THRESHOLD)
 -  [Function `create_multi_ed25519`](#0x1_Authenticator_create_multi_ed25519)
 -  [Function `ed25519_authentication_key`](#0x1_Authenticator_ed25519_authentication_key)
 -  [Function `multi_ed25519_authentication_key`](#0x1_Authenticator_multi_ed25519_authentication_key)
@@ -49,6 +52,45 @@
 
 </details>
 
+<a name="0x1_Authenticator_EZERO_THRESHOLD"></a>
+
+## Const `EZERO_THRESHOLD`
+
+Threshold provided was 0 which can't be used to create a
+<code>MultiEd25519</code> key
+
+
+<pre><code><b>const</b> EZERO_THRESHOLD: u64 = 0;
+</code></pre>
+
+
+
+<a name="0x1_Authenticator_ENOT_ENOUGH_KEYS_FOR_THRESHOLD"></a>
+
+## Const `ENOT_ENOUGH_KEYS_FOR_THRESHOLD`
+
+Not enough keys were provided for the specified threshold when creating an
+<code>MultiEd25519</code> key
+
+
+<pre><code><b>const</b> ENOT_ENOUGH_KEYS_FOR_THRESHOLD: u64 = 1;
+</code></pre>
+
+
+
+<a name="0x1_Authenticator_ENUM_KEYS_ABOVE_MAX_THRESHOLD"></a>
+
+## Const `ENUM_KEYS_ABOVE_MAX_THRESHOLD`
+
+Too many keys were provided for the specified threshold when creating an
+<code>MultiEd25519</code> key
+
+
+<pre><code><b>const</b> ENUM_KEYS_ABOVE_MAX_THRESHOLD: u64 = 2;
+</code></pre>
+
+
+
 <a name="0x1_Authenticator_create_multi_ed25519"></a>
 
 ## Function `create_multi_ed25519`
@@ -70,11 +112,14 @@
 ): <a href="#0x1_Authenticator_MultiEd25519PublicKey">MultiEd25519PublicKey</a> {
     // check theshold requirements
     <b>let</b> len = <a href="Vector.md#0x1_Vector_length">Vector::length</a>(&public_keys);
-    <b>assert</b>(threshold != 0, EZERO_THRESHOLD);
-    <b>assert</b>((threshold <b>as</b> u64) &lt;= len, ENOT_ENOUGH_KEYS_FOR_THRESHOLD);
+    <b>assert</b>(threshold != 0, <a href="Errors.md#0x1_Errors_invalid_argument">Errors::invalid_argument</a>(EZERO_THRESHOLD));
+    <b>assert</b>(
+        (threshold <b>as</b> u64) &lt;= len,
+        <a href="Errors.md#0x1_Errors_invalid_argument">Errors::invalid_argument</a>(ENOT_ENOUGH_KEYS_FOR_THRESHOLD)
+    );
     // TODO: add constant MULTI_ED25519_MAX_KEYS
     // the multied25519 signature scheme allows at most 32 keys
-    <b>assert</b>(len &lt;= 32, ENUM_KEYS_ABOVE_MAX_THRESHOLD);
+    <b>assert</b>(len &lt;= 32, <a href="Errors.md#0x1_Errors_invalid_argument">Errors::invalid_argument</a>(ENUM_KEYS_ABOVE_MAX_THRESHOLD));
 
     <a href="#0x1_Authenticator_MultiEd25519PublicKey">MultiEd25519PublicKey</a> { public_keys, threshold }
 }

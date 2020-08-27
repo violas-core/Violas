@@ -4,11 +4,14 @@
 use crate::common::{make_abi_enum_container, mangle_type, type_not_allowed};
 use libra_types::transaction::{ArgumentABI, ScriptABI, TypeArgumentABI};
 use move_core_types::language_storage::TypeTag;
-use serde_generate::indent::{IndentConfig, IndentedWriter};
+use serde_generate::{
+    indent::{IndentConfig, IndentedWriter},
+    java, CodeGeneratorConfig,
+};
 
 use heck::{CamelCase, ShoutySnakeCase};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     io::{Result, Write},
     path::PathBuf,
 };
@@ -18,7 +21,7 @@ use std::{
 /// package name (if any, otherwise `install_dir` it self).
 pub fn write_source_files(
     install_dir: std::path::PathBuf,
-    package_name: Option<&str>,
+    package_name: &str,
     abis: &[ScriptABI],
 ) -> Result<()> {
     write_script_call_files(install_dir.clone(), package_name, abis)?;
@@ -28,15 +31,13 @@ pub fn write_source_files(
 /// Output transaction helper functions for the given ABIs.
 fn write_helper_file(
     install_dir: std::path::PathBuf,
-    package_name: Option<&str>,
+    package_name: &str,
     abis: &[ScriptABI],
 ) -> Result<()> {
     let mut dir_path = install_dir;
-    if let Some(package) = package_name {
-        let parts = package.split('.').collect::<Vec<_>>();
-        for part in &parts {
-            dir_path = dir_path.join(part);
-        }
+    let parts = package_name.split('.').collect::<Vec<_>>();
+    for part in &parts {
+        dir_path = dir_path.join(part);
     }
     std::fs::create_dir_all(&dir_path)?;
 
@@ -66,7 +67,7 @@ fn write_helper_file(
     // Must be defined after the constants.
     emitter.output_decoder_map(abis)?;
 
-    emitter.output_decoding_helpers()?;
+    emitter.output_decoding_helpers(abis)?;
 
     emitter.out.unindent();
     writeln!(emitter.out, "\n}}\n")
@@ -74,7 +75,7 @@ fn write_helper_file(
 
 fn write_script_call_files(
     install_dir: std::path::PathBuf,
-    package_name: Option<&str>,
+    package_name: &str,
     abis: &[ScriptABI],
 ) -> Result<()> {
     let external_definitions = crate::common::get_external_definitions("org.libra.types");
@@ -85,10 +86,10 @@ fn write_script_call_files(
     let mut comments: BTreeMap<_, _> = abis
         .iter()
         .map(|abi| {
-            let mut paths = match package_name {
-                None => Vec::new(),
-                Some(name) => name.split('.').map(String::from).collect(),
-            };
+            let mut paths = package_name
+                .split('.')
+                .map(String::from)
+                .collect::<Vec<_>>();
             paths.push("ScriptCall".to_string());
             paths.push(abi.name().to_camel_case());
             (paths, crate::common::prepare_doc_string(abi.doc()))
@@ -98,15 +99,14 @@ fn write_script_call_files(
         vec!["ScriptCall".to_string()],
         "Structured representation of a call into a known Move script.".into(),
     );
-    serde_generate::java::write_source_files(
-        install_dir,
-        package_name,
-        /* with serialization */ false,
-        &script_registry,
-        &external_definitions,
-        &comments,
-    )
-    .map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, format!("{}", err)))?;
+
+    let config = CodeGeneratorConfig::new(package_name.to_string())
+        .with_comments(comments)
+        .with_external_definitions(external_definitions)
+        .with_serialization(false);
+    java::CodeGenerator::new(&config)
+        .write_source_files(install_dir, &script_registry)
+        .map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, format!("{}", err)))?;
     Ok(())
 }
 
@@ -115,7 +115,7 @@ struct JavaEmitter<'a, T> {
     /// Writer.
     out: IndentedWriter<T>,
     /// Name of the package owning the generated definitions (e.g. "com.facebook.my_package")
-    package_name: Option<&'a str>,
+    package_name: &'a str,
 }
 
 impl<'a, T> JavaEmitter<'a, T>
@@ -123,9 +123,7 @@ where
     T: Write,
 {
     fn output_preamble(&mut self) -> Result<()> {
-        if let Some(name) = self.package_name {
-            writeln!(self.out, "package {};\n", name)?;
-        }
+        writeln!(self.out, "package {};\n", self.package_name)?;
         writeln!(
             self.out,
             r#"
@@ -316,52 +314,50 @@ private static java.util.Map<Bytes, DecodingHelper> initDecoderMap() {{"#
         writeln!(self.out, "}}")
     }
 
-    fn output_decoding_helpers(&mut self) -> Result<()> {
+    fn output_decoding_helpers(&mut self, abis: &[ScriptABI]) -> Result<()> {
+        let mut required_types = BTreeSet::new();
+        for abi in abis {
+            for arg in abi.args() {
+                let type_tag = arg.type_tag();
+                required_types.insert(type_tag);
+            }
+        }
+        for required_type in required_types {
+            self.output_decoding_helper(required_type)?;
+        }
+        Ok(())
+    }
+
+    fn output_decoding_helper(&mut self, type_tag: &TypeTag) -> Result<()> {
+        use TypeTag::*;
+        let (constructor, expr) = match type_tag {
+            Bool => ("Bool", String::new()),
+            U8 => ("U8", String::new()),
+            U64 => ("U64", String::new()),
+            U128 => ("U128", String::new()),
+            Address => ("Address", String::new()),
+            Vector(type_tag) => match type_tag.as_ref() {
+                U8 => ("U8Vector", String::new()),
+                _ => type_not_allowed(type_tag),
+            },
+            Struct(_) | Signer => type_not_allowed(type_tag),
+        };
         writeln!(
             self.out,
             r#"
-private static Boolean decode_bool_argument(TransactionArgument arg) {{
-    if (!(arg instanceof TransactionArgument.Bool)) {{
-        throw new IllegalArgumentException("Was expecting a Bool argument");
+private static {} decode_{}_argument(TransactionArgument arg) {{
+    if (!(arg instanceof TransactionArgument.{})) {{
+        throw new IllegalArgumentException("Was expecting a {} argument");
     }}
-    return ((TransactionArgument.Bool) arg).value;
+    return ((TransactionArgument.{}) arg).value{};
 }}
-
-private static @com.facebook.serde.Unsigned Byte decode_u8_argument(TransactionArgument arg) {{
-    if (!(arg instanceof TransactionArgument.U8)) {{
-        throw new IllegalArgumentException("Was expecting a U8 argument");
-    }}
-    return ((TransactionArgument.U8) arg).value;
-}}
-
-private static @com.facebook.serde.Unsigned Long decode_u64_argument(TransactionArgument arg) {{
-    if (!(arg instanceof TransactionArgument.U64)) {{
-        throw new IllegalArgumentException("Was expecting a U64 argument");
-    }}
-    return ((TransactionArgument.U64) arg).value;
-}}
-
-private static @com.facebook.serde.Unsigned @com.facebook.serde.Int128 BigInteger decode_u128_argument(TransactionArgument arg) {{
-    if (!(arg instanceof TransactionArgument.U128)) {{
-        throw new IllegalArgumentException("Was expecting a U128 argument");
-    }}
-    return ((TransactionArgument.U128) arg).value;
-}}
-
-private static AccountAddress decode_address_argument(TransactionArgument arg) {{
-    if (!(arg instanceof TransactionArgument.Address)) {{
-        throw new IllegalArgumentException("Was expecting an Address argument");
-    }}
-    return ((TransactionArgument.Address) arg).value;
-}}
-
-private static Bytes decode_u8vector_argument(TransactionArgument arg) {{
-    if (!(arg instanceof TransactionArgument.U8Vector)) {{
-        throw new IllegalArgumentException("Was expecting a U8Vector argument");
-    }}
-    return ((TransactionArgument.U8Vector) arg).value;
-}}
-"#
+"#,
+            Self::quote_type(type_tag),
+            mangle_type(type_tag),
+            constructor,
+            constructor,
+            constructor,
+            expr,
         )
     }
 
@@ -466,7 +462,7 @@ impl crate::SourceInstaller for Installer {
         package_name: &str,
         abis: &[ScriptABI],
     ) -> std::result::Result<(), Self::Error> {
-        write_source_files(self.install_dir.clone(), Some(package_name), abis)?;
+        write_source_files(self.install_dir.clone(), package_name, abis)?;
         Ok(())
     }
 }

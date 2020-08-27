@@ -10,8 +10,7 @@ fun main(account: &signer) {
     Roles::grant_libra_root_role(account);
 }
 }
-// check: ABORTED
-// check: "code: 0"
+// check: "Keep(ABORTED { code: 1,"
 
 //! new-transaction
 //! sender: libraroot
@@ -21,8 +20,7 @@ fun main(account: &signer) {
     Roles::grant_treasury_compliance_role(account, account);
 }
 }
-// check: ABORTED
-// check: "code: 0"
+// check: "Keep(ABORTED { code: 1,"
 
 //! new-transaction
 //! sender: libraroot
@@ -32,8 +30,7 @@ fun main(account: &signer) {
     Roles::new_designated_dealer_role(account, account);
 }
 }
-// check: ABORTED
-// check: "code: 4"
+// check: "Keep(ABORTED { code: 258,"
 
 //! new-transaction
 //! sender: libraroot
@@ -43,8 +40,7 @@ fun main(account: &signer) {
     Roles::new_designated_dealer_role(account, account);
 }
 }
-// check: ABORTED
-// check: "code: 4"
+// check: "Keep(ABORTED { code: 258,"
 
 //! new-transaction
 //! sender: libraroot
@@ -57,14 +53,11 @@ fun main(account: &signer) {
         {{bob}},
         {{bob::auth_key}},
         b"bob",
-        b"boburl",
-        x"",
         false
     );
 }
 }
-// check: ABORTED
-// check: "code: 3"
+// check: "Keep(ABORTED { code: 258,"
 
 //! new-transaction
 //! sender: blessed
@@ -79,8 +72,7 @@ fun main(account: &signer) {
     );
 }
 }
-// check: ABORTED
-// check: "code: 3"
+// check: "Keep(ABORTED { code: 2,"
 
 //! new-transaction
 //! sender: libraroot
@@ -90,8 +82,7 @@ fun main(account: &signer) {
     Roles::new_validator_role(account, account);
 }
 }
-// check: ABORTED
-// check: "code: 4"
+// check: "Keep(ABORTED { code: 6,"
 
 //! new-transaction
 //! sender: blessed
@@ -106,8 +97,7 @@ fun main(account: &signer) {
     );
 }
 }
-// check: ABORTED
-// check: "code: 3"
+// check: "Keep(ABORTED { code: 2,"
 
 //! new-transaction
 //! sender: libraroot
@@ -117,8 +107,7 @@ fun main(account: &signer) {
     Roles::new_validator_operator_role(account, account);
 }
 }
-// check: ABORTED
-// check: "code: 4"
+// check: "Keep(ABORTED { code: 6,"
 
 //! new-transaction
 //! sender: blessed
@@ -131,14 +120,11 @@ fun main(account: &signer) {
         {{bob}},
         {{bob::auth_key}},
         b"bob",
-        b"boburl",
-        x"",
         false
     );
 }
 }
-// check: ABORTED
-// check: "code: 3"
+// check: "Keep(ABORTED { code: 2,"
 
 //! new-transaction
 //! sender: libraroot
@@ -148,8 +134,7 @@ fun main(account: &signer) {
     Roles::new_parent_vasp_role(account, account);
 }
 }
-// check: ABORTED
-// check: "code: 4"
+// check: "Keep(ABORTED { code: 6,"
 
 //! new-transaction
 //! sender: libraroot
@@ -165,14 +150,13 @@ fun main(account: &signer) {
     );
 }
 }
-// check: ABORTED
-// check: "code: 3"
+// check: "Keep(ABORTED { code: 771,"
 
 //! new-transaction
 //! sender: libraroot
 //! type-args: 0x1::Coin1::Coin1
-//! args: {{vasp}}, {{vasp::auth_key}}, true
-stdlib_script::create_testing_account
+//! args: 0, {{vasp}}, {{vasp::auth_key}}, b"vasp", true
+stdlib_script::create_parent_vasp_account
 // check: EXECUTED
 
 //! new-transaction
@@ -183,8 +167,7 @@ fun main(account: &signer) {
     Roles::new_child_vasp_role(account, account);
 }
 }
-// check: ABORTED
-// check: "code: 4"
+// check: "Keep(ABORTED { code: 6,"
 
 //! new-transaction
 //! sender: libraroot

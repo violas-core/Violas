@@ -22,8 +22,7 @@ fun main(account: &signer) {
     AccountFreezing::freeze_account(account, {{bob}});
 }
 }
-// check: ABORTED
-// check: 100
+// check: "Keep(ABORTED { code: 258,"
 
 //! new-transaction
 //! sender: blessed
@@ -76,8 +75,7 @@ fun main(account: &signer) {
     AccountFreezing::freeze_account(account, {{libraroot}});
 }
 }
-// check: ABORTED
-// check: 14
+// check: "Keep(ABORTED { code: 775,"
 
 // TODO: this can go away once //! account works
 // create a parent VASPx
@@ -87,14 +85,11 @@ script {
 use 0x1::LibraAccount;
 use 0x1::LBR::LBR;
 fun main(lr_account: &signer) {
-    let pubkey = x"7013b6ed7dde3cfb1251db1b04ae9cd7853470284085693590a75def645a926d";
     LibraAccount::create_parent_vasp_account<LBR>(
         lr_account,
         {{vasp}},
         {{vasp::auth_key}},
         x"A",
-        x"B",
-        pubkey,
         true,
     );
 }
@@ -146,8 +141,7 @@ script {
         AccountFreezing::freeze_account(account, {{vasp}});
     }
 }
-// check: ABORTED
-// check: "code: 2"
+// check: "Keep(ABORTED { code: 258,"
 
 //! new-transaction
 //! sender: libraroot
@@ -157,8 +151,7 @@ script {
         AccountFreezing::unfreeze_account(account, {{vasp}});
     }
 }
-// check: ABORTED
-// check: "code: 5"
+// check: "Keep(ABORTED { code: 258,"
 
 //! new-transaction
 //! sender: blessed
@@ -168,8 +161,7 @@ script {
         AccountFreezing::freeze_account(account, {{libraroot}});
     }
 }
-// check: ABORTED
-// check: "code: 3"
+// check: "Keep(ABORTED { code: 775,"
 
 //! new-transaction
 //! sender: blessed
@@ -179,8 +171,7 @@ script {
         AccountFreezing::freeze_account(account, {{blessed}});
     }
 }
-// check: ABORTED
-// check: "code: 4"
+// check: "Keep(ABORTED { code: 1031,"
 
 //! new-transaction
 //! sender: libraroot
@@ -190,8 +181,7 @@ script {
         AccountFreezing::initialize(account);
     }
 }
-// check: ABORTED
-// check: "code: 0"
+// check: "Keep(ABORTED { code: 1,"
 
 //! new-transaction
 //! sender: libraroot
@@ -216,6 +206,7 @@ module Holder {
        x
     }
 }
+// check: EXECUTED
 
 //! new-transaction
 //! sender: vasp
@@ -254,7 +245,7 @@ script {
 //! new-transaction
 //! sender: libraroot
 //! type-args: 0x1::Coin1::Coin1
-//! args: 0, {{alice}}, {{alice::auth_key}}, b"bob", b"boburl", x"7013b6ed7dde3cfb1251db1b04ae9cd7853470284085693590a75def645a926d", true
+//! args: 0, {{alice}}, {{alice::auth_key}}, b"bob", true
 stdlib_script::create_parent_vasp_account
 //! check: EXECUTED
 
@@ -270,7 +261,7 @@ script {
         Holder::hold(account, cap);
     }
 }
-// check: "Keep(ABORTED { code: 16,"
+// check: "Keep(ABORTED { code: 1281,"
 
 //! new-transaction
 //! sender: alice
@@ -283,7 +274,7 @@ script {
         LibraAccount::restore_withdraw_capability(cap);
     }
 }
-// check: "Keep(ABORTED { code: 16,"
+// check: "Keep(ABORTED { code: 1281,"
 
 //! new-transaction
 //! sender: alice
@@ -296,4 +287,4 @@ script {
         LibraAccount::restore_withdraw_capability(cap);
     }
 }
-// check: "Keep(ABORTED { code: 16,"
+// check: "Keep(ABORTED { code: 1281,"

@@ -37,8 +37,8 @@ dependencies = [
  "libra-crypto 0.1.0",
  "libra-types 0.1.0",
  "libra-workspace-hack 0.1.0",
- "mirai-annotations 1.9.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "proptest 0.10.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "mirai-annotations 1.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "proptest 0.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.7.3 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
@@ -237,7 +237,7 @@ dependencies = [
  "libra-workspace-hack 0.1.0",
  "libradb 0.1.0",
  "once_cell 1.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "proptest 0.10.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "proptest 0.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.7.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "regex 1.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
  "reqwest 0.10.7 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -419,7 +419,7 @@ name = "borrow-graph"
 version = "0.0.1"
 dependencies = [
  "libra-workspace-hack 0.1.0",
- "mirai-annotations 1.9.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "mirai-annotations 1.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -487,7 +487,7 @@ dependencies = [
  "invalid-mutations 0.1.0",
  "libra-types 0.1.0",
  "libra-workspace-hack 0.1.0",
- "mirai-annotations 1.9.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "mirai-annotations 1.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "move-core-types 0.1.0",
  "petgraph 0.5.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "vm 0.1.0",
@@ -504,7 +504,7 @@ dependencies = [
  "libra-workspace-hack 0.1.0",
  "move-core-types 0.1.0",
  "petgraph 0.5.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "proptest 0.10.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "proptest 0.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "vm 0.1.0",
 ]
 
@@ -636,6 +636,7 @@ dependencies = [
  "anyhow 1.0.32 (registry+https://github.com/rust-lang/crates.io-index)",
  "chrono 0.4.13 (registry+https://github.com/rust-lang/crates.io-index)",
  "compiled-stdlib 0.1.0",
+ "compiler 0.1.0",
  "crash-handler 0.1.0",
  "generate-key 0.1.0",
  "hex 0.4.2 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -651,7 +652,7 @@ dependencies = [
  "libra-wallet 0.1.0",
  "libra-workspace-hack 0.1.0",
  "num-traits 0.2.12 (registry+https://github.com/rust-lang/crates.io-index)",
- "proptest 0.10.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "proptest 0.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "reqwest 0.10.7 (registry+https://github.com/rust-lang/crates.io-index)",
  "resource-viewer 0.1.0",
  "rust_decimal 1.7.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -849,12 +850,12 @@ dependencies = [
  "libra-types 0.1.0",
  "libra-vm 0.1.0",
  "libra-workspace-hack 0.1.0",
- "mirai-annotations 1.9.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "mirai-annotations 1.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "network 0.1.0",
  "num-derive 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "num-traits 0.2.12 (registry+https://github.com/rust-lang/crates.io-index)",
  "once_cell 1.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "proptest 0.10.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "proptest 0.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.7.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "safety-rules 0.1.0",
  "schemadb 0.1.0",
@@ -882,8 +883,8 @@ dependencies = [
  "libra-crypto-derive 0.1.0",
  "libra-types 0.1.0",
  "libra-workspace-hack 0.1.0",
- "mirai-annotations 1.9.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "proptest 0.10.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "mirai-annotations 1.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "proptest 0.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde 1.0.114 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
@@ -1134,6 +1135,7 @@ dependencies = [
  "executor 0.1.0",
  "libra-canonical-serialization 0.1.0",
  "libra-crypto 0.1.0",
+ "libra-temppath 0.1.0",
  "libra-types 0.1.0",
  "libra-vm 0.1.0",
  "libra-workspace-hack 0.1.0",
@@ -1381,6 +1383,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "errmapgen"
+version = "0.1.0"
+dependencies = [
+ "anyhow 1.0.32 (registry+https://github.com/rust-lang/crates.io-index)",
+ "codespan-reporting 0.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "datatest-stable 0.1.0",
+ "libra-canonical-serialization 0.1.0",
+ "libra-types 0.1.0",
+ "libra-workspace-hack 0.1.0",
+ "log 0.4.11 (registry+https://github.com/rust-lang/crates.io-index)",
+ "move-core-types 0.1.0",
+ "move-prover 0.1.0",
+ "serde 1.0.114 (registry+https://github.com/rust-lang/crates.io-index)",
+ "spec-lang 0.1.0",
+ "test-utils 0.1.0",
+]
+
+[[package]]
 name = "execution-correctness"
 version = "0.1.0"
 dependencies = [
@@ -1406,7 +1426,6 @@ dependencies = [
  "storage-client 0.1.0",
  "thiserror 1.0.20 (registry+https://github.com/rust-lang/crates.io-index)",
  "transaction-builder 0.1.0",
- "workspace-builder 0.1.0",
 ]
 
 [[package]]
@@ -1415,6 +1434,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow 1.0.32 (registry+https://github.com/rust-lang/crates.io-index)",
  "compiled-stdlib 0.1.0",
+ "compiler 0.1.0",
  "config-builder 0.1.0",
  "consensus-types 0.1.0",
  "executor-test-helpers 0.1.0",
@@ -1435,7 +1455,7 @@ dependencies = [
  "libradb 0.1.0",
  "move-core-types 0.1.0",
  "once_cell 1.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "proptest 0.10.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "proptest 0.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.7.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "scratchpad 0.1.0",
  "serde_json 1.0.57 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1578,7 +1598,7 @@ dependencies = [
  "libra-types 0.1.0",
  "libra-vm 0.1.0",
  "libra-workspace-hack 0.1.0",
- "mirai-annotations 1.9.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "mirai-annotations 1.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "move-core-types 0.1.0",
  "once_cell 1.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "regex 1.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -2104,7 +2124,7 @@ dependencies = [
  "libra-proptest-helpers 0.1.0",
  "libra-types 0.1.0",
  "libra-workspace-hack 0.1.0",
- "proptest 0.10.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "proptest 0.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "vm 0.1.0",
 ]
 
@@ -2305,7 +2325,7 @@ dependencies = [
  "move-lang 0.0.1",
  "move-vm-runtime 0.1.0",
  "move-vm-types 0.1.0",
- "proptest 0.10.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "proptest 0.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "vm 0.1.0",
 ]
 
@@ -2331,7 +2351,7 @@ dependencies = [
  "move-vm-runtime 0.1.0",
  "move-vm-types 0.1.0",
  "once_cell 1.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "proptest 0.10.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "proptest 0.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "proptest-derive 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.7.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "transaction-builder 0.1.0",
@@ -2357,7 +2377,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
 name = "libfuzzer-sys"
-version = "0.3.3"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "arbitrary 0.4.5 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -2380,7 +2400,7 @@ dependencies = [
  "libra-canonical-serialization 0.1.0",
  "libra-proptest-helpers 0.1.0",
  "libra-workspace-hack 0.1.0",
- "proptest 0.10.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "proptest 0.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde 1.0.114 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde_bytes 0.11.5 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
@@ -2393,7 +2413,7 @@ dependencies = [
  "libra-crypto 0.1.0",
  "libra-crypto-derive 0.1.0",
  "libra-workspace-hack 0.1.0",
- "proptest 0.10.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "proptest 0.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "proptest-derive 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.7.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde 1.0.114 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -2416,7 +2436,7 @@ dependencies = [
  "libra-types 0.1.0",
  "libra-workspace-hack 0.1.0",
  "log 0.4.11 (registry+https://github.com/rust-lang/crates.io-index)",
- "mirai-annotations 1.9.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "mirai-annotations 1.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.7.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde 1.0.114 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde_yaml 0.8.13 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -2444,9 +2464,9 @@ dependencies = [
  "libra-crypto-derive 0.1.0",
  "libra-nibble 0.1.0",
  "libra-workspace-hack 0.1.0",
- "mirai-annotations 1.9.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "mirai-annotations 1.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "once_cell 1.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "proptest 0.10.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "proptest 0.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "proptest-derive 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.7.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand_core 0.5.1 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -2501,7 +2521,7 @@ dependencies = [
  "once_cell 1.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "regex 1.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde 1.0.114 (registry+https://github.com/rust-lang/crates.io-index)",
- "serde-generate 0.9.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "serde-generate 0.11.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde-reflection 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde_yaml 0.8.13 (registry+https://github.com/rust-lang/crates.io-index)",
  "structopt 0.3.15 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -2512,7 +2532,7 @@ dependencies = [
 name = "libra-fuzz"
 version = "0.1.0"
 dependencies = [
- "libfuzzer-sys 0.3.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "libfuzzer-sys 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "libra-fuzzer 0.1.0",
  "libra-workspace-hack 0.1.0",
  "once_cell 1.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -2535,6 +2555,7 @@ dependencies = [
  "libra-json-rpc 0.1.0",
  "libra-mempool 0.1.0",
  "libra-proptest-helpers 0.1.0",
+ "libra-secure-json-rpc 0.1.0",
  "libra-types 0.1.0",
  "libra-workspace-hack 0.1.0",
  "libradb 0.1.0",
@@ -2542,7 +2563,7 @@ dependencies = [
  "move-vm-types 0.1.0",
  "network 0.1.0",
  "once_cell 1.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "proptest 0.10.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "proptest 0.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.7.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "rusty-fork 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "sha-1 0.9.1 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -2550,6 +2571,7 @@ dependencies = [
  "stats_alloc 0.1.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "storage-interface 0.1.0",
  "structopt 0.3.15 (registry+https://github.com/rust-lang/crates.io-index)",
+ "ureq 1.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "vm 0.1.0",
 ]
 
@@ -2613,10 +2635,10 @@ dependencies = [
  "libra-nibble 0.1.0",
  "libra-types 0.1.0",
  "libra-workspace-hack 0.1.0",
- "mirai-annotations 1.9.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "mirai-annotations 1.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "num-derive 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "num-traits 0.2.12 (registry+https://github.com/rust-lang/crates.io-index)",
- "proptest 0.10.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "proptest 0.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "proptest-derive 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.7.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde 1.0.114 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -2651,7 +2673,7 @@ dependencies = [
  "move-vm-types 0.1.0",
  "network 0.1.0",
  "once_cell 1.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "proptest 0.10.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "proptest 0.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.7.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "reqwest 0.10.7 (registry+https://github.com/rust-lang/crates.io-index)",
  "scratchpad 0.1.0",
@@ -2735,10 +2757,12 @@ version = "0.1.0"
 dependencies = [
  "chrono 0.4.13 (registry+https://github.com/rust-lang/crates.io-index)",
  "env_logger 0.7.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "hex 0.4.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "libra-workspace-hack 0.1.0",
  "log 0.4.11 (registry+https://github.com/rust-lang/crates.io-index)",
  "once_cell 1.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "prometheus 0.9.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rand 0.7.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde 1.0.114 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde_json 1.0.57 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
@@ -2793,11 +2817,11 @@ dependencies = [
  "libra-trace 0.1.0",
  "libra-types 0.1.0",
  "libra-workspace-hack 0.1.0",
- "mirai-annotations 1.9.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "mirai-annotations 1.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "netcore 0.1.0",
  "network 0.1.0",
  "once_cell 1.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "proptest 0.10.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "proptest 0.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.7.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde 1.0.114 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde_json 1.0.57 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -2835,7 +2859,7 @@ dependencies = [
  "libra-crypto 0.1.0",
  "libra-workspace-hack 0.1.0",
  "move-core-types 0.1.0",
- "proptest 0.10.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "proptest 0.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "proptest-derive 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde 1.0.114 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde_bytes 0.11.5 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -2848,7 +2872,7 @@ name = "libra-nibble"
 version = "0.1.0"
 dependencies = [
  "libra-workspace-hack 0.1.0",
- "proptest 0.10.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "proptest 0.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde 1.0.114 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
@@ -2895,6 +2919,7 @@ dependencies = [
  "config-builder 0.1.0",
  "executor 0.1.0",
  "generate-key 0.1.0",
+ "hex 0.4.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "libra-canonical-serialization 0.1.0",
  "libra-config 0.1.0",
  "libra-crypto 0.1.0",
@@ -2925,7 +2950,7 @@ version = "0.1.0"
 dependencies = [
  "crossbeam 0.7.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "libra-workspace-hack 0.1.0",
- "proptest 0.10.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "proptest 0.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "proptest-derive 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
@@ -2949,10 +2974,12 @@ dependencies = [
  "libra-config 0.1.0",
  "libra-crypto 0.1.0",
  "libra-json-rpc 0.1.0",
+ "libra-proptest-helpers 0.1.0",
  "libra-temppath 0.1.0",
  "libra-types 0.1.0",
  "libra-workspace-hack 0.1.0",
  "libradb 0.1.0",
+ "proptest 0.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde 1.0.114 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde_json 1.0.57 (registry+https://github.com/rust-lang/crates.io-index)",
  "storage-interface 0.1.0",
@@ -2978,6 +3005,7 @@ version = "0.1.0"
 dependencies = [
  "libra-logger 0.1.0",
  "libra-workspace-hack 0.1.0",
+ "prometheus 0.9.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "ureq 1.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
@@ -2993,6 +3021,7 @@ dependencies = [
  "libra-crypto-derive 0.1.0",
  "libra-github-client 0.1.0",
  "libra-global-constants 0.1.0",
+ "libra-logger 0.1.0",
  "libra-secure-time 0.1.0",
  "libra-temppath 0.1.0",
  "libra-types 0.1.0",
@@ -3084,6 +3113,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "libra-transaction-replay"
+version = "0.1.0"
+dependencies = [
+ "anyhow 1.0.32 (registry+https://github.com/rust-lang/crates.io-index)",
+ "libra-canonical-serialization 0.1.0",
+ "libra-json-rpc-client 0.1.0",
+ "libra-state-view 0.1.0",
+ "libra-types 0.1.0",
+ "libra-vm 0.1.0",
+ "libra-workspace-hack 0.1.0",
+ "libradb 0.1.0",
+ "reqwest 0.10.7 (registry+https://github.com/rust-lang/crates.io-index)",
+ "resource-viewer 0.1.0",
+ "scratchpad 0.1.0",
+ "storage-interface 0.1.0",
+ "structopt 0.3.15 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
 name = "libra-types"
 version = "0.1.0"
 dependencies = [
@@ -3098,10 +3146,10 @@ dependencies = [
  "libra-network-address 0.1.0",
  "libra-proptest-helpers 0.1.0",
  "libra-workspace-hack 0.1.0",
- "mirai-annotations 1.9.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "mirai-annotations 1.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "move-core-types 0.1.0",
  "once_cell 1.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "proptest 0.10.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "proptest 0.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "proptest-derive 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "radix_trie 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.7.3 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -3141,12 +3189,12 @@ dependencies = [
  "libra-trace 0.1.0",
  "libra-types 0.1.0",
  "libra-workspace-hack 0.1.0",
- "mirai-annotations 1.9.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "mirai-annotations 1.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "move-core-types 0.1.0",
  "move-vm-runtime 0.1.0",
  "move-vm-types 0.1.0",
  "once_cell 1.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "proptest 0.10.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "proptest 0.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "rayon 1.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde 1.0.114 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde_json 1.0.57 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -3167,7 +3215,7 @@ dependencies = [
  "libra-temppath 0.1.0",
  "libra-types 0.1.0",
  "libra-workspace-hack 0.1.0",
- "mirai-annotations 1.9.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "mirai-annotations 1.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "pbkdf2 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.7.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde 1.0.114 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -3213,7 +3261,7 @@ dependencies = [
  "num-traits 0.2.12 (registry+https://github.com/rust-lang/crates.io-index)",
  "num-variants 0.1.0",
  "once_cell 1.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "proptest 0.10.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "proptest 0.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "proptest-derive 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.7.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "schemadb 0.1.0",
@@ -3408,7 +3456,7 @@ dependencies = [
 
 [[package]]
 name = "mirai-annotations"
-version = "1.9.1"
+version = "1.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
@@ -3421,9 +3469,9 @@ dependencies = [
  "libra-crypto 0.1.0",
  "libra-crypto-derive 0.1.0",
  "libra-workspace-hack 0.1.0",
- "mirai-annotations 1.9.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "mirai-annotations 1.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "once_cell 1.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "proptest 0.10.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "proptest 0.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "proptest-derive 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.7.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "ref-cast 1.0.2 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -3451,6 +3499,18 @@ dependencies = [
  "serde 1.0.114 (registry+https://github.com/rust-lang/crates.io-index)",
  "structopt 0.3.15 (registry+https://github.com/rust-lang/crates.io-index)",
  "vm 0.1.0",
+]
+
+[[package]]
+name = "move-explain"
+version = "0.1.0"
+dependencies = [
+ "compiled-stdlib 0.1.0",
+ "errmapgen 0.1.0",
+ "libra-canonical-serialization 0.1.0",
+ "libra-workspace-hack 0.1.0",
+ "move-core-types 0.1.0",
+ "structopt 0.3.15 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -3518,6 +3578,7 @@ dependencies = [
  "codespan-reporting 0.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "datatest-stable 0.1.0",
  "docgen 0.1.0",
+ "errmapgen 0.1.0",
  "handlebars 3.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "itertools 0.9.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "libra-temppath 0.1.0",
@@ -3547,7 +3608,7 @@ dependencies = [
  "libra-crypto 0.1.0",
  "libra-types 0.1.0",
  "libra-workspace-hack 0.1.0",
- "mirai-annotations 1.9.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "mirai-annotations 1.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "move-core-types 0.1.0",
  "move-vm-types 0.1.0",
  "once_cell 1.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -3568,13 +3629,13 @@ dependencies = [
  "libra-state-view 0.1.0",
  "libra-types 0.1.0",
  "libra-workspace-hack 0.1.0",
- "mirai-annotations 1.9.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "mirai-annotations 1.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "move-core-types 0.1.0",
  "move-lang 0.0.1",
  "move-vm-natives 0.1.0",
  "move-vm-types 0.1.0",
  "once_cell 1.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "proptest 0.10.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "proptest 0.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "vm 0.1.0",
 ]
 
@@ -3586,10 +3647,10 @@ dependencies = [
  "libra-crypto 0.1.0",
  "libra-types 0.1.0",
  "libra-workspace-hack 0.1.0",
- "mirai-annotations 1.9.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "mirai-annotations 1.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "move-core-types 0.1.0",
  "once_cell 1.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "proptest 0.10.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "proptest 0.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde 1.0.114 (registry+https://github.com/rust-lang/crates.io-index)",
  "sha2 0.9.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "vm 0.1.0",
@@ -3672,7 +3733,7 @@ dependencies = [
  "num-variants 0.1.0",
  "once_cell 1.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "pin-project 0.4.23 (registry+https://github.com/rust-lang/crates.io-index)",
- "proptest 0.10.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "proptest 0.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.7.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand_core 0.5.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde 1.0.114 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -4237,7 +4298,7 @@ dependencies = [
 
 [[package]]
 name = "proptest"
-version = "0.10.0"
+version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "bit-set 0.5.2 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -4927,7 +4988,6 @@ dependencies = [
  "serde 1.0.114 (registry+https://github.com/rust-lang/crates.io-index)",
  "tempfile 3.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "thiserror 1.0.20 (registry+https://github.com/rust-lang/crates.io-index)",
- "workspace-builder 0.1.0",
 ]
 
 [[package]]
@@ -4957,7 +5017,7 @@ dependencies = [
  "libra-temppath 0.1.0",
  "libra-workspace-hack 0.1.0",
  "once_cell 1.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "proptest 0.10.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "proptest 0.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "rocksdb 0.14.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "tempfile 3.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
@@ -4980,7 +5040,7 @@ dependencies = [
  "libra-crypto 0.1.0",
  "libra-types 0.1.0",
  "libra-workspace-hack 0.1.0",
- "proptest 0.10.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "proptest 0.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -5066,7 +5126,7 @@ dependencies = [
 
 [[package]]
 name = "serde-generate"
-version = "0.9.0"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "include_dir 0.6.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -5190,7 +5250,7 @@ name = "serializer-tests"
 version = "0.1.0"
 dependencies = [
  "libra-workspace-hack 0.1.0",
- "proptest 0.10.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "proptest 0.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "proptest-derive 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "vm 0.1.0",
 ]
@@ -5430,7 +5490,7 @@ dependencies = [
  "network 0.1.0",
  "network-builder 0.1.0",
  "once_cell 1.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "proptest 0.10.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "proptest 0.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.7.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde 1.0.114 (registry+https://github.com/rust-lang/crates.io-index)",
  "storage-interface 0.1.0",
@@ -5577,7 +5637,7 @@ dependencies = [
  "libra-types 0.1.0",
  "libra-workspace-hack 0.1.0",
  "libradb 0.1.0",
- "proptest 0.10.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "proptest 0.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.7.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "storage-client 0.1.0",
  "storage-interface 0.1.0",
@@ -5777,7 +5837,7 @@ dependencies = [
  "libra-types 0.1.0",
  "libra-vm 0.1.0",
  "libra-workspace-hack 0.1.0",
- "mirai-annotations 1.9.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "mirai-annotations 1.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "move-core-types 0.1.0",
  "move-vm-types 0.1.0",
  "num_cpus 1.13.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -5805,6 +5865,7 @@ dependencies = [
  "cli 0.1.0",
  "debug-interface 0.1.0",
  "generate-key 0.1.0",
+ "hex 0.4.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "libra-canonical-serialization 0.1.0",
  "libra-config 0.1.0",
  "libra-crypto 0.1.0",
@@ -5822,6 +5883,7 @@ dependencies = [
  "libra-swarm 0.1.0",
  "libra-temppath 0.1.0",
  "libra-trace 0.1.0",
+ "libra-transaction-replay 0.1.0",
  "libra-types 0.1.0",
  "libra-workspace-hack 0.1.0",
  "num 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -6100,7 +6162,7 @@ dependencies = [
  "libra-canonical-serialization 0.1.0",
  "libra-types 0.1.0",
  "libra-workspace-hack 0.1.0",
- "mirai-annotations 1.9.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "mirai-annotations 1.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "move-core-types 0.1.0",
  "transaction-builder-generated 0.1.0",
 ]
@@ -6114,7 +6176,7 @@ dependencies = [
  "libra-workspace-hack 0.1.0",
  "move-core-types 0.1.0",
  "once_cell 1.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "proptest 0.10.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "proptest 0.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "proptest-derive 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde 1.0.114 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
@@ -6129,7 +6191,7 @@ dependencies = [
  "libra-types 0.1.0",
  "libra-workspace-hack 0.1.0",
  "move-core-types 0.1.0",
- "serde-generate 0.9.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "serde-generate 0.11.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde-reflection 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde_yaml 0.8.13 (registry+https://github.com/rust-lang/crates.io-index)",
  "structopt 0.3.15 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -6347,11 +6409,11 @@ dependencies = [
  "libra-crypto 0.1.0",
  "libra-proptest-helpers 0.1.0",
  "libra-workspace-hack 0.1.0",
- "mirai-annotations 1.9.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "mirai-annotations 1.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "move-core-types 0.1.0",
  "num-variants 0.1.0",
  "once_cell 1.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "proptest 0.10.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "proptest 0.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "proptest-derive 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "ref-cast 1.0.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde_json 1.0.57 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -6377,7 +6439,7 @@ dependencies = [
  "move-vm-runtime 0.1.0",
  "move-vm-types 0.1.0",
  "once_cell 1.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "proptest 0.10.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "proptest 0.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "proptest-derive 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.7.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "transaction-builder 0.1.0",
@@ -6901,7 +6963,7 @@ dependencies = [
 "checksum lazy_static 1.4.0 (registry+https://github.com/rust-lang/crates.io-index)" = "e2abad23fbc42b3700f2f279844dc832adb2b2eb069b2df918f455c4e18cc646"
 "checksum lazycell 1.2.1 (registry+https://github.com/rust-lang/crates.io-index)" = "b294d6fa9ee409a054354afc4352b0b9ef7ca222c69b8812cbea9e7d2bf3783f"
 "checksum libc 0.2.74 (registry+https://github.com/rust-lang/crates.io-index)" = "a2f02823cf78b754822df5f7f268fb59822e7296276d3e069d8e8cb26a14bd10"
-"checksum libfuzzer-sys 0.3.3 (registry+https://github.com/rust-lang/crates.io-index)" = "87ccaa86e7872547575190db4f1f915bad8eb0f2ae7491ede35e53ae76abfba9"
+"checksum libfuzzer-sys 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)" = "8d718794b8e23533b9069bd2c4597d69e41cc7ab1c02700a502971aca0cdcf24"
 "checksum libloading 0.5.2 (registry+https://github.com/rust-lang/crates.io-index)" = "f2b111a074963af1d37a139918ac6d49ad1d0d5e47f72fd55388619691a7d753"
 "checksum librocksdb-sys 6.7.4 (registry+https://github.com/rust-lang/crates.io-index)" = "883213ae3d09bfc3d104aefe94b25ebb183b6f4d3a515b23b14817e1f4854005"
 "checksum linked-hash-map 0.5.3 (registry+https://github.com/rust-lang/crates.io-index)" = "8dd5a6d5999d9907cda8ed67bbd137d3af8085216c2ac62de5be860bd41f304a"
@@ -6924,7 +6986,7 @@ dependencies = [
 "checksum mio-uds 0.6.8 (registry+https://github.com/rust-lang/crates.io-index)" = "afcb699eb26d4332647cc848492bbc15eafb26f08d0304550d5aa1f612e066f0"
 "checksum miow 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)" = "8c1f2f3b1cf331de6896aabf6e9d55dca90356cc9960cca7eaaf408a355ae919"
 "checksum miow 0.3.5 (registry+https://github.com/rust-lang/crates.io-index)" = "07b88fb9795d4d36d62a012dfbf49a8f5cf12751f36d31a9dbe66d528e58979e"
-"checksum mirai-annotations 1.9.1 (registry+https://github.com/rust-lang/crates.io-index)" = "54c239a898de56dc502ef97e1ab8fdbd1a7a0de9afc7d8412dd1f8cbda52ee55"
+"checksum mirai-annotations 1.10.1 (registry+https://github.com/rust-lang/crates.io-index)" = "b48e78b8626927bd980dff38d8147006323f5d7634d7bc9e31c3a59e07da1b28"
 "checksum multipart 0.16.1 (registry+https://github.com/rust-lang/crates.io-index)" = "136eed74cadb9edd2651ffba732b19a450316b680e4f48d6c79e905799e19d01"
 "checksum nested 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)" = "ca2b420f638f07fe83056b55ea190bb815f609ec5a35e7017884a10f78839c9e"
 "checksum net2 0.2.34 (registry+https://github.com/rust-lang/crates.io-index)" = "2ba7c918ac76704fb42afcbbb43891e72731f3dcca3bef2a19786297baf14af7"
@@ -6985,7 +7047,7 @@ dependencies = [
 "checksum proc-macro2 0.4.30 (registry+https://github.com/rust-lang/crates.io-index)" = "cf3d2011ab5c909338f7887f4fc896d35932e29146c12c8d01da6b22a80ba759"
 "checksum proc-macro2 1.0.19 (registry+https://github.com/rust-lang/crates.io-index)" = "04f5f085b5d71e2188cb8271e5da0161ad52c3f227a661a3c135fdf28e258b12"
 "checksum prometheus 0.9.0 (registry+https://github.com/rust-lang/crates.io-index)" = "dd0ced56dee39a6e960c15c74dc48849d614586db2eaada6497477af7c7811cd"
-"checksum proptest 0.10.0 (registry+https://github.com/rust-lang/crates.io-index)" = "2520fe6373cf6a3a61e2d200e987c183778ade8d9248ac3e6614ab0edfe4a0c1"
+"checksum proptest 0.10.1 (registry+https://github.com/rust-lang/crates.io-index)" = "12e6c80c1139113c28ee4670dc50cc42915228b51f56a9e407f0ec60f966646f"
 "checksum proptest-derive 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)" = "051d9d20dbe9e9dfe594328b6eaab72ccf571fee818991dd1c1ba5469b5f32d4"
 "checksum qstring 0.7.2 (registry+https://github.com/rust-lang/crates.io-index)" = "d464fae65fff2680baf48019211ce37aaec0c78e9264c84a3e484717f965104e"
 "checksum quick-error 1.2.3 (registry+https://github.com/rust-lang/crates.io-index)" = "a1d01941d82fa2ab50be1e79e6714289dd7cde78eba4c074bc5a4374f650dfe0"
@@ -7056,7 +7118,7 @@ dependencies = [
 "checksum semver 0.9.0 (registry+https://github.com/rust-lang/crates.io-index)" = "1d7eb9ef2c18661902cc47e535f9bc51b78acd254da71d375c2f6720d9a40403"
 "checksum semver-parser 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)" = "388a1df253eca08550bef6c72392cfe7c30914bf41df5269b68cbd6ff8f570a3"
 "checksum serde 1.0.114 (registry+https://github.com/rust-lang/crates.io-index)" = "5317f7588f0a5078ee60ef675ef96735a1442132dc645eb1d12c018620ed8cd3"
-"checksum serde-generate 0.9.0 (registry+https://github.com/rust-lang/crates.io-index)" = "84178428029999120da23c0df706d5f3cdffd3d16fc950cc4a14a0a0a94b0746"
+"checksum serde-generate 0.11.0 (registry+https://github.com/rust-lang/crates.io-index)" = "afe6d343797d98e31ff0383581535a61864eadb03316804cbf597e7741a84d58"
 "checksum serde-name 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)" = "92bb32dbe1df50291d7d00b5e573acb2c70b783baf3d1bce2d19c86be11c709e"
 "checksum serde-reflection 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)" = "d0724ee4d089608c6f22bb25058e73e56d8ecd6506628b635b5a2ed6c94c9e21"
 "checksum serde-value 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)" = "f3a1a3341211875ef120e117ea7fd5228530ae7e7036a779fdc9117be6b3282c"

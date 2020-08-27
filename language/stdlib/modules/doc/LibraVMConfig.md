@@ -9,9 +9,7 @@
 -  [Struct `GasSchedule`](#0x1_LibraVMConfig_GasSchedule)
 -  [Struct `GasConstants`](#0x1_LibraVMConfig_GasConstants)
 -  [Function `initialize`](#0x1_LibraVMConfig_initialize)
--  [Function `set_publishing_option`](#0x1_LibraVMConfig_set_publishing_option)
 -  [Specification](#0x1_LibraVMConfig_Specification)
-    -  [Function `initialize`](#0x1_LibraVMConfig_Specification_initialize)
 
 
 
@@ -31,13 +29,6 @@
 
 
 <dl>
-<dt>
-
-<code>publishing_option: vector&lt;u8&gt;</code>
-</dt>
-<dd>
-
-</dd>
 <dt>
 
 <code>gas_schedule: <a href="#0x1_LibraVMConfig_GasSchedule">LibraVMConfig::GasSchedule</a></code>
@@ -200,7 +191,7 @@
 
 
 
-<pre><code><b>public</b> <b>fun</b> <a href="#0x1_LibraVMConfig_initialize">initialize</a>(lr_account: &signer, publishing_option: vector&lt;u8&gt;, instruction_schedule: vector&lt;u8&gt;, native_schedule: vector&lt;u8&gt;)
+<pre><code><b>public</b> <b>fun</b> <a href="#0x1_LibraVMConfig_initialize">initialize</a>(lr_account: &signer, instruction_schedule: vector&lt;u8&gt;, native_schedule: vector&lt;u8&gt;)
 </code></pre>
 
 
@@ -211,10 +202,14 @@
 
 <pre><code><b>public</b> <b>fun</b> <a href="#0x1_LibraVMConfig_initialize">initialize</a>(
     lr_account: &signer,
-    publishing_option: vector&lt;u8&gt;,
     instruction_schedule: vector&lt;u8&gt;,
     native_schedule: vector&lt;u8&gt;,
 ) {
+    <a href="LibraTimestamp.md#0x1_LibraTimestamp_assert_genesis">LibraTimestamp::assert_genesis</a>();
+
+    // The permission "UpdateVMConfig" is granted <b>to</b> LibraRoot [B21].
+    <a href="Roles.md#0x1_Roles_assert_libra_root">Roles::assert_libra_root</a>(lr_account);
+
     <b>let</b> gas_constants = <a href="#0x1_LibraVMConfig_GasConstants">GasConstants</a> {
         global_memory_per_byte_cost: 4,
         global_memory_per_byte_write_cost: 9,
@@ -232,7 +227,6 @@
     <a href="LibraConfig.md#0x1_LibraConfig_publish_new_config">LibraConfig::publish_new_config</a>(
         lr_account,
         <a href="#0x1_LibraVMConfig">LibraVMConfig</a> {
-            publishing_option,
             gas_schedule: <a href="#0x1_LibraVMConfig_GasSchedule">GasSchedule</a> {
                 instruction_schedule,
                 native_schedule,
@@ -247,55 +241,11 @@
 
 </details>
 
-<a name="0x1_LibraVMConfig_set_publishing_option"></a>
-
-## Function `set_publishing_option`
-
-
-
-<pre><code><b>public</b> <b>fun</b> <a href="#0x1_LibraVMConfig_set_publishing_option">set_publishing_option</a>(account: &signer, publishing_option: vector&lt;u8&gt;)
-</code></pre>
-
-
-
-<details>
-<summary>Implementation</summary>
-
-
-<pre><code><b>public</b> <b>fun</b> <a href="#0x1_LibraVMConfig_set_publishing_option">set_publishing_option</a>(account: &signer, publishing_option: vector&lt;u8&gt;) {
-    <b>let</b> current_config = <a href="LibraConfig.md#0x1_LibraConfig_get">LibraConfig::get</a>&lt;<a href="#0x1_LibraVMConfig">LibraVMConfig</a>&gt;();
-    current_config.publishing_option = publishing_option;
-    <a href="LibraConfig.md#0x1_LibraConfig_set">LibraConfig::set</a>&lt;<a href="#0x1_LibraVMConfig">LibraVMConfig</a>&gt;(account, current_config);
-}
-</code></pre>
-
-
-
-</details>
-
 <a name="0x1_LibraVMConfig_Specification"></a>
 
 ## Specification
 
 
-<a name="0x1_LibraVMConfig_Specification_initialize"></a>
 
-### Function `initialize`
-
-
-<pre><code><b>public</b> <b>fun</b> <a href="#0x1_LibraVMConfig_initialize">initialize</a>(lr_account: &signer, publishing_option: vector&lt;u8&gt;, instruction_schedule: vector&lt;u8&gt;, native_schedule: vector&lt;u8&gt;)
-</code></pre>
-
-
-
-
-<pre><code>pragma aborts_if_is_partial = <b>true</b>;
-</code></pre>
-
-
-
-The permission "UpdateVMConfig" is granted to LibraRoot [B21].
-
-
-<pre><code><b>apply</b> <a href="Roles.md#0x1_Roles_AbortsIfNotLibraRoot">Roles::AbortsIfNotLibraRoot</a>{account: lr_account} <b>to</b> initialize;
+<pre><code><b>invariant</b> [<b>global</b>] <a href="LibraTimestamp.md#0x1_LibraTimestamp_is_operating">LibraTimestamp::is_operating</a>() ==&gt; <a href="LibraConfig.md#0x1_LibraConfig_spec_is_published">LibraConfig::spec_is_published</a>&lt;<a href="#0x1_LibraVMConfig">LibraVMConfig</a>&gt;();
 </code></pre>

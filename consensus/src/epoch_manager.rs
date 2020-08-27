@@ -189,6 +189,11 @@ impl EpochManager {
         request: EpochRetrievalRequest,
         peer_id: AccountAddress,
     ) -> anyhow::Result<()> {
+        debug!(
+            "[EpochManager] receive {} from {}",
+            request,
+            peer_id.short_str()
+        );
         let proof = self
             .storage
             .libra_db()
@@ -206,6 +211,12 @@ impl EpochManager {
         different_epoch: u64,
         peer_id: AccountAddress,
     ) -> anyhow::Result<()> {
+        debug!(
+            "[EpochManager] receive message from epoch {} from {}, local epoch: {}",
+            different_epoch,
+            peer_id,
+            self.epoch()
+        );
         match different_epoch.cmp(&self.epoch()) {
             // We try to help nodes that have lower epoch than us
             Ordering::Less => {
@@ -262,7 +273,7 @@ impl EpochManager {
         counters::EPOCH.set(epoch_state.epoch as i64);
         counters::CURRENT_EPOCH_VALIDATORS.set(epoch_state.verifier.len() as i64);
         info!(
-            "Starting {} with genesis {}",
+            "Starting {} with root {}",
             epoch_state,
             recovery_data.root_block(),
         );
@@ -385,14 +396,13 @@ impl EpochManager {
                 .clone()
                 .verify(&self.epoch_state().verifier)
                 .context("[EpochManager] Verify event")
-                .map_err(|err|
-                        // security log + return the error
-                        {send_struct_log!(security_log(security_events::CONSENSUS_INVALID_MESSAGE)
-                            .data("from_peer", &peer_id)
-                            .data_display("error", &err)
-                            .data("event", &unverified_event)
-                        );
-                    err})?;
+                .map_err(|err| {
+                    sl_error!(security_log(security_events::CONSENSUS_INVALID_MESSAGE)
+                        .data("from_peer", &peer_id)
+                        .data_display("error", &err)
+                        .data("event", &unverified_event));
+                    err
+                })?;
 
             // process the verified event
             self.process_event(peer_id, verified_event).await?;
@@ -411,15 +421,22 @@ impl EpochManager {
                 if event.epoch() == self.epoch() {
                     return Ok(Some(event));
                 } else {
-                    self.process_different_epoch(event.epoch(), peer_id).await?;
+                    monitor!(
+                        "process_different_epoch_consensus_msg",
+                        self.process_different_epoch(event.epoch(), peer_id).await?
+                    );
                 }
             }
             ConsensusMsg::EpochChangeProof(proof) => {
                 let msg_epoch = proof.epoch()?;
                 if msg_epoch == self.epoch() {
-                    self.start_new_epoch(*proof).await?;
+                    monitor!("process_epoch_proof", self.start_new_epoch(*proof).await?);
                 } else {
-                    self.process_different_epoch(msg_epoch, peer_id).await?;
+                    bail!(
+                        "[EpochManager] Unexpected epoch proof from epoch {}, local epoch {}",
+                        msg_epoch,
+                        self.epoch()
+                    );
                 }
             }
             ConsensusMsg::EpochRetrievalRequest(request) => {
@@ -427,7 +444,10 @@ impl EpochManager {
                     request.end_epoch <= self.epoch(),
                     "[EpochManager] Received EpochRetrievalRequest beyond what we have locally"
                 );
-                self.process_epoch_retrieval(*request, peer_id).await?;
+                monitor!(
+                    "process_epoch_retrieval",
+                    self.process_epoch_retrieval(*request, peer_id).await?
+                );
             }
             _ => {
                 bail!("[EpochManager] Unexpected messages: {:?}", msg);
@@ -502,7 +522,7 @@ impl EpochManager {
             self.start_processor(payload).await;
         }
         loop {
-            if let Err(e) = monitor!(
+            let result = monitor!(
                 "main_loop",
                 select! {
                     payload = reconfig_events.select_next_some() => {
@@ -519,12 +539,18 @@ impl EpochManager {
                         monitor!("process_local_timeout", self.process_local_timeout(round).await)
                     }
                 }
-            ) {
-                counters::ERROR_COUNT.inc();
-                error!("{:?}", e);
-            }
-            if let RoundProcessor::Normal(p) = self.processor_mut() {
-                debug!("{}", p.round_state());
+            );
+            let round_state = if let RoundProcessor::Normal(p) = self.processor_mut() {
+                p.round_state().to_string()
+            } else {
+                "RoundState: None".into()
+            };
+            match result {
+                Ok(_) => trace!("{}", round_state),
+                Err(e) => {
+                    counters::ERROR_COUNT.inc();
+                    error!("{:?}, {}", e, round_state);
+                }
             }
         }
     }

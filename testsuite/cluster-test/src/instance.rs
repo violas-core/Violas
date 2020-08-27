@@ -47,6 +47,8 @@ pub struct LSRConfig {
     pub num_validators: u32,
     pub image_tag: String,
     pub lsr_backend: String,
+    pub vault_addr: Option<String>,
+    pub vault_namespace: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -58,6 +60,9 @@ pub struct ValidatorConfig {
     pub config_overrides: Vec<String>,
     pub seed_peer_ip: String,
     pub safety_rules_addr: Option<String>,
+    pub vault_addr: Option<String>,
+    pub vault_namespace: Option<String>,
+    pub enable_mgmt_tool: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -68,6 +73,9 @@ pub struct FullnodeConfig {
     pub image_tag: String,
     pub config_overrides: Vec<String>,
     pub seed_peer_ip: String,
+    pub vault_addr: Option<String>,
+    pub vault_namespace: Option<String>,
+    pub enable_mgmt_tool: bool,
 }
 
 #[derive(Clone)]
@@ -312,18 +320,27 @@ impl Instance {
         &backend.instance_config
     }
 
-    /// Runs command on the same host in separate utility container based on cluster-test-util image
-    pub async fn util_cmd<S: AsRef<str>>(&self, command: S, job_name: &str) -> Result<()> {
+    pub async fn cmd<S: AsRef<str>>(
+        &self,
+        docker_image: &str,
+        command: S,
+        job_name: &str,
+    ) -> Result<()> {
         let backend = self.k8s_backend();
         backend
             .kube
-            .run(
-                &backend.k8s_node,
-                "853397791086.dkr.ecr.us-west-2.amazonaws.com/cluster-test-util:latest",
-                command.as_ref(),
-                job_name,
-            )
+            .run(&backend.k8s_node, docker_image, command.as_ref(), job_name)
             .await
+    }
+
+    /// Runs command on the same host in separate utility container based on cluster-test-util image
+    pub async fn util_cmd<S: AsRef<str>>(&self, command: S, job_name: &str) -> Result<()> {
+        self.cmd(
+            "853397791086.dkr.ecr.us-west-2.amazonaws.com/cluster-test-util:latest",
+            command,
+            job_name,
+        )
+        .await
     }
 
     /// Unlike util_cmd, exec runs command inside the container

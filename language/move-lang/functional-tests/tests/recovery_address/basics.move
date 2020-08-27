@@ -16,7 +16,6 @@ script {
 use 0x1::LBR::LBR;
 use 0x1::LibraAccount;
 fun main(lr_account: &signer) {
-    let pubkey = x"7013b6ed7dde3cfb1251db1b04ae9cd7853470284085693590a75def645a926d";
     let add_all_currencies = false;
 
     LibraAccount::create_parent_vasp_account<LBR>(
@@ -24,8 +23,6 @@ fun main(lr_account: &signer) {
         {{parent1}},
         {{parent1::auth_key}},
         x"A1",
-        x"A2",
-        copy pubkey,
         add_all_currencies,
     );
 
@@ -34,8 +31,6 @@ fun main(lr_account: &signer) {
         {{parent2}},
         {{parent2::auth_key}},
         x"B1",
-        x"B2",
-        pubkey,
         add_all_currencies,
     );
 
@@ -98,7 +93,7 @@ fun main(account: &signer) {
     )
 }
 }
-// check: "ABORTED { code: 3,"
+// check: "ABORTED { code: 775,"
 
 // delegating parent2's key to an account without a RecoveryAddress resource should abort
 //! new-transaction
@@ -112,7 +107,7 @@ fun main(account: &signer) {
     )
 }
 }
-// check: "ABORTED { code: 5,"
+// check: "ABORTED { code: 1285,"
 
 // trying to recover an account that hasn't delegated its KeyRotationCapability to a recovery
 // address should abort
@@ -125,7 +120,7 @@ fun main(account: &signer) {
     RecoveryAddress::rotate_authentication_key(account, {{child1}}, {{child2}}, dummy_auth_key);
 }
 }
-// check: "ABORTED { code: 4,"
+// check: "ABORTED { code: 1031,"
 
 // trying to recover from an account without a RecoveryAddress resource should abort
 //! new-transaction
@@ -137,7 +132,7 @@ fun main(account: &signer) {
     RecoveryAddress::rotate_authentication_key(account, {{child2}}, {{child1}}, dummy_auth_key);
 }
 }
-// check: "ABORTED { code: 5,"
+// check: "ABORTED { code: 1285,"
 
 
 // parent1 shouldn't be able to rotate child1's address
@@ -150,7 +145,7 @@ fun main(account: &signer) {
     RecoveryAddress::rotate_authentication_key(account, {{child1}}, {{child1}}, dummy_auth_key);
 }
 }
-// check: "ABORTED { code: 2,"
+// check: "ABORTED { code: 519,"
 
 // A non-vasp can't create a recovery address
 //! new-transaction
@@ -162,7 +157,7 @@ fun main(account: &signer) {
     RecoveryAddress::publish(account, LibraAccount::extract_key_rotation_capability(account))
 }
 }
-// check: "ABORTED { code: 0,"
+// check: "ABORTED { code: 7,"
 
 //! new-transaction
 module Holder {
@@ -181,14 +176,14 @@ module Holder {
 //! new-transaction
 //! sender: libraroot
 //! type-args: 0x1::Coin1::Coin1
-//! args: 0, {{vasp1}}, {{vasp1::auth_key}}, b"bob", b"boburl", x"7013b6ed7dde3cfb1251db1b04ae9cd7853470284085693590a75def645a926d", true
+//! args: 0, {{vasp1}}, {{vasp1::auth_key}}, b"bob", true
 stdlib_script::create_parent_vasp_account
 // check: EXECUTED
 
 //! new-transaction
 //! sender: libraroot
 //! type-args: 0x1::Coin1::Coin1
-//! args: 0, {{vasp2}}, {{vasp2::auth_key}}, b"bob", b"boburl", x"7013b6ed7dde3cfb1251db1b04ae9cd7853470284085693590a75def645a926d", true
+//! args: 0, {{vasp2}}, {{vasp2::auth_key}}, b"bob", true
 stdlib_script::create_parent_vasp_account
 // check: EXECUTED
 
@@ -215,4 +210,4 @@ fun main(account: &signer) {
     RecoveryAddress::publish(account, cap);
 }
 }
-// check: "ABORTED { code: 1,"
+// check: "ABORTED { code: 263,"

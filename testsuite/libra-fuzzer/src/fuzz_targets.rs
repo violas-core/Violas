@@ -6,51 +6,41 @@ use anyhow::{format_err, Result};
 use once_cell::sync::Lazy;
 use std::{collections::BTreeMap, env};
 
-/// Convenience macro to return the module name.
-macro_rules! module_name {
-    () => {
-        module_path!()
-            .rsplit("::")
-            .next()
-            .expect("module path must have at least one component")
-    };
-}
-
 // List fuzz target modules here.
-mod compiled_module;
-mod consensus_proposal;
-mod inbound_rpc_protocol;
-mod inner_signed_transaction;
+mod consensus;
+mod executor;
 mod json_rpc_service;
-mod language_transaction_execution;
 mod mempool;
-mod network_noise_initiator;
-mod network_noise_responder;
-mod network_noise_stream;
-mod state_sync_msg;
-//mod storage_save_blocks;
-mod execute_and_commit_chunk;
-mod storage_schema_decode;
-mod vm_value;
+mod move_vm;
+mod network;
+mod network_noise;
+mod secure_json_rpc_client;
+mod state_sync;
+mod storage;
+mod transaction;
+mod vm;
 
 static ALL_TARGETS: Lazy<BTreeMap<&'static str, Box<dyn FuzzTargetImpl>>> = Lazy::new(|| {
     let targets: Vec<Box<dyn FuzzTargetImpl>> = vec![
         // List fuzz targets here in this format.
-        Box::new(compiled_module::CompiledModuleTarget::default()),
-        Box::new(consensus_proposal::ConsensusProposal::default()),
-        Box::new(inbound_rpc_protocol::RpcInboundRequest::default()),
-        Box::new(inner_signed_transaction::SignedTransactionTarget::default()),
+        Box::new(consensus::ConsensusProposal::default()),
+        Box::new(executor::ExecuteAndCommitChunk::default()),
         Box::new(json_rpc_service::JsonRpcSubmitTransactionRequest::default()),
         Box::new(mempool::MempoolIncomingTransactions::default()),
-        Box::new(network_noise_initiator::NetworkNoiseInitiator::default()),
-        Box::new(network_noise_responder::NetworkNoiseResponder::default()),
-        Box::new(network_noise_stream::NetworkNoiseStream::default()),
-        Box::new(state_sync_msg::StateSyncMsg::default()),
-        Box::new(language_transaction_execution::LanguageTransactionExecution::default()),
-        //        Box::new(storage_save_blocks::StorageSaveBlocks::default()),
-        Box::new(storage_schema_decode::StorageSchemaDecode::default()),
-        Box::new(vm_value::ValueTarget::default()),
-        Box::new(execute_and_commit_chunk::ExecuteAndCommitChunk::default()),
+        Box::new(move_vm::ValueTarget::default()),
+        Box::new(network::RpcInboundRequest::default()),
+        Box::new(network_noise::NetworkNoiseInitiator::default()),
+        Box::new(network_noise::NetworkNoiseResponder::default()),
+        Box::new(network_noise::NetworkNoiseStream::default()),
+        Box::new(secure_json_rpc_client::SecureJsonRpcSubmitTransaction::default()),
+        Box::new(secure_json_rpc_client::SecureJsonRpcGetAccountState::default()),
+        Box::new(secure_json_rpc_client::SecureJsonRpcGetAccountTransaction::default()),
+        Box::new(state_sync::StateSyncMsg::default()),
+        //        Box::new(storage::StorageSaveBlocks::default()),
+        Box::new(storage::StorageSchemaDecode::default()),
+        Box::new(transaction::LanguageTransactionExecution::default()),
+        Box::new(transaction::SignedTransactionTarget::default()),
+        Box::new(vm::CompiledModuleTarget::default()),
     ];
     targets
         .into_iter()

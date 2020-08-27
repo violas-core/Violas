@@ -8,6 +8,7 @@ use std::{
 };
 
 use libra_logger::{info, warn};
+use libra_types::chain_id::ChainId;
 use reqwest::Url;
 use structopt::{clap::ArgGroup, StructOpt};
 use termion::{color, style};
@@ -83,6 +84,8 @@ struct Args {
     burst: bool,
     #[structopt(long, default_value = "mint.key")]
     mint_file: String,
+    #[structopt(long, default_value = "TESTING")]
+    chain_id: ChainId,
     #[structopt(
         long,
         help = "Time to run --emit-tx for in seconds",
@@ -356,7 +359,7 @@ impl BasicSwarmUtil {
             .map(|peer| parse_host_port(peer).expect("Failed to parse host_port"))
             .collect();
 
-        let cluster = Cluster::from_host_port(parsed_peers, &args.mint_file);
+        let cluster = Cluster::from_host_port(parsed_peers, &args.mint_file, args.chain_id);
         Self { cluster }
     }
 
@@ -600,10 +603,24 @@ impl ClusterTestRunner {
     }
 
     pub async fn run_and_report(&mut self, experiment: Box<dyn Experiment>) -> Result<()> {
-        self.run_single_experiment(experiment, Some(self.global_emit_job_request.clone()))
-            .await?;
-        self.print_report();
-        Ok(())
+        let experiment_name = format!("{}", experiment);
+        match self
+            .run_single_experiment(experiment, Some(self.global_emit_job_request.clone()))
+            .await
+        {
+            Ok(_) => {
+                self.print_report();
+                Ok(())
+            }
+            Err(err) => {
+                self.report.report_text(format!(
+                    "Experiment `{}` failed: `{}`",
+                    experiment_name, err
+                ));
+                self.print_report();
+                Err(err)
+            }
+        }
     }
 
     pub async fn run_single_experiment(

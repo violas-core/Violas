@@ -17,6 +17,8 @@ pub const EACCOUNT_DOES_NOT_EXIST: u64 = 4; // transaction sender's account does
 pub const EINSUFFICIENT_BALANCE: u64 = 5; // insufficient balance (to pay for gas deposit)
 pub const ETRANSACTION_EXPIRED: u64 = 6; // transaction expiration time exceeds block time.
 pub const EBAD_CHAIN_ID: u64 = 7; // chain_id in transaction doesn't match the one on-chain
+pub const ESCRIPT_NOT_ALLOWED: u64 = 8;
+pub const EMODULE_NOT_ALLOWED: u64 = 9;
 
 // invalid sender (not libra root) for write set
 pub const EINVALID_WRITESET_SENDER: u64 = 33;
@@ -32,7 +34,7 @@ pub fn convert_normal_prologue_error(status: VMStatus) -> VMStatus {
         VMStatus::MoveAbort(location, code) => {
             if location != known_locations::account_module_abort() {
                 crit!(
-                    "[libra_vm] Unexpected prologue move abort: {:?}::{:?}",
+                    "[libra_vm] Unexpected prologue Move abort: {:?}::{:?}",
                     location,
                     code
                 );
@@ -53,9 +55,11 @@ pub fn convert_normal_prologue_error(status: VMStatus) -> VMStatus {
                 EINSUFFICIENT_BALANCE => StatusCode::INSUFFICIENT_BALANCE_FOR_TRANSACTION_FEE,
                 ETRANSACTION_EXPIRED => StatusCode::TRANSACTION_EXPIRED,
                 EBAD_CHAIN_ID => StatusCode::BAD_CHAIN_ID,
+                ESCRIPT_NOT_ALLOWED => StatusCode::UNKNOWN_SCRIPT,
+                EMODULE_NOT_ALLOWED => StatusCode::INVALID_MODULE_PUBLISHER,
                 code => {
                     crit!(
-                        "[libra_vm] Unexpected prologue move abort: {:?}::{:?}",
+                        "[libra_vm] Unexpected prologue Move abort: {:?}::{:?}",
                         location,
                         code
                     );
@@ -71,7 +75,7 @@ pub fn convert_normal_prologue_error(status: VMStatus) -> VMStatus {
     }
 }
 
-/// Checks for only move aborts or successful execution.
+/// Checks for only Move aborts or successful execution.
 /// Any other errors are mapped to the invariant violation
 /// `UNEXPECTED_ERROR_FROM_KNOWN_MOVE_FUNCTION`
 pub fn convert_normal_success_epilogue_error(status: VMStatus) -> VMStatus {
@@ -80,7 +84,7 @@ pub fn convert_normal_success_epilogue_error(status: VMStatus) -> VMStatus {
         | VMStatus::MoveAbort(location, code @ EINSUFFICIENT_BALANCE) => {
             if location != known_locations::account_module_abort() {
                 crit!(
-                    "[libra_vm] Unexpected success epilogue move abort: {:?}::{:?}",
+                    "[libra_vm] Unexpected success epilogue Move abort: {:?}::{:?}",
                     location,
                     code
                 );
@@ -98,7 +102,7 @@ pub fn convert_normal_success_epilogue_error(status: VMStatus) -> VMStatus {
     }
 }
 
-/// Converts move aborts or execution failures to `REJECTED_WRITE_SET`
+/// Converts Move aborts or execution failures to `REJECTED_WRITE_SET`
 /// Any other errors are mapped to the invariant violation
 /// `UNEXPECTED_ERROR_FROM_KNOWN_MOVE_FUNCTION`
 pub fn convert_write_set_prologue_error(status: VMStatus) -> VMStatus {
@@ -110,7 +114,7 @@ pub fn convert_write_set_prologue_error(status: VMStatus) -> VMStatus {
         | VMStatus::MoveAbort(location, code @ EBAD_ACCOUNT_AUTHENTICATION_KEY) => {
             if location != known_locations::write_set_manager_module_abort() {
                 crit!(
-                    "[libra_vm] Unexpected write set prologue move abort: {:?}::{:?}",
+                    "[libra_vm] Unexpected write set prologue Move abort: {:?}::{:?}",
                     location,
                     code
                 );
@@ -132,16 +136,21 @@ pub fn convert_write_set_prologue_error(status: VMStatus) -> VMStatus {
 /// Checks for only successful execution
 /// Any errors are mapped to the invariant violation
 /// `UNEXPECTED_ERROR_FROM_KNOWN_MOVE_FUNCTION`
-pub fn expect_only_successful_execution(status: VMStatus) -> VMStatus {
-    match status {
-        VMStatus::Executed => VMStatus::Executed,
+pub fn expect_only_successful_execution<'a>(
+    function_name: &'a str,
+) -> Box<dyn FnOnce(VMStatus) -> VMStatus + 'a> {
+    Box::new(move |status: VMStatus| -> VMStatus {
+        match status {
+            VMStatus::Executed => VMStatus::Executed,
 
-        status => {
-            crit!(
-                "[libra_vm] Unexpected error from known move function. Error: {:?}",
-                status
-            );
-            VMStatus::Error(StatusCode::UNEXPECTED_ERROR_FROM_KNOWN_MOVE_FUNCTION)
+            status => {
+                crit!(
+                    "[libra_vm] Unexpected error from known Move function, '{}'. Error: {:?}",
+                    function_name,
+                    status
+                );
+                VMStatus::Error(StatusCode::UNEXPECTED_ERROR_FROM_KNOWN_MOVE_FUNCTION)
+            }
         }
-    }
+    })
 }

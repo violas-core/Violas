@@ -5,7 +5,7 @@
 
 use crate::{atomic_histogram::*, cluster::Cluster, instance::Instance};
 use std::{
-    fmt, slice,
+    env, fmt, slice,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -37,6 +37,7 @@ use tokio::runtime::Handle;
 use futures::future::{try_join_all, FutureExt};
 use libra_json_rpc_client::JsonRpcAsyncClient;
 use libra_types::transaction::SignedTransaction;
+use once_cell::sync::Lazy;
 use std::{
     cmp::{max, min},
     ops::Sub,
@@ -49,6 +50,7 @@ const MAX_TXN_BATCH_SIZE: usize = 100; // Max transactions per account in mempoo
 pub struct TxEmitter {
     accounts: Vec<AccountData>,
     mint_key_pair: KeyPair<Ed25519PrivateKey, Ed25519PublicKey>,
+    chain_id: ChainId,
 }
 
 pub struct EmitJob {
@@ -107,6 +109,14 @@ pub struct EmitJobRequest {
     pub thread_params: EmitThreadParams,
 }
 
+pub static GAS_UNIT_PRICE: Lazy<u64> = Lazy::new(|| {
+    if let Ok(v) = env::var("GAS_UNIT_PRICE") {
+        v.parse().expect("Failed to parse GAS_UNIT_PRICE")
+    } else {
+        0_u64
+    }
+});
+
 impl EmitJobRequest {
     pub fn for_instances(
         instances: Vec<Instance>,
@@ -154,6 +164,7 @@ impl TxEmitter {
         Self {
             accounts: vec![],
             mint_key_pair: cluster.mint_key_pair().clone(),
+            chain_id: cluster.chain_id,
         }
     }
 
@@ -183,7 +194,7 @@ impl TxEmitter {
     ) -> Result<Instant> {
         let client = instance.json_rpc_client();
         client
-            .submit_transaction(gen_mint_request(account, 10))
+            .submit_transaction(gen_mint_request(account, 10, self.chain_id))
             .await?;
         let deadline = Instant::now() + TXN_MAX_WAIT;
         Ok(deadline)
@@ -235,6 +246,7 @@ impl TxEmitter {
                     stop,
                     params,
                     stats,
+                    chain_id: self.chain_id,
                 };
                 let join_handle = tokio_handle.spawn(worker.run().boxed());
                 workers.push(Worker { join_handle });
@@ -303,10 +315,12 @@ impl TxEmitter {
         let mut libra_root_account = self
             .load_libra_root_account(self.pick_mint_instance(&req.instances))
             .await?;
-        let mint_txn = gen_mint_request(
-            &mut faucet_account,
-            LIBRA_PER_NEW_ACCOUNT * num_accounts as u64,
-        );
+        let coins_per_account = (SEND_AMOUNT + *GAS_UNIT_PRICE) * MAX_TXNS;
+        info!("Minting additional {} accounts", num_accounts);
+        let coins_per_seed_account =
+            (coins_per_account * num_accounts as u64) / req.instances.len() as u64;
+        let coins_total = coins_per_account * num_accounts as u64;
+        let mint_txn = gen_mint_request(&mut faucet_account, coins_total, self.chain_id);
         execute_and_wait_transactions(
             &mut self.pick_mint_client(&req.instances),
             &mut faucet_account,
@@ -314,24 +328,25 @@ impl TxEmitter {
         )
         .await
         .map_err(|e| format_err!("Failed to mint into faucet account: {}", e))?;
+
         let seed_accounts = create_seed_accounts(
             &mut libra_root_account,
             req.instances.len(),
             100,
             self.pick_mint_client(&req.instances),
+            self.chain_id,
         )
         .await
         .map_err(|e| format_err!("Failed to create seed accounts: {}", e))?;
         info!("Completed creating seed accounts");
-        let libra_per_seed =
-            (LIBRA_PER_NEW_ACCOUNT * num_accounts as u64) / req.instances.len() as u64;
         // Create seed accounts with which we can create actual accounts concurrently
         mint_to_new_accounts(
             &mut faucet_account,
             &seed_accounts,
-            libra_per_seed,
+            coins_per_seed_account,
             100,
             self.pick_mint_client(&req.instances),
+            self.chain_id,
         )
         .await
         .map_err(|e| format_err!("Failed to mint seed_accounts: {}", e))?;
@@ -349,9 +364,10 @@ impl TxEmitter {
                 create_new_accounts(
                     seed_account,
                     num_new_accounts,
-                    LIBRA_PER_NEW_ACCOUNT,
+                    coins_per_account,
                     20,
                     client,
+                    self.chain_id,
                 )
             });
         let mut minted_accounts = try_join_all(account_futures)
@@ -360,6 +376,7 @@ impl TxEmitter {
             .into_iter()
             .flatten()
             .collect();
+
         self.accounts.append(&mut minted_accounts);
         assert!(
             self.accounts.len() >= num_accounts,
@@ -426,6 +443,7 @@ struct SubmissionWorker {
     stop: Arc<AtomicBool>,
     params: EmitThreadParams,
     stats: Arc<StatsAccumulator>,
+    chain_id: ChainId,
 }
 
 impl SubmissionWorker {
@@ -511,7 +529,7 @@ impl SubmissionWorker {
                 .all_addresses
                 .choose(&mut rng)
                 .expect("all_addresses can't be empty");
-            let request = gen_transfer_txn_request(sender, receiver, 1);
+            let request = gen_transfer_txn_request(sender, receiver, SEND_AMOUNT, self.chain_id);
             requests.push(request);
         }
         requests
@@ -586,15 +604,17 @@ async fn query_sequence_numbers(
 }
 
 const MAX_GAS_AMOUNT: u64 = 1_000_000;
-const GAS_UNIT_PRICE: u64 = 0;
 const GAS_CURRENCY_CODE: &str = COIN1_NAME;
 const TXN_EXPIRATION_SECONDS: i64 = 50;
 const TXN_MAX_WAIT: Duration = Duration::from_secs(TXN_EXPIRATION_SECONDS as u64 + 30);
-const LIBRA_PER_NEW_ACCOUNT: u64 = 1_000_000;
+const MAX_TXNS: u64 = 1_000_000;
+const SEND_AMOUNT: u64 = 1;
 
 fn gen_submit_transaction_request(
     script: Script,
     sender_account: &mut AccountData,
+    no_gas: bool,
+    chain_id: ChainId,
 ) -> SignedTransaction {
     let transaction = create_user_txn(
         &sender_account.key_pair,
@@ -602,17 +622,21 @@ fn gen_submit_transaction_request(
         sender_account.address,
         sender_account.sequence_number,
         MAX_GAS_AMOUNT,
-        GAS_UNIT_PRICE,
+        if no_gas { 0 } else { *GAS_UNIT_PRICE },
         GAS_CURRENCY_CODE.to_owned(),
         TXN_EXPIRATION_SECONDS,
-        ChainId::test(),
+        chain_id,
     )
     .expect("Failed to create signed transaction");
     sender_account.sequence_number += 1;
     transaction
 }
 
-fn gen_mint_request(faucet_account: &mut AccountData, num_coins: u64) -> SignedTransaction {
+fn gen_mint_request(
+    faucet_account: &mut AccountData,
+    num_coins: u64,
+    chain_id: ChainId,
+) -> SignedTransaction {
     let receiver = faucet_account.address;
     gen_submit_transaction_request(
         transaction_builder::encode_peer_to_peer_with_metadata_script(
@@ -623,6 +647,8 @@ fn gen_mint_request(faucet_account: &mut AccountData, num_coins: u64) -> SignedT
             vec![],
         ),
         faucet_account,
+        true,
+        chain_id,
     )
 }
 
@@ -630,6 +656,7 @@ fn gen_transfer_txn_request(
     sender: &mut AccountData,
     receiver: &AccountAddress,
     num_coins: u64,
+    chain_id: ChainId,
 ) -> SignedTransaction {
     gen_submit_transaction_request(
         transaction_builder::encode_peer_to_peer_with_metadata_script(
@@ -640,6 +667,8 @@ fn gen_transfer_txn_request(
             vec![],
         ),
         sender,
+        false,
+        chain_id,
     )
 }
 
@@ -648,6 +677,7 @@ fn gen_create_child_txn_request(
     receiver: &AccountAddress,
     receiver_auth_key_prefix: Vec<u8>,
     num_coins: u64,
+    chain_id: ChainId,
 ) -> SignedTransaction {
     let add_all_currencies = false;
     gen_submit_transaction_request(
@@ -659,6 +689,8 @@ fn gen_create_child_txn_request(
             num_coins,
         ),
         sender,
+        true,
+        chain_id,
     )
 }
 
@@ -666,15 +698,20 @@ fn gen_create_account_txn_request(
     sender: &mut AccountData,
     receiver: &AccountAddress,
     auth_key_prefix: Vec<u8>,
+    chain_id: ChainId,
 ) -> SignedTransaction {
     gen_submit_transaction_request(
-        transaction_builder::encode_create_testing_account_script(
+        transaction_builder::encode_create_parent_vasp_account_script(
             account_config::coin1_tag(),
+            0,
             *receiver,
             auth_key_prefix,
+            vec![],
             false,
         ),
         sender,
+        true,
+        chain_id,
     )
 }
 
@@ -682,6 +719,7 @@ fn gen_mint_txn_request(
     sender: &mut AccountData,
     receiver: &AccountAddress,
     num_coins: u64,
+    chain_id: ChainId,
 ) -> SignedTransaction {
     gen_submit_transaction_request(
         transaction_builder::encode_peer_to_peer_with_metadata_script(
@@ -692,6 +730,8 @@ fn gen_mint_txn_request(
             vec![],
         ),
         sender,
+        true,
+        chain_id,
     )
 }
 
@@ -716,6 +756,7 @@ fn gen_create_child_txn_requests(
     source_account: &mut AccountData,
     accounts: &[AccountData],
     amount: u64,
+    chain_id: ChainId,
 ) -> Vec<SignedTransaction> {
     accounts
         .iter()
@@ -725,6 +766,7 @@ fn gen_create_child_txn_requests(
                 &account.address,
                 account.auth_key_prefix(),
                 amount,
+                chain_id,
             )
         })
         .collect()
@@ -733,6 +775,7 @@ fn gen_create_child_txn_requests(
 fn gen_account_creation_txn_requests(
     sending_account: &mut AccountData,
     accounts: &[AccountData],
+    chain_id: ChainId,
 ) -> Vec<SignedTransaction> {
     accounts
         .iter()
@@ -741,6 +784,7 @@ fn gen_account_creation_txn_requests(
                 sending_account,
                 &account.address,
                 account.auth_key_prefix(),
+                chain_id,
             )
         })
         .collect()
@@ -750,10 +794,11 @@ fn gen_mint_txn_requests(
     sending_account: &mut AccountData,
     accounts: &[AccountData],
     amount: u64,
+    chain_id: ChainId,
 ) -> Vec<SignedTransaction> {
     accounts
         .iter()
-        .map(|account| gen_mint_txn_request(sending_account, &account.address, amount))
+        .map(|account| gen_mint_txn_request(sending_account, &account.address, amount, chain_id))
         .collect()
 }
 
@@ -803,6 +848,7 @@ async fn create_new_accounts(
     libra_per_new_account: u64,
     max_num_accounts_per_batch: u64,
     mut client: JsonRpcAsyncClient,
+    chain_id: ChainId,
 ) -> Result<Vec<AccountData>> {
     let mut i = 0;
     let mut accounts = vec![];
@@ -811,8 +857,12 @@ async fn create_new_accounts(
             max_num_accounts_per_batch as usize,
             min(MAX_TXN_BATCH_SIZE, num_new_accounts - i),
         ));
-        let requests =
-            gen_create_child_txn_requests(&mut source_account, &batch, libra_per_new_account);
+        let requests = gen_create_child_txn_requests(
+            &mut source_account,
+            &batch,
+            libra_per_new_account,
+            chain_id,
+        );
         execute_and_wait_transactions(&mut client, &mut source_account, requests).await?;
         i += batch.len();
         accounts.append(&mut batch);
@@ -826,6 +876,7 @@ async fn create_seed_accounts(
     num_new_accounts: usize,
     max_num_accounts_per_batch: u64,
     mut client: JsonRpcAsyncClient,
+    chain_id: ChainId,
 ) -> Result<Vec<AccountData>> {
     let mut i = 0;
     let mut accounts = vec![];
@@ -834,7 +885,7 @@ async fn create_seed_accounts(
             max_num_accounts_per_batch as usize,
             min(MAX_TXN_BATCH_SIZE, num_new_accounts - i),
         ));
-        let create_requests = gen_account_creation_txn_requests(creation_account, &batch);
+        let create_requests = gen_account_creation_txn_requests(creation_account, &batch, chain_id);
         execute_and_wait_transactions(&mut client, creation_account, create_requests).await?;
         i += batch.len();
         accounts.append(&mut batch);
@@ -849,6 +900,7 @@ async fn mint_to_new_accounts(
     libra_per_new_account: u64,
     max_num_accounts_per_batch: u64,
     mut client: JsonRpcAsyncClient,
+    chain_id: ChainId,
 ) -> Result<()> {
     let mut left = accounts;
     let mut i = 0;
@@ -860,7 +912,8 @@ async fn mint_to_new_accounts(
                 min(MAX_TXN_BATCH_SIZE, num_accounts - i),
             );
         let (to_batch, rest) = left.split_at(batch_size + 1);
-        let mint_requests = gen_mint_txn_requests(minting_account, to_batch, libra_per_new_account);
+        let mint_requests =
+            gen_mint_txn_requests(minting_account, to_batch, libra_per_new_account, chain_id);
         execute_and_wait_transactions(&mut client, minting_account, mint_requests).await?;
         i += to_batch.len();
         left = rest;

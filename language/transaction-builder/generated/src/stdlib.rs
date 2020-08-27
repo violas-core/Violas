@@ -16,8 +16,9 @@ use libra_types::{
     transaction::{Script, TransactionArgument},
 };
 use move_core_types::language_storage::TypeTag;
-use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap as Map;
+
+type Bytes = Vec<u8>;
 
 /// Structured representation of a call into a known Move script.
 /// ```ignore
@@ -26,7 +27,7 @@ use std::collections::BTreeMap as Map;
 ///     pub fn decode(&Script) -> Option<ScriptCall> { .. }
 /// }
 /// ```
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, PartialEq, PartialOrd)]
 #[cfg_attr(any(test, feature = "fuzzing"), derive(proptest_derive::Arbitrary))]
 #[cfg_attr(any(test, feature = "fuzzing"), proptest(no_params))]
 pub enum ScriptCall {
@@ -44,6 +45,9 @@ pub enum ScriptCall {
     /// * Aborts with `RecoveryAddress:ENOT_A_RECOVERY_ADDRESS` if `recovery_address` does not have a `RecoveryAddress` resource.
     /// * Aborts with `RecoveryAddress::EINVALID_KEY_ROTATION_DELEGATION` if `to_recover_account` and `recovery_address` do not belong to the same VASP.
     AddRecoveryRotationCapability { recovery_address: AccountAddress },
+
+    /// Append the `hash` to script hashes list allowed to be executed by the network.
+    AddToScriptAllowList { hash: Bytes, sliding_nonce: u64 },
 
     /// Add `new_validator` to the validator set.
     /// Fails if the `new_validator` address is already in the validator set
@@ -111,8 +115,6 @@ pub enum ScriptCall {
         addr: AccountAddress,
         auth_key_prefix: Bytes,
         human_name: Bytes,
-        base_url: Bytes,
-        compliance_public_key: Bytes,
         add_all_currencies: bool,
     },
 
@@ -127,8 +129,6 @@ pub enum ScriptCall {
         new_account_address: AccountAddress,
         auth_key_prefix: Bytes,
         human_name: Bytes,
-        base_url: Bytes,
-        compliance_public_key: Bytes,
         add_all_currencies: bool,
     },
 
@@ -138,19 +138,6 @@ pub enum ScriptCall {
     /// * Aborts with `LibraAccount::EKEY_ROTATION_CAPABILITY_ALREADY_EXTRACTED` if `account` has already delegated its `KeyRotationCapability`.
     /// * Aborts with `RecoveryAddress::ENOT_A_VASP` if `account` is not a ParentVASP or ChildVASP
     CreateRecoveryAddress {},
-
-    /// Create an account with the ParentVASP role at `address` with authentication key
-    /// `auth_key_prefix` | `new_account_address` and a 0 balance of type `currency`. If
-    /// `add_all_currencies` is true, 0 balances for all available currencies in the system will
-    /// also be added. This can only be invoked by an Association account.
-    /// The `human_name`, `base_url`, and compliance_public_key` fields of the
-    /// ParentVASP are filled in with dummy information.
-    CreateTestingAccount {
-        coin_type: TypeTag,
-        new_account_address: AccountAddress,
-        auth_key_prefix: Bytes,
-        add_all_currencies: bool,
-    },
 
     /// Create a validator account at `new_validator_address` with `auth_key_prefix`and human_name.
     CreateValidatorAccount {
@@ -178,9 +165,6 @@ pub enum ScriptCall {
     /// Mint `amount_lbr` LBR from the sending account's constituent coins and deposits the
     /// resulting LBR into the sending account.
     MintLbr { amount_lbr: u64 },
-
-    /// Modify publishing options. Takes the LCS bytes of a `VMPublishingOption` object as input.
-    ModifyPublishingOption { args: Bytes },
 
     /// Transfer `amount` coins of type `Currency` from `payer` to `payee` with (optional) associated
     /// `metadata` and an (optional) `metadata_signature` on the message
@@ -316,6 +300,15 @@ pub enum ScriptCall {
         operator_account: AccountAddress,
     },
 
+    /// Set validator operator as 'operator_account' of validator owner 'account' (via Admin Script).
+    /// `operator_name` should match expected from operator account. This script also
+    /// takes `sliding_nonce`, as a unique nonce for this operation. See `Sliding_nonce.move` for details.
+    SetValidatorOperatorWithNonceAdmin {
+        sliding_nonce: u64,
+        operator_name: Bytes,
+        operator_account: AccountAddress,
+    },
+
     /// Mint 'mint_amount' to 'designated_dealer_address' for 'tier_index' tier.
     /// Max valid tier index is 3 since there are max 4 tiers per DD.
     /// Sender should be treasury compliance account and receiver authorized DD.
@@ -336,7 +329,7 @@ pub enum ScriptCall {
     },
 
     /// Unmints `amount_lbr` LBR from the sending account into the constituent coins and deposits
-    /// the resulting coins into the sending account."
+    /// the resulting coins into the sending account.
     UnmintLbr { amount_lbr: u64 },
 
     /// Update the dual attesation limit to `new_micro_lbr_limit`.
@@ -365,9 +358,6 @@ pub enum ScriptCall {
     },
 }
 
-// Type alias used for code generation.
-type Bytes = Vec<u8>;
-
 impl ScriptCall {
     /// Build a Libra `Script` from a structured object `ScriptCall`.
     pub fn encode(self) -> Script {
@@ -377,6 +367,10 @@ impl ScriptCall {
             AddRecoveryRotationCapability { recovery_address } => {
                 encode_add_recovery_rotation_capability_script(recovery_address)
             }
+            AddToScriptAllowList {
+                hash,
+                sliding_nonce,
+            } => encode_add_to_script_allow_list_script(hash, sliding_nonce),
             AddValidatorAndReconfigure {
                 sliding_nonce,
                 validator_name,
@@ -415,8 +409,6 @@ impl ScriptCall {
                 addr,
                 auth_key_prefix,
                 human_name,
-                base_url,
-                compliance_public_key,
                 add_all_currencies,
             } => encode_create_designated_dealer_script(
                 currency,
@@ -424,8 +416,6 @@ impl ScriptCall {
                 addr,
                 auth_key_prefix,
                 human_name,
-                base_url,
-                compliance_public_key,
                 add_all_currencies,
             ),
             CreateParentVaspAccount {
@@ -434,8 +424,6 @@ impl ScriptCall {
                 new_account_address,
                 auth_key_prefix,
                 human_name,
-                base_url,
-                compliance_public_key,
                 add_all_currencies,
             } => encode_create_parent_vasp_account_script(
                 coin_type,
@@ -443,22 +431,9 @@ impl ScriptCall {
                 new_account_address,
                 auth_key_prefix,
                 human_name,
-                base_url,
-                compliance_public_key,
                 add_all_currencies,
             ),
             CreateRecoveryAddress {} => encode_create_recovery_address_script(),
-            CreateTestingAccount {
-                coin_type,
-                new_account_address,
-                auth_key_prefix,
-                add_all_currencies,
-            } => encode_create_testing_account_script(
-                coin_type,
-                new_account_address,
-                auth_key_prefix,
-                add_all_currencies,
-            ),
             CreateValidatorAccount {
                 sliding_nonce,
                 new_account_address,
@@ -486,7 +461,6 @@ impl ScriptCall {
                 to_freeze_account,
             } => encode_freeze_account_script(sliding_nonce, to_freeze_account),
             MintLbr { amount_lbr } => encode_mint_lbr_script(amount_lbr),
-            ModifyPublishingOption { args } => encode_modify_publishing_option_script(args),
             PeerToPeerWithMetadata {
                 currency,
                 payee,
@@ -571,6 +545,15 @@ impl ScriptCall {
                 operator_name,
                 operator_account,
             } => encode_set_validator_operator_script(operator_name, operator_account),
+            SetValidatorOperatorWithNonceAdmin {
+                sliding_nonce,
+                operator_name,
+                operator_account,
+            } => encode_set_validator_operator_with_nonce_admin_script(
+                sliding_nonce,
+                operator_name,
+                operator_account,
+            ),
             TieredMint {
                 coin_type,
                 sliding_nonce,
@@ -648,6 +631,18 @@ pub fn encode_add_recovery_rotation_capability_script(recovery_address: AccountA
         ADD_RECOVERY_ROTATION_CAPABILITY_CODE.to_vec(),
         vec![],
         vec![TransactionArgument::Address(recovery_address)],
+    )
+}
+
+/// Append the `hash` to script hashes list allowed to be executed by the network.
+pub fn encode_add_to_script_allow_list_script(hash: Vec<u8>, sliding_nonce: u64) -> Script {
+    Script::new(
+        ADD_TO_SCRIPT_ALLOW_LIST_CODE.to_vec(),
+        vec![],
+        vec![
+            TransactionArgument::U8Vector(hash),
+            TransactionArgument::U64(sliding_nonce),
+        ],
     )
 }
 
@@ -752,8 +747,6 @@ pub fn encode_create_designated_dealer_script(
     addr: AccountAddress,
     auth_key_prefix: Vec<u8>,
     human_name: Vec<u8>,
-    base_url: Vec<u8>,
-    compliance_public_key: Vec<u8>,
     add_all_currencies: bool,
 ) -> Script {
     Script::new(
@@ -764,8 +757,6 @@ pub fn encode_create_designated_dealer_script(
             TransactionArgument::Address(addr),
             TransactionArgument::U8Vector(auth_key_prefix),
             TransactionArgument::U8Vector(human_name),
-            TransactionArgument::U8Vector(base_url),
-            TransactionArgument::U8Vector(compliance_public_key),
             TransactionArgument::Bool(add_all_currencies),
         ],
     )
@@ -782,8 +773,6 @@ pub fn encode_create_parent_vasp_account_script(
     new_account_address: AccountAddress,
     auth_key_prefix: Vec<u8>,
     human_name: Vec<u8>,
-    base_url: Vec<u8>,
-    compliance_public_key: Vec<u8>,
     add_all_currencies: bool,
 ) -> Script {
     Script::new(
@@ -794,8 +783,6 @@ pub fn encode_create_parent_vasp_account_script(
             TransactionArgument::Address(new_account_address),
             TransactionArgument::U8Vector(auth_key_prefix),
             TransactionArgument::U8Vector(human_name),
-            TransactionArgument::U8Vector(base_url),
-            TransactionArgument::U8Vector(compliance_public_key),
             TransactionArgument::Bool(add_all_currencies),
         ],
     )
@@ -808,29 +795,6 @@ pub fn encode_create_parent_vasp_account_script(
 /// * Aborts with `RecoveryAddress::ENOT_A_VASP` if `account` is not a ParentVASP or ChildVASP
 pub fn encode_create_recovery_address_script() -> Script {
     Script::new(CREATE_RECOVERY_ADDRESS_CODE.to_vec(), vec![], vec![])
-}
-
-/// Create an account with the ParentVASP role at `address` with authentication key
-/// `auth_key_prefix` | `new_account_address` and a 0 balance of type `currency`. If
-/// `add_all_currencies` is true, 0 balances for all available currencies in the system will
-/// also be added. This can only be invoked by an Association account.
-/// The `human_name`, `base_url`, and compliance_public_key` fields of the
-/// ParentVASP are filled in with dummy information.
-pub fn encode_create_testing_account_script(
-    coin_type: TypeTag,
-    new_account_address: AccountAddress,
-    auth_key_prefix: Vec<u8>,
-    add_all_currencies: bool,
-) -> Script {
-    Script::new(
-        CREATE_TESTING_ACCOUNT_CODE.to_vec(),
-        vec![coin_type],
-        vec![
-            TransactionArgument::Address(new_account_address),
-            TransactionArgument::U8Vector(auth_key_prefix),
-            TransactionArgument::Bool(add_all_currencies),
-        ],
-    )
 }
 
 /// Create a validator account at `new_validator_address` with `auth_key_prefix`and human_name.
@@ -894,15 +858,6 @@ pub fn encode_mint_lbr_script(amount_lbr: u64) -> Script {
         MINT_LBR_CODE.to_vec(),
         vec![],
         vec![TransactionArgument::U64(amount_lbr)],
-    )
-}
-
-/// Modify publishing options. Takes the LCS bytes of a `VMPublishingOption` object as input.
-pub fn encode_modify_publishing_option_script(args: Vec<u8>) -> Script {
-    Script::new(
-        MODIFY_PUBLISHING_OPTION_CODE.to_vec(),
-        vec![],
-        vec![TransactionArgument::U8Vector(args)],
     )
 }
 
@@ -1163,6 +1118,25 @@ pub fn encode_set_validator_operator_script(
     )
 }
 
+/// Set validator operator as 'operator_account' of validator owner 'account' (via Admin Script).
+/// `operator_name` should match expected from operator account. This script also
+/// takes `sliding_nonce`, as a unique nonce for this operation. See `Sliding_nonce.move` for details.
+pub fn encode_set_validator_operator_with_nonce_admin_script(
+    sliding_nonce: u64,
+    operator_name: Vec<u8>,
+    operator_account: AccountAddress,
+) -> Script {
+    Script::new(
+        SET_VALIDATOR_OPERATOR_WITH_NONCE_ADMIN_CODE.to_vec(),
+        vec![],
+        vec![
+            TransactionArgument::U64(sliding_nonce),
+            TransactionArgument::U8Vector(operator_name),
+            TransactionArgument::Address(operator_account),
+        ],
+    )
+}
+
 /// Mint 'mint_amount' to 'designated_dealer_address' for 'tier_index' tier.
 /// Max valid tier index is 3 since there are max 4 tiers per DD.
 /// Sender should be treasury compliance account and receiver authorized DD.
@@ -1203,7 +1177,7 @@ pub fn encode_unfreeze_account_script(
 }
 
 /// Unmints `amount_lbr` LBR from the sending account into the constituent coins and deposits
-/// the resulting coins into the sending account."
+/// the resulting coins into the sending account.
 pub fn encode_unmint_lbr_script(amount_lbr: u64) -> Script {
     Script::new(
         UNMINT_LBR_CODE.to_vec(),
@@ -1280,6 +1254,13 @@ fn decode_add_recovery_rotation_capability_script(script: &Script) -> Option<Scr
     })
 }
 
+fn decode_add_to_script_allow_list_script(script: &Script) -> Option<ScriptCall> {
+    Some(ScriptCall::AddToScriptAllowList {
+        hash: decode_u8vector_argument(script.args().get(0)?.clone())?,
+        sliding_nonce: decode_u64_argument(script.args().get(1)?.clone())?,
+    })
+}
+
 fn decode_add_validator_and_reconfigure_script(script: &Script) -> Option<ScriptCall> {
     Some(ScriptCall::AddValidatorAndReconfigure {
         sliding_nonce: decode_u64_argument(script.args().get(0)?.clone())?,
@@ -1326,9 +1307,7 @@ fn decode_create_designated_dealer_script(script: &Script) -> Option<ScriptCall>
         addr: decode_address_argument(script.args().get(1)?.clone())?,
         auth_key_prefix: decode_u8vector_argument(script.args().get(2)?.clone())?,
         human_name: decode_u8vector_argument(script.args().get(3)?.clone())?,
-        base_url: decode_u8vector_argument(script.args().get(4)?.clone())?,
-        compliance_public_key: decode_u8vector_argument(script.args().get(5)?.clone())?,
-        add_all_currencies: decode_bool_argument(script.args().get(6)?.clone())?,
+        add_all_currencies: decode_bool_argument(script.args().get(4)?.clone())?,
     })
 }
 
@@ -1339,23 +1318,12 @@ fn decode_create_parent_vasp_account_script(script: &Script) -> Option<ScriptCal
         new_account_address: decode_address_argument(script.args().get(1)?.clone())?,
         auth_key_prefix: decode_u8vector_argument(script.args().get(2)?.clone())?,
         human_name: decode_u8vector_argument(script.args().get(3)?.clone())?,
-        base_url: decode_u8vector_argument(script.args().get(4)?.clone())?,
-        compliance_public_key: decode_u8vector_argument(script.args().get(5)?.clone())?,
-        add_all_currencies: decode_bool_argument(script.args().get(6)?.clone())?,
+        add_all_currencies: decode_bool_argument(script.args().get(4)?.clone())?,
     })
 }
 
 fn decode_create_recovery_address_script(_script: &Script) -> Option<ScriptCall> {
     Some(ScriptCall::CreateRecoveryAddress {})
-}
-
-fn decode_create_testing_account_script(script: &Script) -> Option<ScriptCall> {
-    Some(ScriptCall::CreateTestingAccount {
-        coin_type: script.ty_args().get(0)?.clone(),
-        new_account_address: decode_address_argument(script.args().get(0)?.clone())?,
-        auth_key_prefix: decode_u8vector_argument(script.args().get(1)?.clone())?,
-        add_all_currencies: decode_bool_argument(script.args().get(2)?.clone())?,
-    })
 }
 
 fn decode_create_validator_account_script(script: &Script) -> Option<ScriptCall> {
@@ -1386,12 +1354,6 @@ fn decode_freeze_account_script(script: &Script) -> Option<ScriptCall> {
 fn decode_mint_lbr_script(script: &Script) -> Option<ScriptCall> {
     Some(ScriptCall::MintLbr {
         amount_lbr: decode_u64_argument(script.args().get(0)?.clone())?,
-    })
-}
-
-fn decode_modify_publishing_option_script(script: &Script) -> Option<ScriptCall> {
-    Some(ScriptCall::ModifyPublishingOption {
-        args: decode_u8vector_argument(script.args().get(0)?.clone())?,
     })
 }
 
@@ -1498,6 +1460,14 @@ fn decode_set_validator_operator_script(script: &Script) -> Option<ScriptCall> {
     })
 }
 
+fn decode_set_validator_operator_with_nonce_admin_script(script: &Script) -> Option<ScriptCall> {
+    Some(ScriptCall::SetValidatorOperatorWithNonceAdmin {
+        sliding_nonce: decode_u64_argument(script.args().get(0)?.clone())?,
+        operator_name: decode_u8vector_argument(script.args().get(1)?.clone())?,
+        operator_account: decode_address_argument(script.args().get(2)?.clone())?,
+    })
+}
+
 fn decode_tiered_mint_script(script: &Script) -> Option<ScriptCall> {
     Some(ScriptCall::TieredMint {
         coin_type: script.ty_args().get(0)?.clone(),
@@ -1567,6 +1537,10 @@ static SCRIPT_DECODER_MAP: once_cell::sync::Lazy<DecoderMap> = once_cell::sync::
         Box::new(decode_add_recovery_rotation_capability_script),
     );
     map.insert(
+        ADD_TO_SCRIPT_ALLOW_LIST_CODE.to_vec(),
+        Box::new(decode_add_to_script_allow_list_script),
+    );
+    map.insert(
         ADD_VALIDATOR_AND_RECONFIGURE_CODE.to_vec(),
         Box::new(decode_add_validator_and_reconfigure_script),
     );
@@ -1596,10 +1570,6 @@ static SCRIPT_DECODER_MAP: once_cell::sync::Lazy<DecoderMap> = once_cell::sync::
         Box::new(decode_create_recovery_address_script),
     );
     map.insert(
-        CREATE_TESTING_ACCOUNT_CODE.to_vec(),
-        Box::new(decode_create_testing_account_script),
-    );
-    map.insert(
         CREATE_VALIDATOR_ACCOUNT_CODE.to_vec(),
         Box::new(decode_create_validator_account_script),
     );
@@ -1612,10 +1582,6 @@ static SCRIPT_DECODER_MAP: once_cell::sync::Lazy<DecoderMap> = once_cell::sync::
         Box::new(decode_freeze_account_script),
     );
     map.insert(MINT_LBR_CODE.to_vec(), Box::new(decode_mint_lbr_script));
-    map.insert(
-        MODIFY_PUBLISHING_OPTION_CODE.to_vec(),
-        Box::new(decode_modify_publishing_option_script),
-    );
     map.insert(
         PEER_TO_PEER_WITH_METADATA_CODE.to_vec(),
         Box::new(decode_peer_to_peer_with_metadata_script),
@@ -1666,6 +1632,10 @@ static SCRIPT_DECODER_MAP: once_cell::sync::Lazy<DecoderMap> = once_cell::sync::
         Box::new(decode_set_validator_operator_script),
     );
     map.insert(
+        SET_VALIDATOR_OPERATOR_WITH_NONCE_ADMIN_CODE.to_vec(),
+        Box::new(decode_set_validator_operator_with_nonce_admin_script),
+    );
+    map.insert(
         TIERED_MINT_CODE.to_vec(),
         Box::new(decode_tiered_mint_script),
     );
@@ -1693,7 +1663,6 @@ static SCRIPT_DECODER_MAP: once_cell::sync::Lazy<DecoderMap> = once_cell::sync::
     map
 });
 
-#[allow(dead_code)]
 fn decode_bool_argument(arg: TransactionArgument) -> Option<bool> {
     match arg {
         TransactionArgument::Bool(value) => Some(value),
@@ -1701,15 +1670,6 @@ fn decode_bool_argument(arg: TransactionArgument) -> Option<bool> {
     }
 }
 
-#[allow(dead_code)]
-fn decode_u8_argument(arg: TransactionArgument) -> Option<u8> {
-    match arg {
-        TransactionArgument::U8(value) => Some(value),
-        _ => None,
-    }
-}
-
-#[allow(dead_code)]
 fn decode_u64_argument(arg: TransactionArgument) -> Option<u64> {
     match arg {
         TransactionArgument::U64(value) => Some(value),
@@ -1717,15 +1677,6 @@ fn decode_u64_argument(arg: TransactionArgument) -> Option<u64> {
     }
 }
 
-#[allow(dead_code)]
-fn decode_u128_argument(arg: TransactionArgument) -> Option<u128> {
-    match arg {
-        TransactionArgument::U128(value) => Some(value),
-        _ => None,
-    }
-}
-
-#[allow(dead_code)]
 fn decode_address_argument(arg: TransactionArgument) -> Option<AccountAddress> {
     match arg {
         TransactionArgument::Address(value) => Some(value),
@@ -1733,8 +1684,7 @@ fn decode_address_argument(arg: TransactionArgument) -> Option<AccountAddress> {
     }
 }
 
-#[allow(dead_code)]
-fn decode_u8vector_argument(arg: TransactionArgument) -> Option<Bytes> {
+fn decode_u8vector_argument(arg: TransactionArgument) -> Option<Vec<u8>> {
     match arg {
         TransactionArgument::U8Vector(value) => Some(value),
         _ => None,
@@ -1758,6 +1708,17 @@ const ADD_RECOVERY_ROTATION_CAPABILITY_CODE: &[u8] = &[
     108, 105, 116, 121, 23, 97, 100, 100, 95, 114, 111, 116, 97, 116, 105, 111, 110, 95, 99, 97,
     112, 97, 98, 105, 108, 105, 116, 121, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 4, 3,
     5, 11, 0, 17, 0, 10, 1, 17, 1, 2,
+];
+
+const ADD_TO_SCRIPT_ALLOW_LIST_CODE: &[u8] = &[
+    161, 28, 235, 11, 1, 0, 0, 0, 5, 1, 0, 4, 3, 4, 10, 5, 14, 16, 7, 30, 93, 8, 123, 16, 0, 0, 0,
+    1, 0, 2, 0, 1, 0, 1, 3, 2, 1, 0, 2, 6, 12, 10, 2, 0, 2, 6, 12, 3, 3, 6, 12, 10, 2, 3, 32, 76,
+    105, 98, 114, 97, 84, 114, 97, 110, 115, 97, 99, 116, 105, 111, 110, 80, 117, 98, 108, 105,
+    115, 104, 105, 110, 103, 79, 112, 116, 105, 111, 110, 12, 83, 108, 105, 100, 105, 110, 103, 78,
+    111, 110, 99, 101, 24, 97, 100, 100, 95, 116, 111, 95, 115, 99, 114, 105, 112, 116, 95, 97,
+    108, 108, 111, 119, 95, 108, 105, 115, 116, 21, 114, 101, 99, 111, 114, 100, 95, 110, 111, 110,
+    99, 101, 95, 111, 114, 95, 97, 98, 111, 114, 116, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    1, 0, 3, 1, 7, 10, 0, 10, 2, 17, 1, 11, 0, 11, 1, 17, 0, 2,
 ];
 
 const ADD_VALIDATOR_AND_RECONFIGURE_CODE: &[u8] = &[
@@ -1813,25 +1774,25 @@ const CREATE_CHILD_VASP_ACCOUNT_CODE: &[u8] = &[
 ];
 
 const CREATE_DESIGNATED_DEALER_CODE: &[u8] = &[
-    161, 28, 235, 11, 1, 0, 0, 0, 6, 1, 0, 4, 3, 4, 11, 4, 15, 2, 5, 17, 35, 7, 52, 73, 8, 125, 16,
-    0, 0, 0, 1, 1, 2, 0, 1, 0, 0, 3, 2, 1, 1, 1, 1, 4, 2, 6, 12, 3, 0, 7, 6, 12, 5, 10, 2, 10, 2,
-    10, 2, 10, 2, 1, 8, 6, 12, 3, 5, 10, 2, 10, 2, 10, 2, 10, 2, 1, 1, 9, 0, 12, 76, 105, 98, 114,
-    97, 65, 99, 99, 111, 117, 110, 116, 12, 83, 108, 105, 100, 105, 110, 103, 78, 111, 110, 99,
-    101, 21, 114, 101, 99, 111, 114, 100, 95, 110, 111, 110, 99, 101, 95, 111, 114, 95, 97, 98,
-    111, 114, 116, 24, 99, 114, 101, 97, 116, 101, 95, 100, 101, 115, 105, 103, 110, 97, 116, 101,
-    100, 95, 100, 101, 97, 108, 101, 114, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 3,
-    1, 12, 10, 0, 10, 1, 17, 0, 11, 0, 10, 2, 11, 3, 11, 4, 11, 5, 11, 6, 10, 7, 56, 0, 2,
+    161, 28, 235, 11, 1, 0, 0, 0, 6, 1, 0, 4, 3, 4, 11, 4, 15, 2, 5, 17, 27, 7, 44, 73, 8, 117, 16,
+    0, 0, 0, 1, 1, 2, 0, 1, 0, 0, 3, 2, 1, 1, 1, 1, 4, 2, 6, 12, 3, 0, 5, 6, 12, 5, 10, 2, 10, 2,
+    1, 6, 6, 12, 3, 5, 10, 2, 10, 2, 1, 1, 9, 0, 12, 76, 105, 98, 114, 97, 65, 99, 99, 111, 117,
+    110, 116, 12, 83, 108, 105, 100, 105, 110, 103, 78, 111, 110, 99, 101, 21, 114, 101, 99, 111,
+    114, 100, 95, 110, 111, 110, 99, 101, 95, 111, 114, 95, 97, 98, 111, 114, 116, 24, 99, 114,
+    101, 97, 116, 101, 95, 100, 101, 115, 105, 103, 110, 97, 116, 101, 100, 95, 100, 101, 97, 108,
+    101, 114, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 3, 1, 10, 10, 0, 10, 1, 17, 0,
+    11, 0, 10, 2, 11, 3, 11, 4, 10, 5, 56, 0, 2,
 ];
 
 const CREATE_PARENT_VASP_ACCOUNT_CODE: &[u8] = &[
-    161, 28, 235, 11, 1, 0, 0, 0, 6, 1, 0, 4, 3, 4, 11, 4, 15, 2, 5, 17, 35, 7, 52, 75, 8, 127, 16,
-    0, 0, 0, 1, 1, 2, 0, 1, 0, 0, 3, 2, 1, 1, 1, 1, 4, 2, 6, 12, 3, 0, 7, 6, 12, 5, 10, 2, 10, 2,
-    10, 2, 10, 2, 1, 8, 6, 12, 3, 5, 10, 2, 10, 2, 10, 2, 10, 2, 1, 1, 9, 0, 12, 76, 105, 98, 114,
-    97, 65, 99, 99, 111, 117, 110, 116, 12, 83, 108, 105, 100, 105, 110, 103, 78, 111, 110, 99,
-    101, 21, 114, 101, 99, 111, 114, 100, 95, 110, 111, 110, 99, 101, 95, 111, 114, 95, 97, 98,
-    111, 114, 116, 26, 99, 114, 101, 97, 116, 101, 95, 112, 97, 114, 101, 110, 116, 95, 118, 97,
-    115, 112, 95, 97, 99, 99, 111, 117, 110, 116, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
-    1, 1, 3, 1, 12, 10, 0, 10, 1, 17, 0, 11, 0, 10, 2, 11, 3, 11, 4, 11, 5, 11, 6, 10, 7, 56, 0, 2,
+    161, 28, 235, 11, 1, 0, 0, 0, 6, 1, 0, 4, 3, 4, 11, 4, 15, 2, 5, 17, 27, 7, 44, 75, 8, 119, 16,
+    0, 0, 0, 1, 1, 2, 0, 1, 0, 0, 3, 2, 1, 1, 1, 1, 4, 2, 6, 12, 3, 0, 5, 6, 12, 5, 10, 2, 10, 2,
+    1, 6, 6, 12, 3, 5, 10, 2, 10, 2, 1, 1, 9, 0, 12, 76, 105, 98, 114, 97, 65, 99, 99, 111, 117,
+    110, 116, 12, 83, 108, 105, 100, 105, 110, 103, 78, 111, 110, 99, 101, 21, 114, 101, 99, 111,
+    114, 100, 95, 110, 111, 110, 99, 101, 95, 111, 114, 95, 97, 98, 111, 114, 116, 26, 99, 114,
+    101, 97, 116, 101, 95, 112, 97, 114, 101, 110, 116, 95, 118, 97, 115, 112, 95, 97, 99, 99, 111,
+    117, 110, 116, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 3, 1, 10, 10, 0, 10, 1,
+    17, 0, 11, 0, 10, 2, 11, 3, 11, 4, 10, 5, 56, 0, 2,
 ];
 
 const CREATE_RECOVERY_ADDRESS_CODE: &[u8] = &[
@@ -1843,18 +1804,6 @@ const CREATE_RECOVERY_ADDRESS_CODE: &[u8] = &[
     121, 95, 114, 111, 116, 97, 116, 105, 111, 110, 95, 99, 97, 112, 97, 98, 105, 108, 105, 116,
     121, 7, 112, 117, 98, 108, 105, 115, 104, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0,
     3, 5, 10, 0, 11, 0, 17, 0, 17, 1, 2,
-];
-
-const CREATE_TESTING_ACCOUNT_CODE: &[u8] = &[
-    161, 28, 235, 11, 1, 0, 0, 0, 7, 1, 0, 2, 3, 2, 6, 4, 8, 2, 5, 10, 24, 7, 34, 40, 8, 74, 16, 6,
-    90, 68, 0, 0, 0, 1, 0, 1, 1, 1, 0, 3, 7, 6, 12, 5, 10, 2, 10, 2, 10, 2, 10, 2, 1, 0, 4, 6, 12,
-    5, 10, 2, 1, 1, 9, 0, 12, 76, 105, 98, 114, 97, 65, 99, 99, 111, 117, 110, 116, 26, 99, 114,
-    101, 97, 116, 101, 95, 112, 97, 114, 101, 110, 116, 95, 118, 97, 115, 112, 95, 97, 99, 99, 111,
-    117, 110, 116, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 10, 2, 8, 7, 116, 101, 115, 116,
-    110, 101, 116, 10, 2, 18, 17, 104, 116, 116, 112, 115, 58, 47, 47, 108, 105, 98, 114, 97, 46,
-    111, 114, 103, 10, 2, 33, 32, 183, 163, 193, 45, 192, 200, 199, 72, 171, 7, 82, 91, 112, 17,
-    34, 184, 139, 215, 143, 96, 12, 118, 52, 45, 39, 242, 94, 95, 146, 68, 76, 222, 1, 1, 2, 1, 9,
-    11, 0, 10, 1, 11, 2, 7, 0, 7, 1, 7, 2, 10, 3, 56, 0, 2,
 ];
 
 const CREATE_VALIDATOR_ACCOUNT_CODE: &[u8] = &[
@@ -1898,13 +1847,6 @@ const MINT_LBR_CODE: &[u8] = &[
     119, 95, 99, 97, 112, 97, 98, 105, 108, 105, 116, 121, 10, 115, 116, 97, 112, 108, 101, 95,
     108, 98, 114, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 4, 1, 9, 11, 0, 17, 0, 12, 2,
     14, 2, 10, 1, 17, 2, 11, 2, 17, 1, 2,
-];
-
-const MODIFY_PUBLISHING_OPTION_CODE: &[u8] = &[
-    161, 28, 235, 11, 1, 0, 0, 0, 5, 1, 0, 2, 3, 2, 5, 5, 7, 6, 7, 13, 36, 8, 49, 16, 0, 0, 0, 1,
-    0, 1, 0, 2, 6, 12, 10, 2, 0, 13, 76, 105, 98, 114, 97, 86, 77, 67, 111, 110, 102, 105, 103, 21,
-    115, 101, 116, 95, 112, 117, 98, 108, 105, 115, 104, 105, 110, 103, 95, 111, 112, 116, 105,
-    111, 110, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 4, 11, 0, 11, 1, 17, 0, 2,
 ];
 
 const PEER_TO_PEER_WITH_METADATA_CODE: &[u8] = &[
@@ -2053,6 +1995,19 @@ const SET_VALIDATOR_OPERATOR_CODE: &[u8] = &[
     111, 112, 101, 114, 97, 116, 111, 114, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 4, 5,
     15, 10, 2, 17, 0, 11, 1, 33, 12, 3, 11, 3, 3, 11, 11, 0, 1, 6, 0, 0, 0, 0, 0, 0, 0, 0, 39, 11,
     0, 10, 2, 17, 1, 2,
+];
+
+const SET_VALIDATOR_OPERATOR_WITH_NONCE_ADMIN_CODE: &[u8] = &[
+    161, 28, 235, 11, 1, 0, 0, 0, 5, 1, 0, 6, 3, 6, 15, 5, 21, 26, 7, 47, 103, 8, 150, 1, 16, 0, 0,
+    0, 1, 0, 2, 0, 3, 0, 1, 0, 2, 4, 2, 3, 0, 1, 5, 4, 1, 0, 2, 6, 12, 3, 0, 1, 5, 1, 10, 2, 2, 6,
+    12, 5, 5, 6, 12, 6, 12, 3, 10, 2, 5, 2, 1, 3, 12, 83, 108, 105, 100, 105, 110, 103, 78, 111,
+    110, 99, 101, 15, 86, 97, 108, 105, 100, 97, 116, 111, 114, 67, 111, 110, 102, 105, 103, 23,
+    86, 97, 108, 105, 100, 97, 116, 111, 114, 79, 112, 101, 114, 97, 116, 111, 114, 67, 111, 110,
+    102, 105, 103, 21, 114, 101, 99, 111, 114, 100, 95, 110, 111, 110, 99, 101, 95, 111, 114, 95,
+    97, 98, 111, 114, 116, 14, 103, 101, 116, 95, 104, 117, 109, 97, 110, 95, 110, 97, 109, 101,
+    12, 115, 101, 116, 95, 111, 112, 101, 114, 97, 116, 111, 114, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 1, 0, 5, 6, 18, 11, 0, 10, 2, 17, 0, 10, 4, 17, 1, 11, 3, 33, 12, 5, 11, 5, 3, 14,
+    11, 1, 1, 6, 0, 0, 0, 0, 0, 0, 0, 0, 39, 11, 1, 10, 4, 17, 2, 2,
 ];
 
 const TIERED_MINT_CODE: &[u8] = &[

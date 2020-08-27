@@ -82,3 +82,49 @@ pub static LIBRA_STORAGE_API_LATENCY_SECONDS: Lazy<HistogramVec> = Lazy::new(|| 
     )
     .unwrap()
 });
+
+pub static LIBRA_STORAGE_OTHER_TIMERS_SECONDS: Lazy<HistogramVec> = Lazy::new(|| {
+    register_histogram_vec!(
+        // metric name
+        "libra_storage_other_timers_seconds",
+        // metric description
+        "Various timers below public API level.",
+        // metric labels (dimensions)
+        &["name"]
+    )
+    .unwrap()
+});
+
+// Backup progress gauges:
+
+pub(crate) static BACKUP_EPOCH_ENDING_EPOCH: Lazy<IntGauge> = Lazy::new(|| {
+    register_int_gauge!(
+        "libra_backup_handler_epoch_ending_epoch",
+        "Current epoch returned in an epoch ending backup."
+    )
+    .unwrap()
+});
+
+pub(crate) static BACKUP_TXN_VERSION: Lazy<IntGauge> = Lazy::new(|| {
+    register_int_gauge!(
+        "libra_backup_handler_transaction_version",
+        "Current version returned in a transaction backup."
+    )
+    .unwrap()
+});
+
+pub(crate) static BACKUP_STATE_SNAPSHOT_VERSION: Lazy<IntGauge> = Lazy::new(|| {
+    register_int_gauge!(
+        "libra_backup_handler_state_snapshot_version",
+        "Version of requested state snapshot backup."
+    )
+    .unwrap()
+});
+
+pub(crate) static BACKUP_STATE_SNAPSHOT_LEAF_IDX: Lazy<IntGauge> = Lazy::new(|| {
+    register_int_gauge!(
+        "libra_backup_handler_state_snapshot_leaf_index",
+        "Index of current leaf index returned in a state snapshot backup."
+    )
+    .unwrap()
+});

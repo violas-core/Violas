@@ -5,10 +5,12 @@ use anyhow::anyhow;
 use cli::client_proxy::ClientProxy;
 use debug_interface::NodeDebugClient;
 use libra_config::config::{Identity, KeyManagerConfig, NodeConfig, SecureBackend, WaypointConfig};
-use libra_crypto::{ed25519::Ed25519PrivateKey, PrivateKey, SigningKey, Uniform};
+use libra_crypto::{ed25519::Ed25519PrivateKey, HashValue, PrivateKey, SigningKey, Uniform};
 use libra_genesis_tool::config_builder::FullnodeType;
-use libra_global_constants::{CONSENSUS_KEY, OPERATOR_KEY, VALIDATOR_NETWORK_KEY};
-use libra_json_rpc::views::{ScriptView, TransactionDataView};
+use libra_global_constants::{
+    CONSENSUS_KEY, OPERATOR_ACCOUNT, OPERATOR_KEY, VALIDATOR_NETWORK_KEY,
+};
+use libra_json_rpc::views::{ScriptView, TransactionDataView, VMStatusView as JsonVMStatusView};
 use libra_key_manager::{
     self,
     libra_interface::{JsonRpcLibraInterface, LibraInterface},
@@ -20,6 +22,7 @@ use libra_secure_storage::{CryptoStorage, KVStorage, Storage, Value};
 use libra_swarm::swarm::{LibraNode, LibraSwarm};
 use libra_temppath::TempPath;
 use libra_trace::trace::trace_node;
+use libra_transaction_replay::{libra_client::LibraJsonRpcDebugger, LibraDebugger};
 use libra_types::{
     account_address::AccountAddress,
     account_config::{libra_root_address, testnet_dd_account_address, COIN1_NAME},
@@ -33,7 +36,7 @@ use regex::Regex;
 use rust_decimal::Decimal;
 use std::{
     collections::BTreeMap,
-    convert::TryInto,
+    convert::{TryFrom, TryInto},
     fs,
     fs::File,
     io::{self, Write},
@@ -253,6 +256,20 @@ fn setup_swarm_and_client_proxy(
     env.validator_swarm.launch();
     let ac_client = env.get_validator_client(client_port_index, None);
     (env, ac_client)
+}
+
+fn wait_for_transaction_on_all_nodes(
+    swarm: &TestEnvironment,
+    num_nodes: usize,
+    account: AccountAddress,
+    sequence_number: u64,
+) {
+    for i in 0..num_nodes {
+        let mut client = swarm.get_validator_client(i, None);
+        client
+            .wait_for_transaction(account, sequence_number)
+            .unwrap();
+    }
 }
 
 fn test_smoke_script(mut client_proxy: ClientProxy) {
@@ -1139,18 +1156,11 @@ fn test_e2e_modify_publishing_option() {
         1
     );
 
-    client_proxy
-        .disable_custom_script(&["disable_custom_script"], true)
-        .unwrap();
+    let hash = hex::encode(&HashValue::random().to_vec());
 
-    // mint another 10 coins after restart
     client_proxy
-        .mint_coins(&["mintb", "0", "10", "Coin1"], true)
+        .add_to_script_allow_list(&["add_to_script_allow_list", hash.as_str()], true)
         .unwrap();
-    assert!(compare_balances(
-        vec![(20.0, "Coin1".to_string())],
-        client_proxy.get_balances(&["b", "0"]).unwrap(),
-    ));
 
     // Now that publishing option was changed to locked, this transaction will be rejected.
     assert!(format!(
@@ -1630,7 +1640,8 @@ fn test_operator_key_rotation_recovery() {
     // Load validator's on disk storage
     let backend = load_backend_storage(&&node_config);
 
-    let (txn_ctx, _) = op_tool.rotate_operator_key(&backend).unwrap();
+    // Rotate the operator key
+    let (txn_ctx, new_operator_key) = op_tool.rotate_operator_key(&backend).unwrap();
     let mut client = swarm.get_validator_client(0, None);
     client
         .wait_for_transaction(txn_ctx.address, txn_ctx.sequence_number + 1)
@@ -1643,10 +1654,25 @@ fn test_operator_key_rotation_recovery() {
     let vm_status = result.unwrap();
     assert_eq!(VMStatusView::Executed, vm_status);
 
+    // Verify that the operator key was updated on-chain
+    let mut storage: Storage = (&backend).try_into().unwrap();
+    let operator_account_string = storage
+        .get(OPERATOR_ACCOUNT)
+        .unwrap()
+        .value
+        .string()
+        .unwrap();
+    let operator_account = AccountAddress::from_str(&operator_account_string).unwrap();
+    let account_resource = op_tool.account_resource(operator_account).unwrap();
+    let on_chain_operator_key = hex::decode(account_resource.authentication_key).unwrap();
+    assert_eq!(
+        AuthenticationKey::ed25519(&new_operator_key),
+        AuthenticationKey::try_from(on_chain_operator_key).unwrap()
+    );
+
     // Rotate the operator key in storage manually and perform another rotation using the op tool.
     // Here, we expected the op_tool to see that the operator key in storage doesn't match the one
     // on-chain, and thus it should simply forward a transaction to the blockchain.
-    let mut storage: Storage = (&backend).try_into().unwrap();
     let rotated_operator_key = storage.rotate_key(OPERATOR_KEY).unwrap();
     let (txn_ctx, new_operator_key) = op_tool.rotate_operator_key(&backend).unwrap();
     assert_eq!(rotated_operator_key, new_operator_key);
@@ -1660,11 +1686,20 @@ fn test_operator_key_rotation_recovery() {
         .unwrap();
     let vm_status = result.unwrap();
     assert_eq!(VMStatusView::Executed, vm_status);
+
+    // Verify that the operator key was updated on-chain
+    let account_resource = op_tool.account_resource(operator_account).unwrap();
+    let on_chain_operator_key = hex::decode(account_resource.authentication_key).unwrap();
+    assert_eq!(
+        AuthenticationKey::ed25519(&new_operator_key),
+        AuthenticationKey::try_from(on_chain_operator_key).unwrap()
+    );
 }
 
 #[test]
 fn test_network_key_rotation() {
-    let mut swarm = TestEnvironment::new(5);
+    let num_nodes = 5;
+    let mut swarm = TestEnvironment::new(num_nodes);
     swarm.validator_swarm.launch();
 
     // Load a node config
@@ -1679,10 +1714,12 @@ fn test_network_key_rotation() {
 
     // Rotate the validator network key
     let (txn_ctx, new_network_key) = op_tool.rotate_validator_network_key(&backend).unwrap();
-    let mut client = swarm.get_validator_client(0, None);
-    client
-        .wait_for_transaction(txn_ctx.address, txn_ctx.sequence_number + 1)
-        .unwrap();
+    wait_for_transaction_on_all_nodes(
+        &swarm,
+        num_nodes,
+        txn_ctx.address,
+        txn_ctx.sequence_number + 1,
+    );
 
     // Verify that config has been loaded correctly with new key
     let validator_account = node_config.validator_network.as_ref().unwrap().peer_id();
@@ -1705,7 +1742,8 @@ fn test_network_key_rotation() {
 
 #[test]
 fn test_network_key_rotation_recovery() {
-    let mut swarm = TestEnvironment::new(5);
+    let num_nodes = 5;
+    let mut swarm = TestEnvironment::new(num_nodes);
     swarm.validator_swarm.launch();
 
     // Load a node config
@@ -1726,10 +1764,13 @@ fn test_network_key_rotation_recovery() {
     let (txn_ctx, new_network_key) = op_tool.rotate_validator_network_key(&backend).unwrap();
     assert_eq!(new_network_key, to_x25519(rotated_network_key).unwrap());
 
-    let mut client = swarm.get_validator_client(0, None);
-    client
-        .wait_for_transaction(txn_ctx.address, txn_ctx.sequence_number + 1)
-        .unwrap();
+    // Ensure all nodes have received the transaction
+    wait_for_transaction_on_all_nodes(
+        &swarm,
+        num_nodes,
+        txn_ctx.address,
+        txn_ctx.sequence_number + 1,
+    );
 
     // Verify that config has been loaded correctly with new key
     let validator_account = node_config.validator_network.as_ref().unwrap().peer_id();
@@ -1912,6 +1953,47 @@ fn test_genesis_transaction_flow() {
     client_proxy_1
         .mint_coins(&["mintb", "1", "10", "Coin1"], true)
         .unwrap();
+}
+
+#[test]
+fn test_replay_tooling() {
+    let (swarm, mut client_proxy) = setup_swarm_and_client_proxy(1, 0);
+    let validator_config = NodeConfig::load(&swarm.validator_swarm.config.config_files[0]).unwrap();
+    let swarm_rpc_endpoint = format!("http://localhost:{}", validator_config.rpc.address.port());
+    let json_debugger = LibraDebugger::new(Box::new(
+        LibraJsonRpcDebugger::new(swarm_rpc_endpoint.as_str()).unwrap(),
+    ));
+
+    client_proxy.create_next_account(false).unwrap();
+    client_proxy.create_next_account(false).unwrap();
+    client_proxy
+        .mint_coins(&["mintb", "0", "100", "Coin1"], true)
+        .unwrap();
+
+    client_proxy
+        .mint_coins(&["mintb", "1", "100", "Coin1"], true)
+        .unwrap();
+
+    client_proxy
+        .transfer_coins(&["tb", "0", "1", "3", "Coin1"], true)
+        .unwrap();
+
+    let txn = client_proxy
+        .get_committed_txn_by_acc_seq(&["txn_acc_seq", "0", "0", "false"])
+        .unwrap()
+        .unwrap();
+
+    let replay_result = json_debugger
+        .execute_past_transactions(txn.version, 1)
+        .unwrap()
+        .pop()
+        .unwrap();
+
+    assert_eq!(replay_result.gas_used(), txn.gas_used);
+    assert_eq!(
+        JsonVMStatusView::from(&replay_result.status().status().unwrap()),
+        txn.vm_status
+    );
 }
 
 fn parse_waypoint(db_bootstrapper_output: &str) -> String {

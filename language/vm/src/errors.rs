@@ -131,6 +131,34 @@ impl VMError {
     pub fn status_type(&self) -> StatusType {
         self.major_status.status_type()
     }
+
+    pub fn all_data(
+        self,
+    ) -> (
+        StatusCode,
+        Option<u64>,
+        Option<String>,
+        Location,
+        Vec<(IndexKind, TableIndex)>,
+        Vec<(FunctionDefinitionIndex, CodeOffset)>,
+    ) {
+        let VMError {
+            major_status,
+            sub_status,
+            message,
+            location,
+            indices,
+            offsets,
+        } = self;
+        (
+            major_status,
+            sub_status,
+            message,
+            location,
+            indices,
+            offsets,
+        )
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -197,9 +225,24 @@ impl PartialVMError {
         Self { indices, ..self }
     }
 
+    pub fn at_indices(self, additional_indices: Vec<(IndexKind, TableIndex)>) -> Self {
+        let mut indices = self.indices;
+        indices.extend(additional_indices);
+        Self { indices, ..self }
+    }
+
     pub fn at_code_offset(self, function: FunctionDefinitionIndex, offset: CodeOffset) -> Self {
         let mut offsets = self.offsets;
         offsets.push((function, offset));
+        Self { offsets, ..self }
+    }
+
+    pub fn at_code_offsets(
+        self,
+        additional_offsets: Vec<(FunctionDefinitionIndex, CodeOffset)>,
+    ) -> Self {
+        let mut offsets = self.offsets;
+        offsets.extend(additional_offsets);
         Self { offsets, ..self }
     }
 

@@ -18,8 +18,7 @@ script{
         DualAttestation::set_microlibra_limit(not_blessed, 99);
     }
 }
-// check: ABORTED
-// check: 3
+// check: "Keep(ABORTED { code: 258,"
 
 //! new-transaction
 //! sender: blessed
@@ -36,31 +35,25 @@ script{
 script{
     use 0x1::DualAttestation;
     fun main(account: &signer) {
-        DualAttestation::publish_credential(
-            account, account,
-            x"", x"", x""
-        );
+        DualAttestation::publish_credential(account, account, x"");
     }
 }
-// check: "Keep(ABORTED { code: 2,"
+// check: "Keep(ABORTED { code: 1283,"
 
 //! new-transaction
 //! sender: blessed
 script{
     use 0x1::DualAttestation;
     fun main(account: &signer) {
-        DualAttestation::publish_credential(
-            account, account,
-            x"", x"", x""
-        );
+        DualAttestation::publish_credential(account, account, x"");
     }
 }
-// check: "Keep(ABORTED { code: 2,"
+// check: "Keep(ABORTED { code: 1283,"
 
 //! new-transaction
 //! sender: libraroot
 //! type-args: 0x1::Coin1::Coin1
-//! args: 0, {{bob}}, {{bob::auth_key}}, b"bob", b"boburl", x"7013b6ed7dde3cfb1251db1b04ae9cd7853470284085693590a75def645a926d", true
+//! args: 0, {{bob}}, {{bob::auth_key}}, b"bob", true
 stdlib_script::create_parent_vasp_account
 // check: EXECUTED
 
@@ -69,13 +62,10 @@ stdlib_script::create_parent_vasp_account
 script{
     use 0x1::DualAttestation;
     fun main(account: &signer) {
-        DualAttestation::publish_credential(
-            account, account,
-            x"", x"", x""
-        );
+        DualAttestation::publish_credential(account, account, x"");
     }
 }
-// check: "Keep(ABORTED { code: 3,"
+// check: "Keep(ABORTED { code: 770,"
 
 //! new-transaction
 //! sender: blessed
@@ -85,20 +75,10 @@ script{
         DualAttestation::rotate_base_url(account, x"");
     }
 }
-// check: "Keep(ABORTED { code: 2,"
+// check: "Keep(ABORTED { code: 5,"
 
 //! new-transaction
 //! sender: blessed
-script{
-    use 0x1::DualAttestation;
-    fun main(account: &signer) {
-        DualAttestation::rotate_compliance_public_key(account, x"");
-    }
-}
-// check: "Keep(ABORTED { code: 2,"
-
-//! new-transaction
-//! sender: bob
 script{
     use 0x1::DualAttestation;
     fun main(account: &signer) {
@@ -112,10 +92,10 @@ script{
 script{
     use 0x1::DualAttestation;
     fun main(account: &signer) {
-        DualAttestation::initialize(account);
+        DualAttestation::rotate_compliance_public_key(account, x"");
     }
 }
-// check: "Keep(ABORTED { code: 0,"
+// check: "Keep(ABORTED { code: 519,"
 
 //! new-transaction
 //! sender: bob
@@ -125,4 +105,14 @@ script{
         DualAttestation::initialize(account);
     }
 }
-// check: "Keep(ABORTED { code: 0,"
+// check: "Keep(ABORTED { code: 1,"
+
+//! new-transaction
+//! sender: bob
+script{
+    use 0x1::DualAttestation;
+    fun main(account: &signer) {
+        DualAttestation::initialize(account);
+    }
+}
+// check: "Keep(ABORTED { code: 1,"

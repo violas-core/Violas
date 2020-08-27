@@ -9,6 +9,7 @@ use libra_crypto::{
     ed25519::{Ed25519PrivateKey, Ed25519PublicKey},
     test_utils::KeyPair,
 };
+use libra_types::{chain_id::ChainId, waypoint::Waypoint};
 use rand::prelude::*;
 use reqwest::Client;
 use std::convert::TryInto;
@@ -21,10 +22,16 @@ pub struct Cluster {
     lsr_instances: Vec<Instance>,
     vault_instances: Vec<Instance>,
     mint_key_pair: KeyPair<Ed25519PrivateKey, Ed25519PublicKey>,
+    waypoint: Option<Waypoint>,
+    pub chain_id: ChainId,
 }
 
 impl Cluster {
-    pub fn from_host_port(peers: Vec<(String, u32, Option<u32>)>, mint_file: &str) -> Self {
+    pub fn from_host_port(
+        peers: Vec<(String, u32, Option<u32>)>,
+        mint_file: &str,
+        chain_id: ChainId,
+    ) -> Self {
         let http_client = Client::new();
         let instances: Vec<Instance> = peers
             .into_iter()
@@ -46,6 +53,8 @@ impl Cluster {
             lsr_instances: vec![],
             vault_instances: vec![],
             mint_key_pair,
+            waypoint: None,
+            chain_id,
         }
     }
 
@@ -59,18 +68,33 @@ impl Cluster {
         KeyPair::from(mint_key)
     }
 
+    fn get_mint_key_pair_from_file(
+        mint_file: &str,
+    ) -> KeyPair<Ed25519PrivateKey, Ed25519PublicKey> {
+        let mint_key: Ed25519PrivateKey = generate_key::load_key(mint_file);
+        KeyPair::from(mint_key)
+    }
+
     pub fn new(
         validator_instances: Vec<Instance>,
         fullnode_instances: Vec<Instance>,
         lsr_instances: Vec<Instance>,
         vault_instances: Vec<Instance>,
+        waypoint: Option<Waypoint>,
     ) -> Self {
+        let mint_key_pair = if waypoint.is_some() {
+            Self::get_mint_key_pair_from_file("/tmp/mint.key")
+        } else {
+            Self::get_mint_key_pair()
+        };
         Self {
             validator_instances,
             fullnode_instances,
             lsr_instances,
             vault_instances,
-            mint_key_pair: Self::get_mint_key_pair(),
+            mint_key_pair,
+            waypoint,
+            chain_id: ChainId::test(),
         }
     }
 
@@ -190,6 +214,8 @@ impl Cluster {
             lsr_instances: vec![],
             vault_instances: vec![],
             mint_key_pair: self.mint_key_pair.clone(),
+            waypoint: self.waypoint,
+            chain_id: ChainId::test(),
         }
     }
 
@@ -200,6 +226,8 @@ impl Cluster {
             lsr_instances: vec![],
             vault_instances: vec![],
             mint_key_pair: self.mint_key_pair.clone(),
+            waypoint: self.waypoint,
+            chain_id: ChainId::test(),
         }
     }
 

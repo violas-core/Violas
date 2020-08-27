@@ -58,6 +58,7 @@ pub enum ConditionKind {
     AbortsIf,
     AbortsWith,
     SucceedsIf,
+    Modifies,
     Ensures,
     Requires,
     RequiresModule,
@@ -91,7 +92,7 @@ impl ConditionKind {
         use ConditionKind::*;
         matches!(
             self,
-            Requires | RequiresModule | AbortsIf | AbortsWith | SucceedsIf | Ensures
+            Requires | RequiresModule | AbortsIf | AbortsWith | SucceedsIf | Ensures | Modifies
         )
     }
 
@@ -100,7 +101,7 @@ impl ConditionKind {
         use ConditionKind::*;
         matches!(
             self,
-            Requires | RequiresModule | AbortsIf | AbortsWith | SucceedsIf | Ensures
+            Requires | RequiresModule | AbortsIf | AbortsWith | SucceedsIf | Ensures | Modifies
         )
     }
 
@@ -133,6 +134,7 @@ impl std::fmt::Display for ConditionKind {
             AbortsIf => write!(f, "aborts_if"),
             AbortsWith => write!(f, "aborts_with"),
             SucceedsIf => write!(f, "succeeds_if"),
+            Modifies => write!(f, "modifies"),
             Ensures => write!(f, "ensures"),
             Requires => write!(f, "requires"),
             RequiresModule => write!(f, "requires module"),
@@ -232,6 +234,7 @@ pub struct GlobalInvariant {
     pub mem_usage: BTreeSet<QualifiedId<StructId>>,
     pub spec_var_usage: BTreeSet<QualifiedId<SpecVarId>>,
     pub declaring_module: ModuleId,
+    pub properties: PropertyBag,
     pub cond: Exp,
 }
 
@@ -264,6 +267,13 @@ impl Exp {
             | Lambda(node_id, ..)
             | Block(node_id, ..)
             | IfElse(node_id, ..) => *node_id,
+        }
+    }
+
+    pub fn call_args(&self) -> &[Exp] {
+        match self {
+            Exp::Call(_, _, args) => args,
+            _ => panic!("function must be called on Exp::Call(...)"),
         }
     }
 
@@ -329,6 +339,14 @@ impl Exp {
             _ => &[],
         }
     }
+
+    /// Optionally extracts list of modify targets from the special `Operation::ModifyTargets`.
+    pub fn extract_modify_targets(&self) -> &[Exp] {
+        match self {
+            Exp::Call(_, Operation::ModifyTargets, args) => args.as_slice(),
+            _ => &[],
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -342,9 +360,10 @@ pub enum Operation {
     Index,
     Slice,
 
-    // Pseudo operators for aborts condition.
+    // Pseudo operators for expressions which have a special treatment in the translation.
     CondWithAbortCode, // aborts_if E with C
     AbortCodes,        // aborts_with C1, ..., Cn
+    ModifyTargets,     // modifies E1, ..., En
 
     // Binary operators
     Range,
@@ -406,6 +425,18 @@ pub enum Value {
     Number(BigInt),
     Bool(bool),
     ByteArray(Vec<u8>),
+}
+
+impl fmt::Display for Value {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
+        match self {
+            Value::Address(address) => write!(f, "{:x}", address),
+            Value::Number(int) => write!(f, "{}", int),
+            Value::Bool(b) => write!(f, "{}", b),
+            // TODO(tzakian): Figure out a better story for byte array displays
+            Value::ByteArray(bytes) => write!(f, "{:?}", bytes),
+        }
+    }
 }
 
 // =================================================================================================

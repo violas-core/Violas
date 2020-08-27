@@ -7,6 +7,11 @@
 
 -  [Resource `LibraWriteSetManager`](#0x1_LibraWriteSetManager_LibraWriteSetManager)
 -  [Struct `UpgradeEvent`](#0x1_LibraWriteSetManager_UpgradeEvent)
+-  [Const `ELIBRA_WRITE_SET_MANAGER`](#0x1_LibraWriteSetManager_ELIBRA_WRITE_SET_MANAGER)
+-  [Const `PROLOGUE_EINVALID_WRITESET_SENDER`](#0x1_LibraWriteSetManager_PROLOGUE_EINVALID_WRITESET_SENDER)
+-  [Const `PROLOGUE_EINVALID_ACCOUNT_AUTH_KEY`](#0x1_LibraWriteSetManager_PROLOGUE_EINVALID_ACCOUNT_AUTH_KEY)
+-  [Const `PROLOGUE_ESEQUENCE_NUMBER_TOO_OLD`](#0x1_LibraWriteSetManager_PROLOGUE_ESEQUENCE_NUMBER_TOO_OLD)
+-  [Const `PROLOGUE_ESEQUENCE_NUMBER_TOO_NEW`](#0x1_LibraWriteSetManager_PROLOGUE_ESEQUENCE_NUMBER_TOO_NEW)
 -  [Function `initialize`](#0x1_LibraWriteSetManager_initialize)
 -  [Function `prologue`](#0x1_LibraWriteSetManager_prologue)
 -  [Function `epilogue`](#0x1_LibraWriteSetManager_epilogue)
@@ -71,6 +76,63 @@
 
 </details>
 
+<a name="0x1_LibraWriteSetManager_ELIBRA_WRITE_SET_MANAGER"></a>
+
+## Const `ELIBRA_WRITE_SET_MANAGER`
+
+The
+<code><a href="#0x1_LibraWriteSetManager">LibraWriteSetManager</a></code> was not in the required state
+
+
+<pre><code><b>const</b> ELIBRA_WRITE_SET_MANAGER: u64 = 0;
+</code></pre>
+
+
+
+<a name="0x1_LibraWriteSetManager_PROLOGUE_EINVALID_WRITESET_SENDER"></a>
+
+## Const `PROLOGUE_EINVALID_WRITESET_SENDER`
+
+
+
+<pre><code><b>const</b> PROLOGUE_EINVALID_WRITESET_SENDER: u64 = 33;
+</code></pre>
+
+
+
+<a name="0x1_LibraWriteSetManager_PROLOGUE_EINVALID_ACCOUNT_AUTH_KEY"></a>
+
+## Const `PROLOGUE_EINVALID_ACCOUNT_AUTH_KEY`
+
+
+
+<pre><code><b>const</b> PROLOGUE_EINVALID_ACCOUNT_AUTH_KEY: u64 = 1;
+</code></pre>
+
+
+
+<a name="0x1_LibraWriteSetManager_PROLOGUE_ESEQUENCE_NUMBER_TOO_OLD"></a>
+
+## Const `PROLOGUE_ESEQUENCE_NUMBER_TOO_OLD`
+
+
+
+<pre><code><b>const</b> PROLOGUE_ESEQUENCE_NUMBER_TOO_OLD: u64 = 2;
+</code></pre>
+
+
+
+<a name="0x1_LibraWriteSetManager_PROLOGUE_ESEQUENCE_NUMBER_TOO_NEW"></a>
+
+## Const `PROLOGUE_ESEQUENCE_NUMBER_TOO_NEW`
+
+
+
+<pre><code><b>const</b> PROLOGUE_ESEQUENCE_NUMBER_TOO_NEW: u64 = 11;
+</code></pre>
+
+
+
 <a name="0x1_LibraWriteSetManager_initialize"></a>
 
 ## Function `initialize`
@@ -87,10 +149,14 @@
 
 
 <pre><code><b>public</b> <b>fun</b> <a href="#0x1_LibraWriteSetManager_initialize">initialize</a>(account: &signer) {
-    <b>assert</b>(<a href="LibraTimestamp.md#0x1_LibraTimestamp_is_genesis">LibraTimestamp::is_genesis</a>(), ENOT_GENESIS);
+    <a href="LibraTimestamp.md#0x1_LibraTimestamp_assert_genesis">LibraTimestamp::assert_genesis</a>();
     // Operational constraint
-    <b>assert</b>(<a href="Signer.md#0x1_Signer_address_of">Signer::address_of</a>(account) == <a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>(), EINVALID_SINGLETON_ADDRESS);
+    <a href="CoreAddresses.md#0x1_CoreAddresses_assert_libra_root">CoreAddresses::assert_libra_root</a>(account);
 
+    <b>assert</b>(
+        !exists&lt;<a href="#0x1_LibraWriteSetManager">LibraWriteSetManager</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>()),
+        <a href="Errors.md#0x1_Errors_already_published">Errors::already_published</a>(ELIBRA_WRITE_SET_MANAGER)
+    );
     move_to(
         account,
         <a href="#0x1_LibraWriteSetManager">LibraWriteSetManager</a> {
@@ -124,18 +190,19 @@
     writeset_sequence_number: u64,
     writeset_public_key: vector&lt;u8&gt;,
 ) {
+    // The below code uses direct <b>abort</b> codes <b>as</b> per contract with VM.
     <b>let</b> sender = <a href="Signer.md#0x1_Signer_address_of">Signer::address_of</a>(account);
-    <b>assert</b>(sender == <a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>(), EINVALID_WRITESET_SENDER);
+    <b>assert</b>(sender == <a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>(), PROLOGUE_EINVALID_WRITESET_SENDER);
 
     <b>let</b> lr_auth_key = <a href="LibraAccount.md#0x1_LibraAccount_authentication_key">LibraAccount::authentication_key</a>(sender);
     <b>let</b> sequence_number = <a href="LibraAccount.md#0x1_LibraAccount_sequence_number">LibraAccount::sequence_number</a>(sender);
 
-    <b>assert</b>(writeset_sequence_number &gt;= sequence_number, EPROLOGUE_SEQUENCE_NUMBER_TOO_OLD);
+    <b>assert</b>(writeset_sequence_number &gt;= sequence_number, PROLOGUE_ESEQUENCE_NUMBER_TOO_OLD);
 
-    <b>assert</b>(writeset_sequence_number == sequence_number, EWS_PROLOGUE_SEQUENCE_NUMBER_TOO_NEW);
+    <b>assert</b>(writeset_sequence_number == sequence_number, PROLOGUE_ESEQUENCE_NUMBER_TOO_NEW);
     <b>assert</b>(
         <a href="Hash.md#0x1_Hash_sha3_256">Hash::sha3_256</a>(writeset_public_key) == lr_auth_key,
-        EPROLOGUE_INVALID_ACCOUNT_AUTH_KEY
+        PROLOGUE_EINVALID_ACCOUNT_AUTH_KEY
     );
 }
 </code></pre>
@@ -179,6 +246,13 @@
 ## Specification
 
 
+
+<pre><code><b>invariant</b> [<b>global</b>]
+    <a href="LibraTimestamp.md#0x1_LibraTimestamp_is_operating">LibraTimestamp::is_operating</a>() ==&gt; exists&lt;<a href="#0x1_LibraWriteSetManager">LibraWriteSetManager</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>());
+</code></pre>
+
+
+
 <a name="0x1_LibraWriteSetManager_Specification_initialize"></a>
 
 ### Function `initialize`
@@ -190,12 +264,7 @@
 
 
 
-<pre><code>pragma aborts_if_is_partial = <b>true</b>;
-</code></pre>
-
-
-The permission "SendWriteSetTransaction" is granted to LibraAccount [B19].
-
-
-<pre><code><b>aborts_if</b> <a href="Signer.md#0x1_Signer_spec_address_of">Signer::spec_address_of</a>(account) != <a href="CoreAddresses.md#0x1_CoreAddresses_SPEC_LIBRA_ROOT_ADDRESS">CoreAddresses::SPEC_LIBRA_ROOT_ADDRESS</a>();
+<pre><code><b>include</b> <a href="LibraTimestamp.md#0x1_LibraTimestamp_AbortsIfNotGenesis">LibraTimestamp::AbortsIfNotGenesis</a>;
+<b>include</b> <a href="CoreAddresses.md#0x1_CoreAddresses_AbortsIfNotLibraRoot">CoreAddresses::AbortsIfNotLibraRoot</a>;
+<b>aborts_if</b> exists&lt;<a href="#0x1_LibraWriteSetManager">LibraWriteSetManager</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>()) with Errors::ALREADY_PUBLISHED;
 </code></pre>

@@ -3,7 +3,7 @@
 
 #![forbid(unsafe_code)]
 
-use crate::{account::Account, executor::FakeExecutor, keygen::KeyGen};
+use crate::{account::Account, executor::FakeExecutor};
 use libra_types::{account_config, vm_status::KeptVMStatus};
 use move_core_types::vm_status::VMStatus;
 use move_vm_types::values::Value;
@@ -14,9 +14,6 @@ fn valid_creator_already_vasp() {
     let mut executor = FakeExecutor::from_genesis_file();
 
     let account = Account::new();
-
-    let mut keygen = KeyGen::from_seed([9u8; 32]);
-    let (_, cpubkey) = keygen.generate_keypair();
 
     let libra_root = Account::new_libra_root();
 
@@ -29,8 +26,6 @@ fn valid_creator_already_vasp() {
                 *account.address(),
                 account.auth_key_prefix(),
                 vec![],
-                vec![],
-                cpubkey.to_bytes().to_vec(),
                 true,
             ))
             .sequence_number(1)
@@ -49,7 +44,11 @@ fn valid_creator_already_vasp() {
             libra_root.address(),
         )
         .unwrap_err();
-    assert!(matches!(err, VMStatus::MoveAbort(_, 7)));
+    if let VMStatus::MoveAbort(_, code) = err {
+        assert_eq!(code, 262);
+    } else {
+        panic!("expected MoveAbort")
+    }
 }
 
 #[test]
@@ -59,9 +58,6 @@ fn max_child_accounts_for_vasp() {
     let mut executor = FakeExecutor::from_genesis_file();
 
     let account = Account::new();
-
-    let mut keygen = KeyGen::from_seed([9u8; 32]);
-    let (_, cpubkey) = keygen.generate_keypair();
 
     let libra_root = Account::new_libra_root();
 
@@ -74,8 +70,6 @@ fn max_child_accounts_for_vasp() {
                 *account.address(),
                 account.auth_key_prefix(),
                 vec![],
-                vec![],
-                cpubkey.to_bytes().to_vec(),
                 true,
             ))
             .sequence_number(1)
@@ -114,8 +108,9 @@ fn max_child_accounts_for_vasp() {
             .sign(),
     );
 
-    assert!(matches!(
-        output.status().status(),
-        Ok(KeptVMStatus::MoveAbort(_, 8)) // ETOO_MANY_CHILDREN
-    ));
+    if let Ok(KeptVMStatus::MoveAbort(_, code)) = output.status().status() {
+        assert_eq!(code, 520); // ETOO_MANY_CHILDREN
+    } else {
+        panic!("expected MoveAbort")
+    }
 }

@@ -45,6 +45,7 @@ use crate::{
         LIBRA_STORAGE_API_LATENCY_SECONDS, LIBRA_STORAGE_CF_SIZE_BYTES,
         LIBRA_STORAGE_COMMITTED_TXNS, LIBRA_STORAGE_LATEST_TXN_VERSION,
         LIBRA_STORAGE_LEDGER_VERSION, LIBRA_STORAGE_NEXT_BLOCK_EPOCH,
+        LIBRA_STORAGE_OTHER_TIMERS_SECONDS,
     },
     pruner::Pruner,
     schema::*,
@@ -74,7 +75,7 @@ use libra_types::{
     },
 };
 use once_cell::sync::Lazy;
-use schemadb::{DB, DEFAULT_CF_NAME};
+use schemadb::{ColumnFamilyName, DB, DEFAULT_CF_NAME};
 use std::{iter::Iterator, path::Path, sync::Arc, time::Instant};
 use storage_interface::{DbReader, DbWriter, Order, StartupInfo, TreeState};
 
@@ -108,12 +109,8 @@ pub struct LibraDB {
 }
 
 impl LibraDB {
-    pub fn open<P: AsRef<Path> + Clone>(
-        db_root_path: P,
-        readonly: bool,
-        prune_window: Option<u64>,
-    ) -> Result<Self> {
-        let column_families = vec![
+    fn column_families() -> Vec<ColumnFamilyName> {
+        vec![
             /* LedgerInfo CF = */ DEFAULT_CF_NAME,
             EPOCH_BY_VERSION_CF_NAME,
             EVENT_ACCUMULATOR_CF_NAME,
@@ -126,24 +123,13 @@ impl LibraDB {
             TRANSACTION_ACCUMULATOR_CF_NAME,
             TRANSACTION_BY_ACCOUNT_CF_NAME,
             TRANSACTION_INFO_CF_NAME,
-        ];
+        ]
+    }
 
-        let path = db_root_path.as_ref().join("libradb");
-        let instant = Instant::now();
+    fn new_with_db(db: DB, prune_window: Option<u64>) -> Self {
+        let db = Arc::new(db);
 
-        let db = Arc::new(if readonly {
-            DB::open_readonly(path.clone(), "libradb_ro", column_families)?
-        } else {
-            DB::open(path.clone(), "libradb", column_families)?
-        });
-
-        info!(
-            "Opened LibraDB at {:?} in {} ms",
-            path,
-            instant.elapsed().as_millis()
-        );
-
-        Ok(LibraDB {
+        LibraDB {
             db: Arc::clone(&db),
             event_store: EventStore::new(Arc::clone(&db)),
             ledger_store: Arc::new(LedgerStore::new(Arc::clone(&db))),
@@ -151,7 +137,53 @@ impl LibraDB {
             transaction_store: Arc::new(TransactionStore::new(Arc::clone(&db))),
             system_store: SystemStore::new(Arc::clone(&db)),
             pruner: prune_window.map(|n| Pruner::new(Arc::clone(&db), n)),
-        })
+        }
+    }
+
+    pub fn open<P: AsRef<Path> + Clone>(
+        db_root_path: P,
+        readonly: bool,
+        prune_window: Option<u64>,
+    ) -> Result<Self> {
+        ensure!(
+            prune_window.is_none() || !readonly,
+            "Do not set prune_window when opening readonly.",
+        );
+
+        let path = db_root_path.as_ref().join("libradb");
+        let instant = Instant::now();
+
+        let db = if readonly {
+            DB::open_readonly(path.clone(), "libradb_ro", Self::column_families())?
+        } else {
+            DB::open(path.clone(), "libradb", Self::column_families())?
+        };
+
+        info!(
+            "Opened LibraDB at {:?} in {} ms",
+            path,
+            instant.elapsed().as_millis()
+        );
+
+        Ok(Self::new_with_db(db, prune_window))
+    }
+
+    pub fn open_as_secondary<P: AsRef<Path> + Clone>(
+        db_root_path: P,
+        secondary_path: P,
+    ) -> Result<Self> {
+        let primary_path = db_root_path.as_ref().join("libradb");
+        let secondary_path = secondary_path.as_ref().to_path_buf();
+
+        Ok(Self::new_with_db(
+            DB::open_as_secondary(
+                primary_path,
+                secondary_path,
+                "libradb_sec",
+                Self::column_families(),
+            )?,
+            None, // prune_window
+        ))
     }
 
     /// This opens db in non-readonly mode, without the pruner.
@@ -424,6 +456,9 @@ impl LibraDB {
     fn commit(&self, sealed_cs: SealedChangeSet) -> Result<()> {
         self.db.write_schemas(sealed_cs.batch)?;
 
+        let _timer = LIBRA_STORAGE_OTHER_TIMERS_SECONDS
+            .with_label_values(&["get_approximate_cf_sizes"])
+            .start_timer();
         match self.db.get_approximate_sizes_cf() {
             Ok(cf_sizes) => {
                 for (cf_name, size) in cf_sizes {
@@ -797,7 +832,13 @@ impl DbWriter for LibraDB {
 
         // Persist.
         let (sealed_cs, counters) = self.seal_change_set(first_version, num_txns, cs)?;
-        self.commit(sealed_cs)?;
+        {
+            let _timer = LIBRA_STORAGE_OTHER_TIMERS_SECONDS
+                .with_label_values(&["save_transactions_commit"])
+                .start_timer();
+            self.commit(sealed_cs)?;
+        }
+
         // Once everything is successfully persisted, update the latest in-memory ledger info.
         if let Some(x) = ledger_info_with_sigs {
             self.ledger_store.set_latest_ledger_info(x.clone());

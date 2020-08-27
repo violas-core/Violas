@@ -6,7 +6,7 @@
 use crate::{
     counters,
     peer_manager::PeerManagerError,
-    protocols::wire::messaging::v1::NetworkMessage,
+    protocols::wire::messaging::v1::{ErrorCode, NetworkMessage},
     transport,
     transport::{Connection, ConnectionMetadata},
     ProtocolId,
@@ -318,19 +318,23 @@ where
             oneshot::Sender<Result<(), PeerManagerError>>,
         )>,
     ) -> Result<(), PeerManagerError> {
-        trace!("Received message from Peer {}", self.peer_id().short_str(),);
+        trace!("Received message from Peer {}", self.peer_id().short_str());
         // Read inbound message from stream.
         let message = message.freeze();
-        let message: NetworkMessage = lcs::from_bytes(&message)?;
-        match message {
-            NetworkMessage::RpcRequest(_) | NetworkMessage::RpcResponse(_) => {
-                let notif = PeerNotification::NewMessage(message);
-                self.rpc_notifs_tx.send(notif).await.map_err(|err| {
-                    warn!("Failed to send notification to RPC actor. Error: {:?}", err);
-                    err
-                })?;
-                Ok(())
+        let message = match lcs::from_bytes(&message) {
+            Ok(message) => message,
+            Err(err) => {
+                // Don't bother returning errors for tiny messages
+                if message.len() >= 2 {
+                    let error = ErrorCode::parsing_error(message[0], message[1]);
+                    let message = NetworkMessage::Error(error);
+                    let (ack_tx, _) = oneshot::channel();
+                    write_reqs_tx.send((message, ack_tx)).await?;
+                }
+                return Err(err.into());
             }
+        };
+        match message {
             NetworkMessage::DirectSendMsg(_) => {
                 let notif = PeerNotification::NewMessage(message);
                 self.direct_send_notifs_tx
@@ -343,17 +347,23 @@ where
                         );
                         err
                     })?;
-                Ok(())
             }
-            NetworkMessage::Ping(nonce) => {
-                let pong = NetworkMessage::Pong(nonce);
-                let (ack_tx, _) = oneshot::channel();
-                // Resond to a ping right away.
-                write_reqs_tx.send((pong, ack_tx)).await?;
-                Ok(())
+            NetworkMessage::Error(error) => {
+                warn!(
+                    "Peer {} sent an error message: {:?}",
+                    self.peer_id().short_str(),
+                    error,
+                );
             }
-            _ => unreachable!("Unhandled"),
-        }
+            NetworkMessage::RpcRequest(_) | NetworkMessage::RpcResponse(_) => {
+                let notif = PeerNotification::NewMessage(message);
+                self.rpc_notifs_tx.send(notif).await.map_err(|err| {
+                    warn!("Failed to send notification to RPC actor. Error: {:?}", err);
+                    err
+                })?;
+            }
+        };
+        Ok(())
     }
 
     async fn handle_request<'a>(

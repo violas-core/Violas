@@ -184,9 +184,8 @@ where
         let first_txn_version = match txn_list_with_proof.first_transaction_version {
             Some(tx) => tx as Version,
             None => {
-                send_struct_log!(StructuredLogEntry::new_named("MUST_FIX", "assertion")
-                    .data("details", "first_transaction_version should exist.")
-                    .critical());
+                sl_error!(StructuredLogEntry::new_named("MUST_FIX", "assertion")
+                    .data("details", "first_transaction_version should exist."));
                 return Err(anyhow!("first_transaction_version should exist."));
             }
         };
@@ -206,7 +205,9 @@ where
 
         // 2. Verify that skipped transactions match what's already persisted (no fork):
         let num_txns_to_skip = num_committed_txns - first_txn_version;
-        info!("Skipping the first {} transactions.", num_txns_to_skip);
+        if num_txns_to_skip > 0 {
+            info!("Skipping the first {} transactions.", num_txns_to_skip);
+        }
 
         // If the proof is verified, then the length of txn_infos and txns must be the same.
         let skipped_transaction_infos =

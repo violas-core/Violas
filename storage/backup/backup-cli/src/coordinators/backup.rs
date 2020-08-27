@@ -191,6 +191,7 @@ impl BackupCoordinator {
     ) -> Result<Option<Version>> {
         let next_snapshot_version = get_next_snapshot(
             last_snapshot_version_in_backup,
+            db_state,
             self.state_snapshot_interval,
         );
 
@@ -218,20 +219,20 @@ impl BackupCoordinator {
         last_transaction_version_in_backup: Option<Version>,
         db_state: DbState,
     ) -> Result<Option<u64>> {
-        let (start_version, end_version) = get_batch_range(
+        let (first, last) = get_batch_range(
             last_transaction_version_in_backup,
             self.transaction_batch_size,
         );
 
-        if db_state.committed_version < end_version {
+        if db_state.committed_version < last {
             // wait for the next db_state update
             return Ok(last_transaction_version_in_backup);
         }
 
         TransactionBackupController::new(
             TransactionBackupOpt {
-                start_version,
-                num_transactions: (end_version + 1 - start_version) as usize,
+                start_version: first,
+                num_transactions: (last + 1 - first) as usize,
             },
             self.global_opt.clone(),
             Arc::clone(&self.client),
@@ -240,7 +241,7 @@ impl BackupCoordinator {
         .run()
         .await?;
 
-        Ok(Some(end_version))
+        Ok(Some(last))
     }
 
     fn backup_work_stream<'a, S, W, Fut>(
@@ -285,18 +286,57 @@ where
 }
 
 fn get_batch_range(last_in_backup: Option<u64>, batch_size: usize) -> (u64, u64) {
-    // say, 5 is already in backup, and we target batches of size 10, we will return (6, 4) in this
+    // say, 5 is already in backup, and we target batches of size 10, we will return (6, 9) in this
     // case, so 6, 7, 8, 9 will be in this batch, and next time the backup worker will pass in 9,
-    // and we will return (10, 10)
+    // and we will return (10, 19)
     let start = last_in_backup.map_or(0, |n| n + 1);
     let next_batch_start = (start / batch_size as u64 + 1) * batch_size as u64;
 
     (start, next_batch_start - 1)
 }
 
-fn get_next_snapshot(last_in_backup: Option<u64>, interval: usize) -> u64 {
-    match last_in_backup {
+fn get_next_snapshot(last_in_backup: Option<u64>, db_state: DbState, interval: usize) -> u64 {
+    // We don't try to guarantee snapshots are taken at each applicable interval: when the backup
+    // progress can't keep up with the ledger growth, we favor timeliness over completeness.
+    // For example, with interval 100, when we finished taking a snapshot at version 700, if we
+    // found the latest version is already 1250, the next snapshot we take will be at 1200, not 800.
+
+    let next_for_storage = match last_in_backup {
         Some(last) => (last / interval as u64 + 1) * interval as u64,
         None => 0,
+    };
+
+    let last_for_db: u64 = db_state.committed_version / interval as u64 * interval as u64;
+
+    std::cmp::max(next_for_storage, last_for_db)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::coordinators::backup::{get_batch_range, get_next_snapshot};
+    use libradb::backup::backup_handler::DbState;
+
+    #[test]
+    fn test_get_batch_range() {
+        assert_eq!(get_batch_range(None, 100), (0, 99));
+        assert_eq!(get_batch_range(Some(99), 50), (100, 149));
+        assert_eq!(get_batch_range(Some(149), 100), (150, 199));
+        assert_eq!(get_batch_range(Some(199), 100), (200, 299));
+    }
+
+    #[test]
+    fn test_get_next_snapshot() {
+        let _state = |v| DbState {
+            epoch: 0,
+            committed_version: v,
+            synced_version: v,
+        };
+
+        assert_eq!(get_next_snapshot(None, _state(90), 100), 0);
+        assert_eq!(get_next_snapshot(Some(0), _state(90), 100), 100);
+        assert_eq!(get_next_snapshot(Some(0), _state(190), 100), 100);
+        assert_eq!(get_next_snapshot(Some(0), _state(200), 100), 200);
+        assert_eq!(get_next_snapshot(Some(0), _state(250), 100), 200);
+        assert_eq!(get_next_snapshot(Some(200), _state(250), 100), 300);
     }
 }

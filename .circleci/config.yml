@@ -2,37 +2,44 @@ version: 2.1
 
 orbs:
   slack: circleci/slack@3.3.0
+  aws-ecr: circleci/aws-ecr@6.5.0
+  aws-cli: circleci/aws-cli@0.1.13
 
 executors:
   build-executor:
     docker:
-      - image: circleci/rust:buster
+      - image: docker.io/libra/build_environment:latest
     resource_class: 2xlarge
   unittest-executor:
     docker:
-      - image: circleci/rust:buster
+      - image: docker.io/libra/build_environment:latest
     resource_class: 2xlarge+
   test-executor:
     docker:
-      - image: circleci/rust:buster
+      - image: docker.io/libra/build_environment:latest
     resource_class: xlarge
   premainnet-cluster-test-executor:
     docker:
-      - image: circleci/rust:buster
+      - image: docker.io/libra/build_environment:latest
     resource_class: xlarge
   audit-executor:
     docker:
-      - image: circleci/rust:buster
+      - image: docker.io/libra/build_environment:latest
     resource_class: medium
   terraform-executor:
     docker:
-      - image: hashicorp/terraform
+      - image: libra/build_environment:latest
     resource_class: small
   docker-executor:
     machine:
       docker_layer_caching: true
       image: ubuntu-1604:202004-01
     resource_class: 2xlarge
+  docker-large-executor:
+    machine:
+      docker_layer_caching: false
+      image: ubuntu-1604:202004-01
+    resource_class: large
 commands:
   print_versions:
     description: Version Info
@@ -44,6 +51,9 @@ commands:
     description: Environment Setup
     steps:
       - run:
+          name: update tooling if needed.
+          command: scripts/dev_setup.sh -o -b -p
+      - run:
           name: Setup Env
           command: |
             echo 'export TAG=0.1.${CIRCLE_BUILD_NUM}' >> $BASH_ENV
@@ -53,62 +63,18 @@ commands:
             echo 'export CI_TIMEOUT="timeout 40m"' >> $BASH_ENV
             export RUST_NIGHTLY=$(cat cargo-toolchain)
             echo 'export RUST_NIGHTLY='${RUST_NIGHTLY} >> $BASH_ENV
-  install_deps:
-    steps:
-      - run:
-          name: Install Dependencies
-          command: |
-            sudo apt-get update
-            sudo apt-get install -y cmake curl clang llvm gcc-powerpc-linux-gnu
-            rustup default `cat rust-toolchain`
-            rustup component add clippy rustfmt
-            rustup toolchain install $RUST_NIGHTLY
-      - run:
-          name: Set cargo Environment
-          command: |
+
             # Turn on the experimental feature resolver in cargo. See:
             # https://doc.rust-lang.org/nightly/cargo/reference/unstable.html#features
-            export CARGOFLAGS=$(cat cargo-flags)
-            echo 'export CARGOFLAGS='${CARGOFLAGS} >> $BASH_ENV
+            echo 'export CARGOFLAGS='$(cat cargo-flags) >> $BASH_ENV
             # Use nightly version of cargo to access the new feature resolver
-            echo 'export CARGO="$(rustup which cargo --toolchain $RUST_NIGHTLY)"' >> $BASH_ENV
+            echo 'export CARGO='$(rustup which cargo --toolchain $RUST_NIGHTLY) >> $BASH_ENV
             # Pin the version of RUSTC used for all invocations of cargo
             echo 'export RUSTUP_TOOLCHAIN="$(cat rust-toolchain)"' >> $BASH_ENV
-  install_docker_linter:
-    steps:
-      - run:
-          name: install dockerfile linter (hadolint)
-          command: |
-            export HADOLINT=${HOME}/hadolint
-            export HADOLINT_VER=v1.17.4
-            curl -sL -o ${HADOLINT} "https://github.com/hadolint/hadolint/releases/download/${HADOLINT_VER}/hadolint-$(uname -s)-$(uname -m)" && chmod 700 ${HADOLINT}
-  install_rust_nightly_toolchain:
-    steps:
-      - run:
-          name: Install nightly toolchain for features not in beta/stable
-          command: rustup install nightly
-  install_sccache:
-    steps:
-      - restore_cache:
-          name: Restore sccache binary
-          key: sccache-0.2.13
-      - run:
-          name: Install scccache
-          command: |
-            if ! [ -e /usr/local/cargo/bin/sccache ]; then
-              $CARGO $CARGOFLAGS install sccache --version=0.2.13
-            else
-              echo 'sccache binary is found. Skipping install.'
-            fi
-            echo 'export SCCACHE_CACHE_SIZE=4G' >> $BASH_ENV
+            echo 'export SCCACHE_CACHE_SIZE=2G' >> $BASH_ENV
             echo 'export RUSTC_WRAPPER=sccache' >> $BASH_ENV
             echo 'export CC="sccache cc"' >> $BASH_ENV
             echo 'export CXX="sccache c++"' >> $BASH_ENV
-      - save_cache:
-          name: Save sccache binary
-          key: sccache-0.2.13
-          paths:
-            - "/usr/local/cargo/bin/sccache"
   save_sccache:
     description: Save shared compilation cache for future jobs
     steps:
@@ -120,12 +86,42 @@ commands:
           # NOTE circle's built-in key does not support date
           command: |
             cat rust-toolchain > /tmp/cache-key
+            cat cargo-toolchain >> /tmp/cache-key
             date +%Y%m%d >> /tmp/cache-key
+      # NOTE circle supports cache corruption check upto 500MB. For
+      # SCCACHE_CACHE_SIZE=2G, split them into 4 chunks.
       - save_cache:
-          name: Save sccache
-          key: sccache-{{ .Environment.CIRCLE_JOB }}-{{ checksum "/tmp/cache-key" }}
+          name: Save sccache chunk 1/4
+          key: sccache-asset-chunk1-{{ .Environment.CIRCLE_JOB }}-{{ checksum "/tmp/cache-key" }}
           paths:
-            - "/home/circleci/.cache/sccache"
+            - "/home/circleci/.cache/sccache/0"
+            - "/home/circleci/.cache/sccache/1"
+            - "/home/circleci/.cache/sccache/2"
+            - "/home/circleci/.cache/sccache/3"
+      - save_cache:
+          name: Save sccache chunk 2/4
+          key: sccache-asset-chunk2-{{ .Environment.CIRCLE_JOB }}-{{ checksum "/tmp/cache-key" }}
+          paths:
+            - "/home/circleci/.cache/sccache/4"
+            - "/home/circleci/.cache/sccache/5"
+            - "/home/circleci/.cache/sccache/6"
+            - "/home/circleci/.cache/sccache/7"
+      - save_cache:
+          name: Save sccache chunk 3/4
+          key: sccache-asset-chunk3-{{ .Environment.CIRCLE_JOB }}-{{ checksum "/tmp/cache-key" }}
+          paths:
+            - "/home/circleci/.cache/sccache/8"
+            - "/home/circleci/.cache/sccache/9"
+            - "/home/circleci/.cache/sccache/a"
+            - "/home/circleci/.cache/sccache/b"
+      - save_cache:
+          name: Save sccache chunk 4/4
+          key: sccache-asset-chunk4-{{ .Environment.CIRCLE_JOB }}-{{ checksum "/tmp/cache-key" }}
+          paths:
+            - "/home/circleci/.cache/sccache/c"
+            - "/home/circleci/.cache/sccache/d"
+            - "/home/circleci/.cache/sccache/e"
+            - "/home/circleci/.cache/sccache/f"
   restore_sccache:
     description: Restore shared compilation cache from prior jobs
     steps:
@@ -133,10 +129,20 @@ commands:
           name: Generate date code for cache key
           command: |
             cat rust-toolchain > /tmp/cache-key
+            cat cargo-toolchain >> /tmp/cache-key
             date +%Y%m%d >> /tmp/cache-key
       - restore_cache:
-          name: Restore sccache
-          key: sccache-{{ .Environment.CIRCLE_JOB }}-{{ checksum "/tmp/cache-key" }}
+          name: Restore sccache chunk 1/4
+          key: sccache-asset-chunk1-{{ .Environment.CIRCLE_JOB }}-{{ checksum "/tmp/cache-key" }}
+      - restore_cache:
+          name: Restore sccache chunk 2/4
+          key: sccache-asset-chunk2-{{ .Environment.CIRCLE_JOB }}-{{ checksum "/tmp/cache-key" }}
+      - restore_cache:
+          name: Restore sccache chunk 3/4
+          key: sccache-asset-chunk3-{{ .Environment.CIRCLE_JOB }}-{{ checksum "/tmp/cache-key" }}
+      - restore_cache:
+          name: Restore sccache chunk 4/4
+          key: sccache-asset-chunk4-{{ .Environment.CIRCLE_JOB }}-{{ checksum "/tmp/cache-key" }}
       - run:
           name: Show sccache
           command: sccache -s
@@ -155,23 +161,28 @@ commands:
     steps:
       - save_cache:
           name: Save cargo package cache
-          key: cargo-package-cache-{{ checksum "Cargo.lock" }}
+          key: cargo-package-cache-new-{{ checksum "Cargo.lock" }}
           # paths are relative to /home/circleci/project/
           paths:
-            - "/usr/local/cargo/git"
-            - "/usr/local/cargo/registry"
-            - "/usr/local/cargo/.package-cache"
+            - "/home/circleci/.cargo/git"
+            - "/home/circleci/.cargo/registry"
+            - "/home/circleci/.cargo/.package-cache"
   restore_cargo_package_cache:
     description: Restore Cargo package cache from prev job
     steps:
+      - run:
+          name: Deal with non-relative cache locations.
+          command: |
+            sudo mkdir -p /usr/local/cargo/
+            sudo chmod 777 /usr/local/cargo/
       - restore_cache:
           name: Restore cargo package cache
-          key: cargo-package-cache-{{ checksum "Cargo.lock" }}
+          key: cargo-package-cache-new-{{ checksum "Cargo.lock" }}
       - run:
           name: Check cargo package cache
           command: |
-            ls -all /usr/local/cargo
-            du -ssh /usr/local/cargo
+            ls -all /home/circleci/.cargo
+            du -ssh /home/circleci/.cargo
   save_breaking_change_rev:
     description: Save the breaking change rev since last testnet update.
     steps:
@@ -242,7 +253,6 @@ commands:
       - checkout
       - print_versions
       - env_setup
-      - install_deps
   build_teardown:
     steps:
       - run:
@@ -251,10 +261,10 @@ commands:
   setup_docker_signing:
     steps:
       - run:
-          name: Setup docker setup_docker_signing
+          name: Setup docker login and signing
           command: |
             set -x
-            echo 'export DOCKER_CONTENT_TRUST=1' >> $BASH_ENV
+            # echo 'export DOCKER_CONTENT_TRUST=1' >> $BASH_ENV
             echo "$DOCKERHUB_PASSWORD" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
             export DOCKER_CONTENT_TRUST_REPOSITORY_PASSPHRASE=${DOCKERHUB_KEY_PASSWORD}
             echo 'export DOCKER_CONTENT_TRUST_REPOSITORY_PASSPHRASE=${DOCKERHUB_KEY_PASSWORD}' >> $BASH_ENV
@@ -262,6 +272,19 @@ commands:
             echo ${DOCKERHUB_KEY_MATERIAL} | base64 -d > ~/.docker/trust/private/${DOCKERHUB_KEY_NAME}.key
             chmod 600 ~/.docker/trust/private/${DOCKERHUB_KEY_NAME}.key
             docker trust key load ~/.docker/trust/private/${DOCKERHUB_KEY_NAME}.key --name "$DOCKERHUB_USERNAME"
+  setup_aws:
+    description: Set up access to AWS
+    steps:
+      - run:
+          name: Compose AWS Env Variables
+          command: |
+            echo 'export AWS_ECR_ACCOUNT_URL="${AWS_ECR_ACCOUNT_NUM}.dkr.ecr.${AWS_REGION}.amazonaws.com"' >> $BASH_ENV
+      - aws-cli/install
+      - aws-cli/configure:
+          aws-access-key-id: AWS_ACCESS_KEY_ID
+          aws-secret-access-key: AWS_SECRET_ACCESS_KEY
+          aws-region: AWS_REGION
+      - aws-ecr/ecr-login
 jobs:
   prefetch-crates:
     executor: audit-executor
@@ -274,7 +297,9 @@ jobs:
       - restore_cargo_package_cache
       - run:
           name: Fetch workspace dependencies over network
-          command: $CARGO $CARGOFLAGS fetch
+          command: |
+            echo $CARGO $CARGOFLAGS fetch
+            RUST_BACKTRACE=1 $CARGO $CARGOFLAGS fetch
       - save_cargo_package_cache
   lint:
     executor: test-executor
@@ -282,6 +307,7 @@ jobs:
     steps:
       - build_setup
       - restore_cargo_package_cache
+      - restore_sccache
       - run:
           name: cargo lint
           command: $CARGO $CARGOFLAGS x lint
@@ -309,12 +335,14 @@ jobs:
             if [[ "${failed}" == "true" ]] ; then
               exit 1
             fi
+      - save_sccache
   build-dev:
     executor: build-executor
     description: Development Build
     steps:
       - build_setup
       - restore_cargo_package_cache
+      - restore_sccache
       - run:
           command: RUST_BACKTRACE=1 $CARGO $CARGOFLAGS build -j 16
       - run:
@@ -331,6 +359,7 @@ jobs:
           command: |
             rustup target add powerpc-unknown-linux-gnu
             RUST_BACKTRACE=1 $CARGO $CARGOFLAGS build -j 16 -p transaction-builder -p move-vm-types --target powerpc-unknown-linux-gnu
+      - save_sccache
       - build_teardown
   run-e2e-test:
     executor: build-executor
@@ -344,6 +373,7 @@ jobs:
     steps:
       - build_setup
       - restore_cargo_package_cache
+      - restore_sccache
       - run:
           name: Determine test targets for this container.
           # NOTE Currently the tests are distributed by name order. Once test
@@ -394,6 +424,7 @@ jobs:
               echo -e "$num_fails test(s) failed:\n${failed_tests}"
             fi
             exit $num_fails
+      - save_sccache
       - send_message:
           payload_file: "${MESSAGE_PAYLOAD_FILE}"
           build_url: "https://app.circleci.com/pipelines/github/${CIRCLE_PROJECT_USERNAME}/${CIRCLE_PROJECT_REPONAME}/<<pipeline.number>>/workflows/${CIRCLE_WORKFLOW_ID}/jobs/${CIRCLE_BUILD_NUM}/parallel-runs/${CIRCLE_NODE_INDEX}?filterBy=ALL"
@@ -405,10 +436,12 @@ jobs:
     steps:
       - build_setup
       - restore_cargo_package_cache
+      - restore_sccache
       - run:
           name: Run all unit tests
           command: |
             RUST_BACKTRACE=1 $CI_TIMEOUT $CARGO $CARGOFLAGS x test --jobs 12 --unit
+      - save_sccache
   run-crypto-unit-test:
     executor: audit-executor
     description: Run crypto unit tests without formally verified crypto, to insulate against a curve25519 "default" backend regression
@@ -428,11 +461,13 @@ jobs:
     steps:
       - build_setup
       - restore_cargo_package_cache
+      - restore_sccache
       - run:
           name: Build benchmark targets without running
           command: |
             RUST_BACKTRACE=1 $CARGO $CARGOFLAGS x bench \
               --no-run
+      - save_sccache
   run-flaky-unit-test:
     executor: test-executor
     description: Run a list of known flaky tests.
@@ -484,13 +519,11 @@ jobs:
       - run:
           name: Check if the docker build job should run
           command: .circleci/should_build_docker.sh
-      - install_docker_linter
       - find_dockerfile_changes
       - run:
           name: Lint DockerFile changes
           command: |
-            export HADOLINT=${HOME}/hadolint
-            ${HADOLINT} -c .lintrules/hadolint.yaml $CHANGED_DOCKER_FILES || true
+            hadolint -c .lintrules/hadolint.yaml $CHANGED_DOCKER_FILES || true
   check-breaking-change:
     executor: audit-executor
     description: Detect breaking change in CLI
@@ -564,6 +597,7 @@ jobs:
     steps:
       - build_setup
       - restore_cargo_package_cache
+      - restore_sccache
       - run:
           name: Generate documentation
           command: |
@@ -573,6 +607,7 @@ jobs:
       - persist_to_workspace:
           root: target
           paths: doc
+      - save_sccache
   deploy-docs:
     docker:
       - image: node:8.10.0
@@ -598,6 +633,49 @@ jobs:
             gh-pages --dotfiles --message "[skip ci] documentation update" --dist target/doc
 
   ######################################################################################################
+  # Building docker ci base image if relevant files have changed                                       #
+  ######################################################################################################
+  docker-ci-build:
+    executor: docker-large-executor
+    parameters:
+      base-image:
+        type: string
+    description: build cimg/base (ubuntu) CI docker image.
+    steps:
+      - checkout
+      - run:
+          name: Should build/test << parameters.base-image >> docker image file
+          command: |
+            #detect if any relevant files have changed requiring base docker file rebuilding.
+            #this is specific for prs targeting master.   TODO: figure out target release branch.
+            git --no-pager diff --name-only HEAD $(git merge-base HEAD origin/master) | sort > /tmp/changed_files
+            echo ".circleci/config.yml" >> /tmp/ci_docker_files
+            echo "cargo-toolchain" >> /tmp/ci_docker_files
+            echo "docker/ci/<< parameters.base-image >>/Dockerfile" >> /tmp/ci_docker_files
+            echo "rust-toolchain" >> /tmp/ci_docker_files
+            echo "scripts/dev_setup.sh" >> /tmp/ci_docker_files
+
+            #if no relevant files have changed - exit
+            if [ `join /tmp/changed_files /tmp/ci_docker_files | wc -l` == 0 ]; then
+              echo no relevant files have changed - exit
+              circleci step halt
+            fi
+      - run:
+          name: Build/test << parameters.base-image >> docker image file
+          command: |
+            #otherwise we'll build the docker image.
+            docker build -f docker/ci/<< parameters.base-image >>/Dockerfile -t libra/build_environment:<< parameters.base-image >>-latest .
+            if [[ -z "$DOCKERHUB_PASSWORD" ]]; then
+              echo "Do not attempt to push the image, lacks circleci context - exit"
+              circleci step halt
+            fi
+      - run:
+          name: push libra/build_environment:<< parameters.base-image >>-latest image
+          command: |
+            #signs the pushed image
+            docker push --disable-content-trust=false libra/build_environment:<< parameters.base-image >>-latest
+
+  ######################################################################################################
   # Publish docker artifacts for prs targeting release branches built in "auto" by bors                #
   ######################################################################################################
   docker-pre-publish:
@@ -618,20 +696,19 @@ jobs:
             curl -o /tmp/pr https://api.github.com/repos/libra/libra/pulls/${pr_num}
             export BRANCH=$( cat /tmp/pr | jq ".base .ref" | sed 's/"//g' )
 
-            export IS_RELEASE=$( if [[ "$BRANCH" =~ "^v[0-9|.]+-release$" ]]; then echo true; else echo false; fi )
-            export IS_TEST=$( if [[ "$BRANCH" =~ "^testflow[0-9|.]+$" ]]; then echo true; else echo false; fi )
-            export IS_PRE_RELEASE=$( if [[ "$BRANCH" =~ "^premainnet-[0-9|.]+$" ]]; then echo true; else echo false; fi )
+            export IS_RELEASE=$( if [[ "$BRANCH" =~ "^release-[0-9|.]+$" ]]; then echo true; else echo false; fi )
+            export IS_TEST=$( if [[ "$BRANCH" =~ "^test-[0-9|.]+$" ]]; then echo true; else echo false; fi )
 
-            if [[ $IS_RELEASE  == true ]] || [[ $IS_TEST == true ]] || [[ $IS_PRE_RELEASE == true ]] ; then
-              docker/update_or_build.sh -u -p -b ${BRANCH} -n client
-              docker/update_or_build.sh -u -p -b ${BRANCH} -n init
-              docker/update_or_build.sh -u -p -b ${BRANCH} -n mint
-              docker/update_or_build.sh -u -p -b ${BRANCH} -n tools
-              docker/update_or_build.sh -u -p -b ${BRANCH} -n validator
-              docker/update_or_build.sh -u -p -b ${BRANCH} -n validator-tcb
-              docker/update_or_build.sh -u -p -b ${BRANCH} -n cluster-test
+            if [[ $IS_RELEASE  == true ]] || [[ $IS_TEST == true ]] ; then
+              docker/build_push.sh -u -p -b ${BRANCH} -n client
+              docker/build_push.sh -u -p -b ${BRANCH} -n init
+              docker/build_push.sh -u -p -b ${BRANCH} -n mint
+              docker/build_push.sh -u -p -b ${BRANCH} -n tools
+              docker/build_push.sh -u -p -b ${BRANCH} -n validator
+              docker/build_push.sh -u -p -b ${BRANCH} -n validator-tcb
+              docker/build_push.sh -u -p -b ${BRANCH} -n cluster-test
               #build but don't publish
-              docker/update_or_build.sh -p -b ${BRANCH} -n validator-dynamic
+              docker/build_push.sh -p -b ${BRANCH} -n validator-dynamic
             else
               echo Targeting branch $TARGET_BRANCH will not publish docker images.
             fi
@@ -645,18 +722,70 @@ jobs:
     steps:
       - checkout
       - setup_docker_signing
+      - setup_aws
       - run:
           name: pull pre images (or build if not pullable) and push release docker images
           command: |
             set -x
             export BRANCH=${CIRCLE_BRANCH}
-            docker/update_or_build.sh -u -b ${BRANCH} -n client
-            docker/update_or_build.sh -u -b ${BRANCH} -n init
-            docker/update_or_build.sh -u -b ${BRANCH} -n mint
-            docker/update_or_build.sh -u -b ${BRANCH} -n tools
-            docker/update_or_build.sh -u -b ${BRANCH} -n validator
-            docker/update_or_build.sh -u -b ${BRANCH} -n validator-tcb
-            docker/update_or_build.sh -u -b ${BRANCH} -n cluster-test
+            docker/build_push.sh -u -b ${BRANCH} -n client
+            docker/build_push.sh -u -b ${BRANCH} -n init
+            docker/build_push.sh -u -b ${BRANCH} -n mint
+            docker/build_push.sh -u -b ${BRANCH} -n tools
+            docker/build_push.sh -u -b ${BRANCH} -n validator
+            docker/build_push.sh -u -b ${BRANCH} -n validator-tcb
+            docker/build_push.sh -u -b ${BRANCH} -n cluster-test
+            #push to novi ecr with standard names, and older names.
+            GIT_REV=$(git rev-parse --short=8 HEAD)
+            aws ecr get-login-password --region ${AWS_REGION} | \
+            docker login --username AWS --password-stdin "${AWS_ECR_ACCOUNT_URL}"
+            docker/dockerhub_to_novi_ecr.sh -t ${BRANCH}_${GIT_REV} -r ${AWS_ECR_ACCOUNT_URL}
+
+  ######################################################################################################################
+  #  Code Coverage for unit tests (targets S3 html upload, codecov.io output, and slack with failed tests/compilations)
+  ######################################################################################################################
+
+  code_coverage:
+    description: Run code coverage
+    executor: unittest-executor
+    environment:
+      MESSAGE_PAYLOAD_FILE: "/tmp/message_payload"
+    steps:
+      - build_setup
+      - install_code_coverage_deps
+      - aws-cli/install
+      - aws-cli/configure:
+          aws-access-key-id: AWS_ACCESS_KEY_ID
+          aws-secret-access-key: AWS_SECRET_ACCESS_KEY
+          aws-region: AWS_DEFAULT_REGION
+      - run:
+          name: Setup code coverage output
+          command: |
+            echo "export CODECOV_OUTPUT=codecov" >> $BASH_ENV
+      - run:
+          name: Run code coverage
+          command: |
+            scripts/coverage_report.sh . ${CODECOV_OUTPUT} --batch --failed_crate_file ${MESSAGE_PAYLOAD_FILE}
+      - run:
+          name: Upload result to codecov.io
+          command: bash <(curl -s https://codecov.io/bash) -f $CODECOV_OUTPUT/lcov.info -F unittest;
+      - run:
+          name: Grcov html report to S3
+          command: |
+            set -x
+            export AWS_REGION=$AWS_DEFAULT_REGION
+            export GIT_SHORT_REV=$(git rev-parse --short=8 HEAD)
+            export reportdir=${CODECOV_OUTPUT}/grcovhtml;
+            _bucket="ci-artifacts.libra.org/coverage/unit-coverage/$(date +"%Y-%m-%d")-${GIT_SHORT_REV}";
+            aws s3 cp --recursive $reportdir "s3://$_bucket";
+            echo "have to reupload as aws user doesn't have read access";
+            aws s3 cp --recursive $reportdir "s3://ci-artifacts.libra.org/coverage/unit-coverage/latest";
+            _s3_url="https://ci-artifacts.libra.org/coverage/unit-coverage/latest/index.html";
+            echo "Grcov available in s3 ${_s3_url}" >> ${MESSAGE_PAYLOAD_FILE}
+      - send_message:
+          payload_file: "${MESSAGE_PAYLOAD_FILE}"
+          build_url: "${CIRCLE_BUILD_URL}#tests/containers/${CIRCLE_NODE_INDEX}"
+          webhook: "${WEBHOOK_COVERAGE_INFO}"
 
 workflows:
   commit-workflow:
@@ -665,20 +794,16 @@ workflows:
           filters:
             branches:
               ignore:
-                - gh-pages
                 - master
-                - /^testflow[\d|.]+$/
-                - /^premainnet-[\d|.]+$/
-                - /^v[\d|.]+-release$/
+                - /^test-[\d|.]+$/
+                - /^release-[\d|.]+$/
       - terraform:
           filters:
             branches:
               ignore:
-                - gh-pages
                 - master
-                - /^testflow[\d|.]+$/
-                - /^premainnet-[\d|.]+$/
-                - /^v[\d|.]+-release$/
+                - /^test-[\d|.]+$/
+                - /^release-[\d|.]+$/
       - prefetch-crates
       - lint:
           requires:
@@ -687,64 +812,53 @@ workflows:
             branches:
               ignore:
                 - gh-pages
-                - /^testflow[\d|.]+$/
-                - /^premainnet-0.[\d|.]+$/
-                - /^v[\d|.]+-release$/
+                - /^test-[\d|.]+$/
+                - /^release-[\d|.]+$/
       - build-dev:
           requires:
             - prefetch-crates
           filters:
             branches:
               ignore:
-                - gh-pages
                 - master
-                - /^testflow[\d|.]+$/
-                - /^premainnet-[\d|.]+$/
-                - /^v[\d|.]+-release$/
+                - /^test-[\d|.]+$/
+                - /^release-[\d|.]+$/
       - run-e2e-test:
           requires:
             - prefetch-crates
           filters:
             branches:
               ignore:
-                - gh-pages
                 - master
-                - /^testflow[\d|.]+$/
-                - /^premainnet-[\d|.]+$/
-                - /^v[\d|.]+-release$/
+                - /^test-[\d|.]+$/
+                - /^release-[\d|.]+$/
       - run-unit-test:
           requires:
             - prefetch-crates
           filters:
             branches:
               ignore:
-                - gh-pages
                 - master
-                - /^testflow[\d|.]+$/
-                - /^premainnet-[\d|.]+$/
-                - /^v[\d|.]+-release$/
+                - /^test-[\d|.]+$/
+                - /^release-[\d|.]+$/
       - run-crypto-unit-test:
           requires:
             - prefetch-crates
           filters:
             branches:
               ignore:
-                - gh-pages
                 - master
-                - /^testflow[\d|.]+$/
-                - /^premainnet-[\d|.]+$/
-                - /^v[\d|.]+-release$/
+                - /^test-[\d|.]+$/
+                - /^release-[\d|.]+$/
       - build-benchmark:
           requires:
             - prefetch-crates
           filters:
             branches:
               ignore:
-                - gh-pages
                 - master
-                - /^testflow[\d|.]+$/
-                - /^premainnet-[\d|.]+$/
-                - /^v[\d|.]+-release$/
+                - /^test-[\d|.]+$/
+                - /^release-[\d|.]+$/
       - build-docs:
           requires:
             - lint
@@ -752,9 +866,8 @@ workflows:
             branches:
               ignore:
                 - gh-pages
-                - /^testflow[\d|.]+$/
-                - /^premainnet-[\d|.]+$/
-                - /^v[\d|.]+-release$/
+                - /^test-[\d|.]+$/
+                - /^release-[\d|.]+$/
       - deploy-docs:
           requires:
             - build-docs
@@ -778,10 +891,48 @@ workflows:
           filters:
             branches:
               only:
-                - /^testflow[\d|.]+$/
-                - /^premainnet-[\d|.]+$/
-                - /^v[\d|.]+-release$/
-
+                - /^test-[\d|.]+$/
+                - /^release-[\d|.]+$/
+      - docker-ci-build:
+          context: docker
+          base-image: circleci
+          filters:
+            branches:
+              only:
+                - master
+      - docker-ci-build:
+          base-image: circleci
+          filters:
+            branches:
+              ignore:
+                - /^test-[\d|.]+$/
+                - /^release-[\d|.]+$/
+                - master
+      - docker-ci-build:
+          base-image: centos
+          filters:
+            branches:
+              ignore:
+                - /^test-[\d|.]+$/
+                - /^release-[\d|.]+$/
+                - master
+      - docker-ci-build:
+          #sccache fails to execute in alpine.
+          base-image: alpine
+          filters:
+            branches:
+              ignore:
+                - /^test-[\d|.]+$/
+                - /^release-[\d|.]+$/
+                - master
+      - docker-ci-build:
+          base-image: arch
+          filters:
+            branches:
+              ignore:
+                - /^test-[\d|.]+$/
+                - /^release-[\d|.]+$/
+                - master
   scheduled-workflow:
     triggers:
       - schedule:

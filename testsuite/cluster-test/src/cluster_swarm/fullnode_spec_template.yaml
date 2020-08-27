@@ -36,6 +36,18 @@ spec:
     volumeMounts:
     - mountPath: /opt/libra/data
       name: data
+  - name: debug
+    image: 853397791086.dkr.ecr.us-west-2.amazonaws.com/libra_validator:{image_tag}
+    imagePullPolicy: Always
+    volumeMounts:
+      - mountPath: /opt/libra/data
+        name: data
+    command:
+      - "bash"
+      - "-c"
+      - |
+        set -x;
+        while true; do sleep 10; done
   - name: main
     image: 853397791086.dkr.ecr.us-west-2.amazonaws.com/libra_validator:{image_tag}
     imagePullPolicy: Always
@@ -51,6 +63,8 @@ spec:
     volumeMounts:
     - mountPath: /opt/libra/data
       name: data
+    - mountPath: /opt/libra/etc
+      name: config
     env:
     - name: CFG_NUM_VALIDATORS
       value: "{num_validators}"
@@ -89,6 +103,10 @@ spec:
   - name: data
     hostPath:
       path: /data
+      type: Directory
+  - name: config
+    hostPath:
+      path: /config
       type: Directory
   affinity:
     podAntiAffinity:

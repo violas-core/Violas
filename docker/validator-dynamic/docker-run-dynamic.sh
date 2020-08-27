@@ -37,12 +37,12 @@ if [ -n "${CFG_SAFETY_RULES_ADDR}" ]; then
 fi
 
 /opt/libra/bin/config-builder validator \
-    --data-dir /opt/libra/data/common \
+    --data-dir /opt/libra/data \
     --output-dir /opt/libra/etc/ \
     ${params[@]}
 
 
-if [ -n "${CFG_FULLNODE_SEED}" ]; then # We have a full node seed, add fullnode network
+if [ -n "${CFG_FULLNODE_SEED}" -a "${CFG_ENABLE_MGMT_TOOL}" = false ]; then # We have a full node seed, add fullnode network
 	declare -a fullnode_params
 	    fullnode_params+="-s ${CFG_FULLNODE_SEED} "
 	    fullnode_params+="-a /ip4/${CFG_LISTEN_ADDR}/tcp/6181 "
@@ -53,7 +53,7 @@ if [ -n "${CFG_FULLNODE_SEED}" ]; then # We have a full node seed, add fullnode 
 	    fullnode_params+="-c ${CFG_FULLNODE_SEED} "
 
 	/opt/libra/bin/config-builder full-node extend \
-	    --data-dir /opt/libra/data/common \
+	    --data-dir /opt/libra/data \
 	    --output-dir /opt/libra/etc/ \
 	    ${fullnode_params[@]}
 

@@ -9,17 +9,24 @@
 -  [Resource `FreezeEventsHolder`](#0x1_AccountFreezing_FreezeEventsHolder)
 -  [Struct `FreezeAccountEvent`](#0x1_AccountFreezing_FreezeAccountEvent)
 -  [Struct `UnfreezeAccountEvent`](#0x1_AccountFreezing_UnfreezeAccountEvent)
+-  [Const `EFREEZE_EVENTS_HOLDER`](#0x1_AccountFreezing_EFREEZE_EVENTS_HOLDER)
+-  [Const `EFREEZING_BIT`](#0x1_AccountFreezing_EFREEZING_BIT)
+-  [Const `ECANNOT_FREEZE_LIBRA_ROOT`](#0x1_AccountFreezing_ECANNOT_FREEZE_LIBRA_ROOT)
+-  [Const `ECANNOT_FREEZE_TC`](#0x1_AccountFreezing_ECANNOT_FREEZE_TC)
+-  [Const `EACCOUNT_FROZEN`](#0x1_AccountFreezing_EACCOUNT_FROZEN)
 -  [Function `initialize`](#0x1_AccountFreezing_initialize)
 -  [Function `create`](#0x1_AccountFreezing_create)
 -  [Function `freeze_account`](#0x1_AccountFreezing_freeze_account)
 -  [Function `unfreeze_account`](#0x1_AccountFreezing_unfreeze_account)
 -  [Function `account_is_frozen`](#0x1_AccountFreezing_account_is_frozen)
+-  [Function `assert_not_frozen`](#0x1_AccountFreezing_assert_not_frozen)
 -  [Specification](#0x1_AccountFreezing_Specification)
     -  [Function `initialize`](#0x1_AccountFreezing_Specification_initialize)
     -  [Function `create`](#0x1_AccountFreezing_Specification_create)
     -  [Function `freeze_account`](#0x1_AccountFreezing_Specification_freeze_account)
     -  [Function `unfreeze_account`](#0x1_AccountFreezing_Specification_unfreeze_account)
     -  [Function `account_is_frozen`](#0x1_AccountFreezing_Specification_account_is_frozen)
+    -  [Function `assert_not_frozen`](#0x1_AccountFreezing_Specification_assert_not_frozen)
 
 
 
@@ -159,6 +166,68 @@ Message for unfreeze account events
 
 </details>
 
+<a name="0x1_AccountFreezing_EFREEZE_EVENTS_HOLDER"></a>
+
+## Const `EFREEZE_EVENTS_HOLDER`
+
+A property expected of the
+<code><a href="#0x1_AccountFreezing_FreezeEventsHolder">FreezeEventsHolder</a></code> resource didn't hold
+
+
+<pre><code><b>const</b> EFREEZE_EVENTS_HOLDER: u64 = 1;
+</code></pre>
+
+
+
+<a name="0x1_AccountFreezing_EFREEZING_BIT"></a>
+
+## Const `EFREEZING_BIT`
+
+The
+<code><a href="#0x1_AccountFreezing_FreezingBit">FreezingBit</a></code> resource is in an invalid state
+
+
+<pre><code><b>const</b> EFREEZING_BIT: u64 = 2;
+</code></pre>
+
+
+
+<a name="0x1_AccountFreezing_ECANNOT_FREEZE_LIBRA_ROOT"></a>
+
+## Const `ECANNOT_FREEZE_LIBRA_ROOT`
+
+An attempt to freeze the Libra Root account was attempted
+
+
+<pre><code><b>const</b> ECANNOT_FREEZE_LIBRA_ROOT: u64 = 3;
+</code></pre>
+
+
+
+<a name="0x1_AccountFreezing_ECANNOT_FREEZE_TC"></a>
+
+## Const `ECANNOT_FREEZE_TC`
+
+An attempt to freeze the Treasury & Compliance account was attempted
+
+
+<pre><code><b>const</b> ECANNOT_FREEZE_TC: u64 = 4;
+</code></pre>
+
+
+
+<a name="0x1_AccountFreezing_EACCOUNT_FROZEN"></a>
+
+## Const `EACCOUNT_FROZEN`
+
+The account is frozen
+
+
+<pre><code><b>const</b> EACCOUNT_FROZEN: u64 = 5;
+</code></pre>
+
+
+
 <a name="0x1_AccountFreezing_initialize"></a>
 
 ## Function `initialize`
@@ -175,10 +244,11 @@ Message for unfreeze account events
 
 
 <pre><code><b>public</b> <b>fun</b> <a href="#0x1_AccountFreezing_initialize">initialize</a>(lr_account: &signer) {
-    <b>assert</b>(<a href="LibraTimestamp.md#0x1_LibraTimestamp_is_genesis">LibraTimestamp::is_genesis</a>(), ENOT_GENESIS);
+    <a href="LibraTimestamp.md#0x1_LibraTimestamp_assert_genesis">LibraTimestamp::assert_genesis</a>();
+    <a href="CoreAddresses.md#0x1_CoreAddresses_assert_libra_root">CoreAddresses::assert_libra_root</a>(lr_account);
     <b>assert</b>(
-        <a href="Signer.md#0x1_Signer_address_of">Signer::address_of</a>(lr_account) == <a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>(),
-        EINVALID_SINGLETON_ADDRESS
+        !exists&lt;<a href="#0x1_AccountFreezing_FreezeEventsHolder">FreezeEventsHolder</a>&gt;(<a href="Signer.md#0x1_Signer_address_of">Signer::address_of</a>(lr_account)),
+        <a href="Errors.md#0x1_Errors_already_published">Errors::already_published</a>(EFREEZE_EVENTS_HOLDER)
     );
     move_to(lr_account, <a href="#0x1_AccountFreezing_FreezeEventsHolder">FreezeEventsHolder</a> {
         freeze_event_handle: <a href="Event.md#0x1_Event_new_event_handle">Event::new_event_handle</a>(lr_account),
@@ -207,6 +277,8 @@ Message for unfreeze account events
 
 
 <pre><code><b>public</b> <b>fun</b> <a href="#0x1_AccountFreezing_create">create</a>(account: &signer) {
+    <b>let</b> addr = <a href="Signer.md#0x1_Signer_address_of">Signer::address_of</a>(account);
+    <b>assert</b>(!exists&lt;<a href="#0x1_AccountFreezing_FreezingBit">FreezingBit</a>&gt;(addr), <a href="Errors.md#0x1_Errors_already_published">Errors::already_published</a>(EFREEZING_BIT));
     move_to(account, <a href="#0x1_AccountFreezing_FreezingBit">FreezingBit</a> { is_frozen: <b>false</b> })
 }
 </code></pre>
@@ -237,12 +309,14 @@ Freeze the account at
     frozen_address: address,
 )
 <b>acquires</b> <a href="#0x1_AccountFreezing_FreezingBit">FreezingBit</a>, <a href="#0x1_AccountFreezing_FreezeEventsHolder">FreezeEventsHolder</a> {
-    <b>assert</b>(<a href="Roles.md#0x1_Roles_has_treasury_compliance_role">Roles::has_treasury_compliance_role</a>(account), ENOT_ABLE_TO_FREEZE);
-    <b>let</b> initiator_address = <a href="Signer.md#0x1_Signer_address_of">Signer::address_of</a>(account);
+    <a href="LibraTimestamp.md#0x1_LibraTimestamp_assert_operating">LibraTimestamp::assert_operating</a>();
+    <a href="Roles.md#0x1_Roles_assert_treasury_compliance">Roles::assert_treasury_compliance</a>(account);
     // The libra root account and TC cannot be frozen
-    <b>assert</b>(frozen_address != <a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>(), ECANNOT_FREEZE_LIBRA_ROOT);
-    <b>assert</b>(frozen_address != <a href="CoreAddresses.md#0x1_CoreAddresses_TREASURY_COMPLIANCE_ADDRESS">CoreAddresses::TREASURY_COMPLIANCE_ADDRESS</a>(), ECANNOT_FREEZE_TC);
+    <b>assert</b>(frozen_address != <a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>(), <a href="Errors.md#0x1_Errors_invalid_argument">Errors::invalid_argument</a>(ECANNOT_FREEZE_LIBRA_ROOT));
+    <b>assert</b>(frozen_address != <a href="CoreAddresses.md#0x1_CoreAddresses_TREASURY_COMPLIANCE_ADDRESS">CoreAddresses::TREASURY_COMPLIANCE_ADDRESS</a>(), <a href="Errors.md#0x1_Errors_invalid_argument">Errors::invalid_argument</a>(ECANNOT_FREEZE_TC));
+    <b>assert</b>(exists&lt;<a href="#0x1_AccountFreezing_FreezingBit">FreezingBit</a>&gt;(frozen_address), <a href="Errors.md#0x1_Errors_not_published">Errors::not_published</a>(EFREEZING_BIT));
     borrow_global_mut&lt;<a href="#0x1_AccountFreezing_FreezingBit">FreezingBit</a>&gt;(frozen_address).is_frozen = <b>true</b>;
+    <b>let</b> initiator_address = <a href="Signer.md#0x1_Signer_address_of">Signer::address_of</a>(account);
     <a href="Event.md#0x1_Event_emit_event">Event::emit_event</a>&lt;<a href="#0x1_AccountFreezing_FreezeAccountEvent">FreezeAccountEvent</a>&gt;(
         &<b>mut</b> borrow_global_mut&lt;<a href="#0x1_AccountFreezing_FreezeEventsHolder">FreezeEventsHolder</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>()).freeze_event_handle,
         <a href="#0x1_AccountFreezing_FreezeAccountEvent">FreezeAccountEvent</a> {
@@ -279,9 +353,11 @@ Unfreeze the account at
     unfrozen_address: address,
 )
 <b>acquires</b> <a href="#0x1_AccountFreezing_FreezingBit">FreezingBit</a>, <a href="#0x1_AccountFreezing_FreezeEventsHolder">FreezeEventsHolder</a> {
-    <b>assert</b>(<a href="Roles.md#0x1_Roles_has_treasury_compliance_role">Roles::has_treasury_compliance_role</a>(account), ENOT_ABLE_TO_UNFREEZE);
-    <b>let</b> initiator_address = <a href="Signer.md#0x1_Signer_address_of">Signer::address_of</a>(account);
+    <a href="LibraTimestamp.md#0x1_LibraTimestamp_assert_operating">LibraTimestamp::assert_operating</a>();
+    <a href="Roles.md#0x1_Roles_assert_treasury_compliance">Roles::assert_treasury_compliance</a>(account);
+    <b>assert</b>(exists&lt;<a href="#0x1_AccountFreezing_FreezingBit">FreezingBit</a>&gt;(unfrozen_address), <a href="Errors.md#0x1_Errors_not_published">Errors::not_published</a>(EFREEZING_BIT));
     borrow_global_mut&lt;<a href="#0x1_AccountFreezing_FreezingBit">FreezingBit</a>&gt;(unfrozen_address).is_frozen = <b>false</b>;
+    <b>let</b> initiator_address = <a href="Signer.md#0x1_Signer_address_of">Signer::address_of</a>(account);
     <a href="Event.md#0x1_Event_emit_event">Event::emit_event</a>&lt;<a href="#0x1_AccountFreezing_UnfreezeAccountEvent">UnfreezeAccountEvent</a>&gt;(
         &<b>mut</b> borrow_global_mut&lt;<a href="#0x1_AccountFreezing_FreezeEventsHolder">FreezeEventsHolder</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>()).unfreeze_event_handle,
         <a href="#0x1_AccountFreezing_UnfreezeAccountEvent">UnfreezeAccountEvent</a> {
@@ -323,6 +399,31 @@ Returns if the account at
 
 </details>
 
+<a name="0x1_AccountFreezing_assert_not_frozen"></a>
+
+## Function `assert_not_frozen`
+
+Assert that an account is not frozen.
+
+
+<pre><code><b>public</b> <b>fun</b> <a href="#0x1_AccountFreezing_assert_not_frozen">assert_not_frozen</a>(account: address)
+</code></pre>
+
+
+
+<details>
+<summary>Implementation</summary>
+
+
+<pre><code><b>public</b> <b>fun</b> <a href="#0x1_AccountFreezing_assert_not_frozen">assert_not_frozen</a>(account: address) <b>acquires</b> <a href="#0x1_AccountFreezing_FreezingBit">FreezingBit</a> {
+    <b>assert</b>(!<a href="#0x1_AccountFreezing_account_is_frozen">account_is_frozen</a>(account), <a href="Errors.md#0x1_Errors_invalid_state">Errors::invalid_state</a>(EACCOUNT_FROZEN));
+}
+</code></pre>
+
+
+
+</details>
+
 <a name="0x1_AccountFreezing_Specification"></a>
 
 ## Specification
@@ -339,10 +440,12 @@ Returns if the account at
 
 
 
-<pre><code><b>aborts_if</b> !<a href="LibraTimestamp.md#0x1_LibraTimestamp_spec_is_genesis">LibraTimestamp::spec_is_genesis</a>();
-<b>aborts_if</b> <a href="Signer.md#0x1_Signer_spec_address_of">Signer::spec_address_of</a>(lr_account) != <a href="CoreAddresses.md#0x1_CoreAddresses_SPEC_LIBRA_ROOT_ADDRESS">CoreAddresses::SPEC_LIBRA_ROOT_ADDRESS</a>();
-<b>aborts_if</b> exists&lt;<a href="#0x1_AccountFreezing_FreezeEventsHolder">FreezeEventsHolder</a>&gt;(<a href="Signer.md#0x1_Signer_spec_address_of">Signer::spec_address_of</a>(lr_account));
-<b>ensures</b> exists&lt;<a href="#0x1_AccountFreezing_FreezeEventsHolder">FreezeEventsHolder</a>&gt;(<a href="Signer.md#0x1_Signer_spec_address_of">Signer::spec_address_of</a>(lr_account));
+<pre><code><b>include</b> <a href="LibraTimestamp.md#0x1_LibraTimestamp_AbortsIfNotGenesis">LibraTimestamp::AbortsIfNotGenesis</a>;
+<b>include</b> <a href="CoreAddresses.md#0x1_CoreAddresses_AbortsIfNotLibraRoot">CoreAddresses::AbortsIfNotLibraRoot</a>{account: lr_account};
+<a name="0x1_AccountFreezing_addr$8"></a>
+<b>let</b> addr = <a href="Signer.md#0x1_Signer_spec_address_of">Signer::spec_address_of</a>(lr_account);
+<b>aborts_if</b> exists&lt;<a href="#0x1_AccountFreezing_FreezeEventsHolder">FreezeEventsHolder</a>&gt;(addr) with Errors::ALREADY_PUBLISHED;
+<b>ensures</b> exists&lt;<a href="#0x1_AccountFreezing_FreezeEventsHolder">FreezeEventsHolder</a>&gt;(addr);
 </code></pre>
 
 
@@ -358,8 +461,12 @@ Returns if the account at
 
 
 
-<pre><code><b>aborts_if</b> exists&lt;<a href="#0x1_AccountFreezing_FreezingBit">FreezingBit</a>&gt;(<a href="Signer.md#0x1_Signer_spec_address_of">Signer::spec_address_of</a>(account));
-<b>ensures</b> <a href="#0x1_AccountFreezing_spec_account_is_not_frozen">spec_account_is_not_frozen</a>(<a href="Signer.md#0x1_Signer_spec_address_of">Signer::spec_address_of</a>(account));
+<a name="0x1_AccountFreezing_addr$9"></a>
+
+
+<pre><code><b>let</b> addr = <a href="Signer.md#0x1_Signer_spec_address_of">Signer::spec_address_of</a>(account);
+<b>aborts_if</b> exists&lt;<a href="#0x1_AccountFreezing_FreezingBit">FreezingBit</a>&gt;(addr) with Errors::ALREADY_PUBLISHED;
+<b>ensures</b> <a href="#0x1_AccountFreezing_spec_account_is_not_frozen">spec_account_is_not_frozen</a>(addr);
 </code></pre>
 
 
@@ -375,11 +482,11 @@ Returns if the account at
 
 
 
-<pre><code><b>aborts_if</b> !<a href="Roles.md#0x1_Roles_spec_has_treasury_compliance_role_addr">Roles::spec_has_treasury_compliance_role_addr</a>(<a href="Signer.md#0x1_Signer_spec_address_of">Signer::spec_address_of</a>(account));
-<b>aborts_if</b> frozen_address == <a href="CoreAddresses.md#0x1_CoreAddresses_SPEC_LIBRA_ROOT_ADDRESS">CoreAddresses::SPEC_LIBRA_ROOT_ADDRESS</a>();
-<b>aborts_if</b> frozen_address == <a href="CoreAddresses.md#0x1_CoreAddresses_SPEC_TREASURY_COMPLIANCE_ADDRESS">CoreAddresses::SPEC_TREASURY_COMPLIANCE_ADDRESS</a>();
-<b>aborts_if</b> !exists&lt;<a href="#0x1_AccountFreezing_FreezingBit">FreezingBit</a>&gt;(frozen_address);
-<b>aborts_if</b> !exists&lt;<a href="#0x1_AccountFreezing_FreezeEventsHolder">FreezeEventsHolder</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_SPEC_LIBRA_ROOT_ADDRESS">CoreAddresses::SPEC_LIBRA_ROOT_ADDRESS</a>());
+<pre><code><b>include</b> <a href="LibraTimestamp.md#0x1_LibraTimestamp_AbortsIfNotOperating">LibraTimestamp::AbortsIfNotOperating</a>;
+<b>include</b> <a href="Roles.md#0x1_Roles_AbortsIfNotTreasuryCompliance">Roles::AbortsIfNotTreasuryCompliance</a>;
+<b>aborts_if</b> frozen_address == <a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>() with Errors::INVALID_ARGUMENT;
+<b>aborts_if</b> frozen_address == <a href="CoreAddresses.md#0x1_CoreAddresses_TREASURY_COMPLIANCE_ADDRESS">CoreAddresses::TREASURY_COMPLIANCE_ADDRESS</a>() with Errors::INVALID_ARGUMENT;
+<b>aborts_if</b> !exists&lt;<a href="#0x1_AccountFreezing_FreezingBit">FreezingBit</a>&gt;(frozen_address) with Errors::NOT_PUBLISHED;
 <b>ensures</b> <a href="#0x1_AccountFreezing_spec_account_is_frozen">spec_account_is_frozen</a>(frozen_address);
 </code></pre>
 
@@ -396,9 +503,9 @@ Returns if the account at
 
 
 
-<pre><code><b>aborts_if</b> !<a href="Roles.md#0x1_Roles_spec_has_treasury_compliance_role_addr">Roles::spec_has_treasury_compliance_role_addr</a>(<a href="Signer.md#0x1_Signer_spec_address_of">Signer::spec_address_of</a>(account));
-<b>aborts_if</b> !exists&lt;<a href="#0x1_AccountFreezing_FreezingBit">FreezingBit</a>&gt;(unfrozen_address);
-<b>aborts_if</b> !exists&lt;<a href="#0x1_AccountFreezing_FreezeEventsHolder">FreezeEventsHolder</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_SPEC_LIBRA_ROOT_ADDRESS">CoreAddresses::SPEC_LIBRA_ROOT_ADDRESS</a>());
+<pre><code><b>include</b> <a href="LibraTimestamp.md#0x1_LibraTimestamp_AbortsIfNotOperating">LibraTimestamp::AbortsIfNotOperating</a>;
+<b>include</b> <a href="Roles.md#0x1_Roles_AbortsIfNotTreasuryCompliance">Roles::AbortsIfNotTreasuryCompliance</a>;
+<b>aborts_if</b> !exists&lt;<a href="#0x1_AccountFreezing_FreezingBit">FreezingBit</a>&gt;(unfrozen_address) with Errors::NOT_PUBLISHED;
 <b>ensures</b> !<a href="#0x1_AccountFreezing_spec_account_is_frozen">spec_account_is_frozen</a>(unfrozen_address);
 </code></pre>
 
@@ -422,6 +529,35 @@ pragma opaque = <b>true</b>;
 
 
 
+<a name="0x1_AccountFreezing_Specification_assert_not_frozen"></a>
+
+### Function `assert_not_frozen`
+
+
+<pre><code><b>public</b> <b>fun</b> <a href="#0x1_AccountFreezing_assert_not_frozen">assert_not_frozen</a>(account: address)
+</code></pre>
+
+
+
+
+<pre><code>pragma opaque;
+<b>include</b> <a href="#0x1_AccountFreezing_AbortsIfFrozen">AbortsIfFrozen</a>;
+</code></pre>
+
+
+
+
+<a name="0x1_AccountFreezing_AbortsIfFrozen"></a>
+
+
+<pre><code><b>schema</b> <a href="#0x1_AccountFreezing_AbortsIfFrozen">AbortsIfFrozen</a> {
+    account: address;
+    <b>aborts_if</b> <a href="#0x1_AccountFreezing_spec_account_is_frozen">spec_account_is_frozen</a>(account) with Errors::INVALID_STATE;
+}
+</code></pre>
+
+
+
 
 <pre><code>pragma verify = <b>true</b>;
 <a name="0x1_AccountFreezing_spec_account_is_frozen"></a>
@@ -438,8 +574,8 @@ pragma opaque = <b>true</b>;
 FreezeEventsHolder always exists after genesis.
 
 
-<pre><code><b>invariant</b> [<b>global</b>] !<a href="LibraTimestamp.md#0x1_LibraTimestamp_spec_is_genesis">LibraTimestamp::spec_is_genesis</a>() ==&gt;
-    exists&lt;<a href="#0x1_AccountFreezing_FreezeEventsHolder">FreezeEventsHolder</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_SPEC_LIBRA_ROOT_ADDRESS">CoreAddresses::SPEC_LIBRA_ROOT_ADDRESS</a>());
+<pre><code><b>invariant</b> [<b>global</b>] <a href="LibraTimestamp.md#0x1_LibraTimestamp_is_operating">LibraTimestamp::is_operating</a>() ==&gt;
+    exists&lt;<a href="#0x1_AccountFreezing_FreezeEventsHolder">FreezeEventsHolder</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>());
 </code></pre>
 
 
@@ -447,8 +583,8 @@ The account of LibraRoot is not freezable [G2].
 After genesis, FreezingBit of LibraRoot is always false.
 
 
-<pre><code><b>invariant</b> [<b>global</b>] !<a href="LibraTimestamp.md#0x1_LibraTimestamp_spec_is_genesis">LibraTimestamp::spec_is_genesis</a>() ==&gt;
-    <a href="#0x1_AccountFreezing_spec_account_is_not_frozen">spec_account_is_not_frozen</a>(<a href="CoreAddresses.md#0x1_CoreAddresses_SPEC_LIBRA_ROOT_ADDRESS">CoreAddresses::SPEC_LIBRA_ROOT_ADDRESS</a>());
+<pre><code><b>invariant</b> [<b>global</b>] <a href="LibraTimestamp.md#0x1_LibraTimestamp_is_operating">LibraTimestamp::is_operating</a>() ==&gt;
+    <a href="#0x1_AccountFreezing_spec_account_is_not_frozen">spec_account_is_not_frozen</a>(<a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>());
 </code></pre>
 
 
@@ -456,8 +592,8 @@ The account of TreasuryCompliance is not freezable [G3].
 After genesis, FreezingBit of TreasuryCompliance is always false.
 
 
-<pre><code><b>invariant</b> [<b>global</b>] !<a href="LibraTimestamp.md#0x1_LibraTimestamp_spec_is_genesis">LibraTimestamp::spec_is_genesis</a>() ==&gt;
-    <a href="#0x1_AccountFreezing_spec_account_is_not_frozen">spec_account_is_not_frozen</a>(<a href="CoreAddresses.md#0x1_CoreAddresses_SPEC_TREASURY_COMPLIANCE_ADDRESS">CoreAddresses::SPEC_TREASURY_COMPLIANCE_ADDRESS</a>());
+<pre><code><b>invariant</b> [<b>global</b>] <a href="LibraTimestamp.md#0x1_LibraTimestamp_is_operating">LibraTimestamp::is_operating</a>() ==&gt;
+    <a href="#0x1_AccountFreezing_spec_account_is_not_frozen">spec_account_is_not_frozen</a>(<a href="CoreAddresses.md#0x1_CoreAddresses_TREASURY_COMPLIANCE_ADDRESS">CoreAddresses::TREASURY_COMPLIANCE_ADDRESS</a>());
 </code></pre>
 
 

@@ -1,15 +1,13 @@
 // Copyright (c) The Libra Core Contributors
 // SPDX-License-Identifier: Apache-2.0
-use crate::{
-    counters::{
-        PROCESSED_STRUCT_LOG_COUNT, SENT_STRUCT_LOG_COUNT, STRUCT_LOG_CONNECT_ERROR_COUNT,
-        STRUCT_LOG_PARSE_ERROR_COUNT, STRUCT_LOG_QUEUE_ERROR_COUNT, STRUCT_LOG_SEND_ERROR_COUNT,
-        STRUCT_LOG_TCP_CONNECT_COUNT,
-    },
-    LogLevel,
+use crate::counters::{
+    PROCESSED_STRUCT_LOG_COUNT, SENT_STRUCT_LOG_COUNT, STRUCT_LOG_CONNECT_ERROR_COUNT,
+    STRUCT_LOG_PARSE_ERROR_COUNT, STRUCT_LOG_QUEUE_ERROR_COUNT, STRUCT_LOG_SEND_ERROR_COUNT,
+    STRUCT_LOG_TCP_CONNECT_COUNT,
 };
-use chrono::Utc;
+use chrono::{SecondsFormat, Utc};
 use once_cell::sync::Lazy;
+use rand::RngCore;
 use serde::Serialize;
 use serde_json::Value;
 use std::{
@@ -56,6 +54,8 @@ static FIELDS_TO_KEEP: &[&str] = &["error"];
 
 #[derive(Default, Serialize)]
 pub struct StructuredLogEntry {
+    /// Unique Id representing this message in Elasticsearch
+    id: String,
     /// log message set by macros like info!
     #[serde(skip_serializing_if = "Option::is_none")]
     log: Option<String>,
@@ -74,18 +74,11 @@ pub struct StructuredLogEntry {
     /// filename + line (e.g. consensus/src/round_manager.rs:678)
     #[serde(skip_serializing_if = "Option::is_none")]
     location: Option<&'static str>,
-    /// git revision
-    #[serde(skip_serializing_if = "Option::is_none")]
-    git_rev: Option<&'static str>,
     /// time of the log
-    #[serde(skip_serializing_if = "Option::is_none")]
-    timestamp: Option<String>,
-    /// warning or critical TODO: Remove once alarms are migrated (https://github.com/libra/libra/issues/5484)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    severity: Option<LogLevel>,
+    timestamp: String,
     /// Log level
     #[serde(skip_serializing_if = "Option::is_none")]
-    level: Option<LogLevel>,
+    level: Option<log::Level>,
     /// arbitrary data that can be logged
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     data: HashMap<&'static str, Value>,
@@ -93,31 +86,44 @@ pub struct StructuredLogEntry {
 
 #[must_use = "use send_struct_log! macro to send structured log"]
 impl StructuredLogEntry {
-    pub fn new_unnamed() -> Self {
+    /// Base implementation for creating a log
+    fn new_unnamed() -> Self {
         let mut ret = Self::default();
-        ret.timestamp = Some(Utc::now().format("%F %T").to_string());
+
+        // Generate a 16 byte random like UUIDv4
+        let mut rng = rand::thread_rng();
+        let mut bytes = [0; 16];
+        rng.fill_bytes(&mut bytes);
+        ret.id = hex::encode(bytes);
+        ret.timestamp = Utc::now().to_rfc3339_opts(SecondsFormat::Micros, true);
         ret
     }
 
+    /// Specifically for text based conversion logs
+    pub fn new_text() -> Self {
+        let mut ret = Self::new_unnamed();
+        ret.category = Some("text");
+        ret
+    }
+
+    /// Creates a log with a category and a name.  This should be preferred
     pub fn new_named(category: &'static str, name: &'static str) -> Self {
-        let mut ret = Self::default();
+        let mut ret = Self::new_unnamed();
         ret.category = Some(category);
         ret.name = Some(name);
-        ret.timestamp = Some(Utc::now().format("%F %T").to_string());
         ret
     }
 
     fn clone_without_data(&self) -> Self {
         Self {
+            id: self.id.clone(),
             log: self.log.clone(),
             pattern: self.pattern,
             category: self.category,
             name: self.name,
             module: self.module,
             location: self.location,
-            git_rev: self.git_rev,
             timestamp: self.timestamp.clone(),
-            severity: self.severity,
             level: self.level,
             data: HashMap::new(),
         }
@@ -170,32 +176,22 @@ impl StructuredLogEntry {
     }
 
     /// Sets the log level of the log
-    pub fn level(mut self, level: LogLevel) -> Self {
-        self.severity = Some(level);
+    pub fn level(mut self, level: log::Level) -> Self {
         self.level = Some(level);
         self
     }
 
-    // TODO: Remove in favor of level (https://github.com/libra/libra/issues/5484)
-    pub fn critical(self) -> Self {
-        self.level(crate::LogLevel::Critical)
-    }
-
-    pub fn warning(self) -> Self {
-        self.level(crate::LogLevel::Warning)
-    }
-
-    pub fn json_data(mut self, key: &'static str, value: Value) -> Self {
+    pub(crate) fn json_data(mut self, key: &'static str, value: Value) -> Self {
         self.data.insert(key, value);
         self
     }
 
-    pub fn data<D: Serialize>(mut self, key: &'static str, value: D) -> Self {
-        self.data.insert(
+    /// Add a data field, with a given value, will serialize into JSON and be indexed accordingly
+    pub fn data<D: Serialize>(self, key: &'static str, value: D) -> Self {
+        self.json_data(
             key,
             serde_json::to_value(value).expect("Failed to serialize StructuredLogEntry key"),
-        );
-        self
+        )
     }
 
     /// Used for errors and other types that don't serialize well
@@ -203,42 +199,43 @@ impl StructuredLogEntry {
         self.data(key, value.to_string())
     }
 
+    /// Add a typed data field to serialize, to ensure type and name consistency
     pub fn field<D: Serialize>(self, field: &LoggingField<D>, value: D) -> Self {
         self.data(field.0, value)
     }
 
-    #[doc(hidden)] // set from macro
-    pub fn log(&mut self, log: String) -> &mut Self {
+    /// Sets the context log line used for text logs.  This is useful for migration of text logs
+    pub fn log(mut self, log: String) -> Self {
         self.log = Some(log);
         self
     }
 
     #[doc(hidden)] // set from macro
-    pub fn pattern(&mut self, pattern: &'static str) -> &mut Self {
+    pub fn add_log(&mut self, log: String) -> &mut Self {
+        self.log = Some(log);
+        self
+    }
+
+    #[doc(hidden)] // set from macro
+    pub fn add_pattern(&mut self, pattern: &'static str) -> &mut Self {
         self.pattern = Some(pattern);
         self
     }
 
     #[doc(hidden)] // set from macro
-    pub fn module(&mut self, module: &'static str) -> &mut Self {
+    pub fn add_module(&mut self, module: &'static str) -> &mut Self {
         self.module = Some(module);
         self
     }
 
     #[doc(hidden)] // set from macro
-    pub fn location(&mut self, location: &'static str) -> &mut Self {
+    pub fn add_location(&mut self, location: &'static str) -> &mut Self {
         self.location = Some(location);
         self
     }
 
     #[doc(hidden)] // set from macro
-    pub fn git_rev(&mut self, git_rev: Option<&'static str>) -> &mut Self {
-        self.git_rev = git_rev;
-        self
-    }
-
-    #[doc(hidden)] // set from macro
-    pub fn data_mutref<D: Serialize>(&mut self, key: &'static str, value: D) -> &mut Self {
+    pub fn add_data<D: Serialize>(&mut self, key: &'static str, value: D) -> &mut Self {
         self.data.insert(
             key,
             serde_json::to_value(value).expect("Failed to serialize StructuredLogEntry key"),

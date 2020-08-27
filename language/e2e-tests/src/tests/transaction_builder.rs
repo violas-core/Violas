@@ -26,8 +26,9 @@ use move_core_types::language_storage::TypeTag;
 use transaction_builder::*;
 
 const COIN1_THRESHOLD: u64 = 10_000_000_000 / 5;
-const BAD_METADATA_SIGNATURE_ERROR_CODE: u64 = 6;
-const MISMATCHED_METADATA_SIGNATURE_ERROR_CODE: u64 = 7;
+const BAD_METADATA_SIGNATURE_ERROR_CODE: u64 = 775;
+const MISMATCHED_METADATA_SIGNATURE_ERROR_CODE: u64 = 1031;
+const PAYEE_COMPLIANCE_KEY_NOT_SET_ERROR_CODE: u64 = 1281;
 
 #[test]
 fn freeze_unfreeze_account() {
@@ -35,9 +36,6 @@ fn freeze_unfreeze_account() {
     let mut executor = FakeExecutor::from_genesis_file();
 
     let account = Account::new();
-
-    let mut keygen = KeyGen::from_seed([9u8; 32]);
-    let (_, cpubkey) = keygen.generate_keypair();
 
     let blessed = Account::new_blessed_tc();
     let libra_root = Account::new_libra_root();
@@ -51,8 +49,6 @@ fn freeze_unfreeze_account() {
                 *account.address(),
                 account.auth_key_prefix(),
                 vec![],
-                vec![],
-                cpubkey.to_bytes().to_vec(),
                 true,
             ))
             .sequence_number(1)
@@ -104,7 +100,6 @@ fn create_parent_and_child_vasp() {
     let child = Account::new();
 
     let mut keygen = KeyGen::from_seed([9u8; 32]);
-    let (_vasp_compliance_private_key, vasp_compliance_public_key) = keygen.generate_keypair();
 
     // create a parent VASP
     let add_all_currencies = false;
@@ -117,8 +112,6 @@ fn create_parent_and_child_vasp() {
                 *parent.address(),
                 parent.auth_key_prefix(),
                 vec![],
-                vec![],
-                vasp_compliance_public_key.to_bytes().to_vec(),
                 add_all_currencies,
             ))
             .sequence_number(1)
@@ -170,9 +163,6 @@ fn create_child_vasp_all_currencies() {
     let parent = Account::new();
     let child = Account::new();
 
-    let mut keygen = KeyGen::from_seed([9u8; 32]);
-    let (_vasp_compliance_private_key, vasp_compliance_public_key) = keygen.generate_keypair();
-
     // create a parent VASP
     let add_all_currencies = true;
     executor.execute_and_apply(
@@ -184,8 +174,6 @@ fn create_child_vasp_all_currencies() {
                 *parent.address(),
                 parent.auth_key_prefix(),
                 vec![],
-                vec![],
-                vasp_compliance_public_key.to_bytes().to_vec(),
                 add_all_currencies,
             ))
             .sequence_number(1)
@@ -252,9 +240,6 @@ fn create_child_vasp_with_balance() {
     let parent = Account::new();
     let child = Account::new();
 
-    let mut keygen = KeyGen::from_seed([9u8; 32]);
-    let (_vasp_compliance_private_key, vasp_compliance_public_key) = keygen.generate_keypair();
-
     // create a parent VASP
     let add_all_currencies = true;
     executor.execute_and_apply(
@@ -266,8 +251,6 @@ fn create_child_vasp_with_balance() {
                 *parent.address(),
                 parent.auth_key_prefix(),
                 vec![],
-                vec![],
-                vasp_compliance_public_key.to_bytes().to_vec(),
                 add_all_currencies,
             ))
             .sequence_number(1)
@@ -333,8 +316,7 @@ fn dual_attestation_payment() {
     let libra_root = Account::new_libra_root();
     let dd = Account::new_genesis_account(account_config::testnet_dd_account_address());
     let mut keygen = KeyGen::from_seed([9u8; 32]);
-    let (sender_vasp_compliance_private_key, sender_vasp_compliance_public_key) =
-        keygen.generate_keypair();
+    let (sender_vasp_compliance_private_key, _) = keygen.generate_keypair();
     let (receiver_vasp_compliance_private_key, receiver_vasp_compliance_public_key) =
         keygen.generate_keypair();
 
@@ -349,8 +331,6 @@ fn dual_attestation_payment() {
                 *payment_sender.address(),
                 payment_sender.auth_key_prefix(),
                 vec![],
-                vec![],
-                sender_vasp_compliance_public_key.to_bytes().to_vec(),
                 false,
             ))
             .sequence_number(1)
@@ -366,13 +346,24 @@ fn dual_attestation_payment() {
                 *payment_receiver.address(),
                 payment_receiver.auth_key_prefix(),
                 vec![],
-                vec![],
-                receiver_vasp_compliance_public_key.to_bytes().to_vec(),
                 false,
             ))
             .sequence_number(2)
             .sign(),
     );
+
+    // set the dual attestation info for the receiver
+    executor.execute_and_apply(
+        payment_receiver
+            .transaction()
+            .script(encode_rotate_dual_attestation_info_script(
+                b"any base_url works".to_vec(),
+                receiver_vasp_compliance_public_key.to_bytes().to_vec(),
+            ))
+            .sequence_number(0)
+            .sign(),
+    );
+
     executor.execute_and_apply(
         dd.transaction()
             .script(encode_peer_to_peer_with_metadata_script(
@@ -464,10 +455,7 @@ fn dual_attestation_payment() {
                 .sign(),
         );
 
-        assert!(matches!(
-            output.status().status(),
-            Ok(KeptVMStatus::MoveAbort(_, MISMATCHED_METADATA_SIGNATURE_ERROR_CODE))
-        ));
+        assert_aborted_with(output, MISMATCHED_METADATA_SIGNATURE_ERROR_CODE);
     }
 
     {
@@ -487,10 +475,7 @@ fn dual_attestation_payment() {
                 .sequence_number(2)
                 .sign(),
         );
-        assert!(matches!(
-            output.status().status(),
-            Ok(KeptVMStatus::MoveAbort(_, MISMATCHED_METADATA_SIGNATURE_ERROR_CODE))
-        ));
+        assert_aborted_with(output, MISMATCHED_METADATA_SIGNATURE_ERROR_CODE);
     }
     {
         // Intra-VASP transaction >= 1000 threshold, should go through with any signature since
@@ -553,7 +538,7 @@ fn dual_attestation_payment() {
                     b"any base_url works".to_vec(),
                     new_compliance_public_key.to_bytes().to_vec(),
                 ))
-                .sequence_number(0)
+                .sequence_number(1)
                 .sign(),
         );
     }
@@ -577,6 +562,25 @@ fn dual_attestation_payment() {
                 .sign(),
         );
         assert_aborted_with(output, MISMATCHED_METADATA_SIGNATURE_ERROR_CODE)
+    }
+    {
+        // trying to send a tx to a recipient who has not set up dual attestation should fail
+        let output = executor.execute_transaction(
+            payment_receiver
+                .transaction()
+                .script(create_dual_attestation_payment(
+                    *payment_receiver.address(),
+                    *payment_sender.address(),
+                    payment_amount,
+                    account_config::coin1_tag(),
+                    // pick an arbitrary ref_id
+                    lcs::to_bytes(&9999u64).unwrap(),
+                    &receiver_vasp_compliance_private_key,
+                ))
+                .sequence_number(2)
+                .sign(),
+        );
+        assert_aborted_with(output, PAYEE_COMPLIANCE_KEY_NOT_SET_ERROR_CODE)
     }
 }
 
@@ -610,10 +614,14 @@ fn create_dual_attestation_payment(
 }
 
 fn assert_aborted_with(output: TransactionOutput, error_code: u64) {
-    assert!(matches!(
-        output.status().status(),
-        Ok(KeptVMStatus::MoveAbort(_, code)) if code == error_code
-    ));
+    if let Ok(KeptVMStatus::MoveAbort(_, code)) = output.status().status() {
+        assert_eq!(error_code, code);
+    } else {
+        assert!(matches!(
+            output.status().status(),
+            Ok(KeptVMStatus::MoveAbort(..))
+        ));
+    }
 }
 
 // Check that DD <-> DD and DD <-> VASP payments over the threshold work with and without dual attesation.
@@ -643,8 +651,6 @@ fn dd_dual_attestation_payments() {
                 *parent_vasp.address(),
                 parent_vasp.auth_key_prefix(),
                 vec![],
-                vec![],
-                parent_vasp_compliance_public_key.to_bytes().to_vec(),
                 false,
             ))
             .sequence_number(1)
@@ -660,8 +666,6 @@ fn dd_dual_attestation_payments() {
                 *dd1.address(),
                 dd1.auth_key_prefix(),
                 vec![],
-                vec![],
-                dd1_compliance_public_key.to_bytes().to_vec(),
                 false,
             ))
             .sequence_number(0)
@@ -675,13 +679,41 @@ fn dd_dual_attestation_payments() {
                 account_config::coin1_tag(),
                 0,
                 *dd2.address(),
-                dd1.auth_key_prefix(),
+                dd2.auth_key_prefix(),
                 vec![],
-                vec![],
-                dd2_compliance_public_key.to_bytes().to_vec(),
                 false,
             ))
             .sequence_number(1)
+            .sign(),
+    );
+
+    // set up dual attestation info for VASP, DD1, DD2
+    executor.execute_and_apply(
+        parent_vasp
+            .transaction()
+            .script(encode_rotate_dual_attestation_info_script(
+                b"any base_url works".to_vec(),
+                parent_vasp_compliance_public_key.to_bytes().to_vec(),
+            ))
+            .sequence_number(0)
+            .sign(),
+    );
+    executor.execute_and_apply(
+        dd1.transaction()
+            .script(encode_rotate_dual_attestation_info_script(
+                b"any base_url works".to_vec(),
+                dd1_compliance_public_key.to_bytes().to_vec(),
+            ))
+            .sequence_number(0)
+            .sign(),
+    );
+    executor.execute_and_apply(
+        dd2.transaction()
+            .script(encode_rotate_dual_attestation_info_script(
+                b"any base_url works".to_vec(),
+                dd2_compliance_public_key.to_bytes().to_vec(),
+            ))
+            .sequence_number(0)
             .sign(),
     );
 
@@ -724,7 +756,7 @@ fn dd_dual_attestation_payments() {
                 vec![0],
                 vec![],
             ))
-            .sequence_number(0)
+            .sequence_number(1)
             .sign(),
     );
     // DD <-> DD over threshold with attestation succeeds
@@ -739,7 +771,7 @@ fn dd_dual_attestation_payments() {
                 lcs::to_bytes(&9999u64).unwrap(),
                 &dd2_compliance_private_key,
             ))
-            .sequence_number(1)
+            .sequence_number(2)
             .sign(),
     );
 
@@ -753,7 +785,7 @@ fn dd_dual_attestation_payments() {
                 vec![0],
                 vec![],
             ))
-            .sequence_number(2)
+            .sequence_number(3)
             .sign(),
     );
     // DD -> VASP over threshold with attestation succeeds
@@ -768,7 +800,7 @@ fn dd_dual_attestation_payments() {
                 lcs::to_bytes(&9999u64).unwrap(),
                 &parent_vasp_compliance_private_key,
             ))
-            .sequence_number(3)
+            .sequence_number(4)
             .sign(),
     );
 
@@ -783,7 +815,7 @@ fn dd_dual_attestation_payments() {
                 vec![0],
                 vec![],
             ))
-            .sequence_number(0)
+            .sequence_number(1)
             .sign(),
     );
     // VASP -> DD over threshold with attestation succeeds
@@ -799,7 +831,7 @@ fn dd_dual_attestation_payments() {
                 lcs::to_bytes(&9999u64).unwrap(),
                 &dd1_compliance_private_key,
             ))
-            .sequence_number(1)
+            .sequence_number(2)
             .sign(),
     );
 
@@ -814,7 +846,7 @@ fn dd_dual_attestation_payments() {
                 vec![0],
                 b"what a bad signature".to_vec(),
             ))
-            .sequence_number(2)
+            .sequence_number(3)
             .sign(),
     );
     assert_aborted_with(output, BAD_METADATA_SIGNATURE_ERROR_CODE)
@@ -879,7 +911,7 @@ fn recovery_address() {
     let other_vasp = Account::new();
 
     let mut keygen = KeyGen::from_seed([9u8; 32]);
-    let (_vasp_compliance_private_key, vasp_compliance_public_key) = keygen.generate_keypair();
+    let (_vasp_compliance_private_key, _) = keygen.generate_keypair();
 
     // create a parent VASP
     let add_all_currencies = false;
@@ -892,8 +924,6 @@ fn recovery_address() {
                 *parent.address(),
                 parent.auth_key_prefix(),
                 vec![],
-                vec![],
-                vasp_compliance_public_key.to_bytes().to_vec(),
                 add_all_currencies,
             ))
             .sequence_number(1)
@@ -981,8 +1011,6 @@ fn recovery_address() {
                 *other_vasp.address(),
                 other_vasp.auth_key_prefix(),
                 vec![],
-                vec![],
-                vasp_compliance_public_key.to_bytes().to_vec(),
                 add_all_currencies,
             ))
             .sequence_number(2)
@@ -999,7 +1027,7 @@ fn recovery_address() {
             .sequence_number(0)
             .sign(),
     );
-    assert_aborted_with(output, 3);
+    assert_aborted_with(output, 775);
 
     // try to rotate child's key from other_vasp--should abort
     let (_, pubkey3) = keygen.generate_keypair();
@@ -1017,13 +1045,12 @@ fn recovery_address() {
             .sequence_number(0)
             .sign(),
     );
-    assert_aborted_with(output, 2);
+    assert_aborted_with(output, 519);
 }
 
 #[test]
 fn add_child_currencies() {
     let mut executor = FakeExecutor::from_genesis_file();
-    let mut keygen = KeyGen::from_seed([9u8; 32]);
 
     let vasp_a = Account::new();
     let vasp_a_child1 = Account::new();
@@ -1031,9 +1058,6 @@ fn add_child_currencies() {
     let vasp_b_child1 = Account::new();
     let vasp_b_child2 = Account::new();
     let libra_root = Account::new_libra_root();
-
-    let (_, vasp_a_cpubkey) = keygen.generate_keypair();
-    let (_, vasp_b_cpubkey) = keygen.generate_keypair();
 
     executor.execute_and_apply(
         libra_root
@@ -1044,8 +1068,6 @@ fn add_child_currencies() {
                 *vasp_a.address(),
                 vasp_a.auth_key_prefix(),
                 vec![],
-                vec![],
-                vasp_a_cpubkey.to_bytes().to_vec(),
                 false,
             ))
             .sequence_number(1)
@@ -1090,8 +1112,6 @@ fn add_child_currencies() {
                 *vasp_b.address(),
                 vasp_b.auth_key_prefix(),
                 vec![],
-                vec![],
-                vasp_b_cpubkey.to_bytes().to_vec(),
                 true,
             ))
             .sequence_number(2)

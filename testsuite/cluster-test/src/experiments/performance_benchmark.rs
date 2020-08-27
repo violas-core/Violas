@@ -8,7 +8,7 @@ use crate::{
     instance::Instance,
     stats::PrometheusRangeView,
     tx_emitter::{EmitJobRequest, TxStats},
-    util::unix_timestamp_now,
+    util::{human_readable_bytes_per_sec, unix_timestamp_now},
 };
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
@@ -235,7 +235,7 @@ impl PerformanceBenchmark {
 
         const COMMAND: &str = "/opt/libra/bin/db-backup coordinator run \
             --transaction-batch-size 20000 \
-            --state-snapshot-interval 1000 \
+            --state-snapshot-interval 1 \
             local-fs --dir $(mktemp -d -t libra_backup_XXXXXXXX);";
 
         Ok(Some(tokio::spawn(async move {
@@ -278,13 +278,14 @@ impl PerformanceBenchmark {
 
         // Backup throughput
         if self.backup {
-            let bytes_per_sec = pv.avg_backup_bytes_per_second().unwrap_or(0.0);
+            let bytes_per_sec = pv.avg_backup_bytes_per_second().unwrap_or(-1.0);
             context
                 .report
                 .report_metric(&self, "avg_backup_bytes_per_second", bytes_per_sec);
             context.report.report_text(format!(
-                "{}: Average backup throughput: {:.0} Bps",
-                self, bytes_per_sec
+                "{}: Average backup throughput: {}",
+                self,
+                human_readable_bytes_per_sec(bytes_per_sec)
             ));
         }
 

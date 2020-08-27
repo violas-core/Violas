@@ -9,7 +9,7 @@ use move_lang::{compiled_unit::CompiledUnit, move_compile, shared::Address};
 use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
-    fs::File,
+    fs::{self, File},
     io::{Read, Write},
     path::{Path, PathBuf},
 };
@@ -17,14 +17,15 @@ use vm::CompiledModule;
 
 pub const STD_LIB_DIR: &str = "modules";
 pub const MOVE_EXTENSION: &str = "move";
+pub const ERROR_DESC_EXTENSION: &str = "errmap";
+/// The extension for compiled files
+pub const COMPILED_EXTENSION: &str = "mv";
 
 pub const TRANSACTION_SCRIPTS: &str = "transaction_scripts";
 /// The output path under which compiled files will be put
 pub const COMPILED_OUTPUT_PATH: &str = "compiled";
 /// The file name for the compiled stdlib
 pub const COMPILED_STDLIB_DIR: &str = "stdlib";
-/// The extension for compiled files
-pub const COMPILED_EXTENSION: &str = "mv";
 /// The file name of the debug module
 pub const DEBUG_MODULE_FILE_NAME: &str = "debug.move";
 
@@ -32,6 +33,9 @@ pub const DEBUG_MODULE_FILE_NAME: &str = "debug.move";
 pub const STD_LIB_DOC_DIR: &str = "modules/doc";
 /// The output path for transaction script documentation.
 pub const TRANSACTION_SCRIPTS_DOC_DIR: &str = "transaction_scripts/doc";
+
+pub const ERROR_DESC_DIR: &str = "error_descriptions";
+pub const ERROR_DESC_FILENAME: &str = "error_descriptions";
 
 /// The output path under which compiled script files can be found
 pub const COMPILED_TRANSACTION_SCRIPTS_DIR: &str = "compiled/transaction_scripts";
@@ -132,6 +136,15 @@ pub fn build_transaction_script_abi(script_file_str: String) {
     )
 }
 
+pub fn build_stdlib_error_code_map() {
+    let mut path = PathBuf::from(COMPILED_OUTPUT_PATH);
+    path.push(ERROR_DESC_DIR);
+    fs::create_dir_all(&path).unwrap();
+    path.push(ERROR_DESC_FILENAME);
+    path.set_extension(ERROR_DESC_EXTENSION);
+    build_error_code_map(path.to_str().unwrap(), stdlib_files().as_slice(), "")
+}
+
 fn build_doc(output_path: &str, doc_path: &str, sources: &[String], dep_path: &str) {
     let mut options = move_prover::cli::Options::default();
     options.move_sources = sources.to_vec();
@@ -165,34 +178,28 @@ fn build_abi(output_path: &str, sources: &[String], dep_path: &str, compiled_scr
     move_prover::run_move_prover_errors_to_stderr(options).unwrap();
 }
 
-// TODO: remove once https://github.com/facebookincubator/serde-reflection/issues/32 is closed
-fn post_process_add_proptest_derivations(buffer: &[u8]) {
-    let contents = std::str::from_utf8(buffer).unwrap();
-    let mut file = std::fs::File::create(TRANSACTION_BUILDERS_GENERATED_SOURCE_PATH)
-        .expect("Failed to open file for Rust script build generation");
-    write!(
-        file,
-        "{}",
-        contents.replacen(
-            "pub enum ScriptCall",
-            r#"
-#[cfg_attr(any(test, feature = "fuzzing"), derive(proptest_derive::Arbitrary))]
-#[cfg_attr(any(test, feature = "fuzzing"), proptest(no_params))]
-pub enum ScriptCall"#,
-            1
-        )
-    )
-    .expect("Unable to write generated Rust script builders");
+fn build_error_code_map(output_path: &str, sources: &[String], dep_path: &str) {
+    let mut options = move_prover::cli::Options::default();
+    options.move_sources = sources.to_vec();
+    if !dep_path.is_empty() {
+        options.move_deps = vec![dep_path.to_string()]
+    }
+    options.verbosity_level = LevelFilter::Warn;
+    options.run_errmapgen = true;
+    options.errmapgen.output_file = output_path.to_string();
+    options.setup_logging_for_test();
+    move_prover::run_move_prover_errors_to_stderr(options).unwrap();
 }
 
 pub fn generate_rust_transaction_builders() {
     let abis = transaction_builder_generator::read_abis(COMPILED_TRANSACTION_SCRIPTS_ABI_DIR)
         .expect("Failed to read generated ABIs");
-    let mut buf = vec![];
-    transaction_builder_generator::rust::output(&mut buf, &abis, /* local types */ true)
-        .expect("Failed to generate Rust builders for Libra");
-
-    post_process_add_proptest_derivations(&buf);
+    {
+        let mut file = std::fs::File::create(TRANSACTION_BUILDERS_GENERATED_SOURCE_PATH)
+            .expect("Failed to open file for Rust script build generation");
+        transaction_builder_generator::rust::output(&mut file, &abis, /* local types */ true)
+            .expect("Failed to generate Rust builders for Libra");
+    }
 
     std::process::Command::new("rustfmt")
         .arg("--config")

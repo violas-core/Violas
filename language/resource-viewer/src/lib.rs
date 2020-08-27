@@ -41,7 +41,7 @@ pub struct AnnotatedMoveStruct {
     value: Vec<(Identifier, AnnotatedMoveValue)>,
 }
 
-/// AnnotatedMoveValue is a fully expanded version of on chain move data. This should only be used
+/// AnnotatedMoveValue is a fully expanded version of on chain Move data. This should only be used
 /// for debugging/client purpose right now and just for a better visualization of on chain data. In
 /// the long run, we would like to transform this struct to a Json value so that we can have a cross
 /// platform interpretation of the on chain data.
@@ -110,7 +110,6 @@ impl<'a> MoveValueAnnotator<'a> {
                 .map_err(|e: PartialVMError| e.finish(Location::Undefined).into_vm_status())?;
 
             let move_struct = MoveStruct::simple_deserialize(v.as_slice(), &struct_def)?;
-            println!("annotaing: {:?}, {:?}", ty, move_struct);
             output.insert(
                 ty.struct_tag()
                     .map_err(|e| e.finish(Location::Undefined).into_vm_status())

@@ -14,7 +14,7 @@ fun main(account: &signer) {
 // TODO(status_migration) remove duplicate check
 // check: ABORTED
 // check: ABORTED
-// check: 4
+// check: 1031
 
 // TreasuryCompliance should not be able to add a balance
 //! new-transaction
@@ -29,7 +29,7 @@ fun main(account: &signer) {
 // TODO(status_migration) remove duplicate check
 // check: ABORTED
 // check: ABORTED
-// check: 4
+// check: 1031
 
 
 // Validators and ValidatorOperators should not be able to add a balance
@@ -61,7 +61,7 @@ fun main(account: &signer) {
 // TODO(status_migration) remove duplicate check
 // check: ABORTED
 // check: ABORTED
-// check: 4
+// check: 1031
 
 // check ValidatorOperator case
 //! new-transaction
@@ -76,12 +76,12 @@ fun main(account: &signer) {
 // TODO(status_migration) remove duplicate check
 // check: ABORTED
 // check: ABORTED
-// check: 4
+// check: 1031
 
 //! new-transaction
 //! sender: libraroot
 //! type-args: 0x1::Coin1::Coin1
-//! args: 0, {{vasp}}, {{vasp::auth_key}}, b"bob", b"boburl", x"7013b6ed7dde3cfb1251db1b04ae9cd7853470284085693590a75def645a926d", false
+//! args: 0, {{vasp}}, {{vasp::auth_key}}, b"bob", false
 stdlib_script::create_parent_vasp_account
 // check: EXECUTED
 
