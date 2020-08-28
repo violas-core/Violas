@@ -18,6 +18,7 @@ use crate::{
     mnemonic::Mnemonic,
 };
 use anyhow::Result;
+use libra_crypto::ed25519::Ed25519PrivateKey;
 use libra_types::{
     account_address::AccountAddress,
     transaction::{
@@ -154,6 +155,13 @@ impl WalletLibrary {
         Ok(ret)
     }
 
+    /// Returns privite key for a account index
+    ///
+    pub fn get_private_key(&self, child_number: ChildNumber) -> Result<Ed25519PrivateKey> {
+        let child = self.key_factory.private_child(child_number)?;
+        Ok(child.get_private())
+    }
+    ///
     /// Simple public function that allows to sign a Libra RawTransaction with the PrivateKey
     /// associated to a particular AccountAddress. If the PrivateKey associated to an
     /// AccountAddress is not contained in the addr_map, then this function will return an Error

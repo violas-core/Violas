@@ -109,6 +109,12 @@ impl ExtendedPrivKey {
         AuthenticationKey::ed25519(&self.get_public())
     }
 
+    /// Return the Private Key
+    pub fn get_private(&self) -> Ed25519PrivateKey {
+        let data = lcs::to_bytes(&self.private_key).expect("Unable to serialize keys");
+        lcs::from_bytes(&data).expect("Unable to parse key")
+    }
+
     /// Libra specific sign function that is capable of signing an arbitrary
     /// Serializable value.
     ///
