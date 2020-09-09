@@ -40,9 +40,11 @@ impl Command for AccountCommandCreateLocal {
     fn get_description(&self) -> &'static str {
         "Create a local account--no on-chain effect. Returns reference ID to use in other operations"
     }
-    fn execute(&self, client: &mut ClientProxy, _params: &[&str]) {
+    fn execute(&self, client: &mut ClientProxy, params: &[&str]) {
         println!(">> Creating/retrieving next local account from wallet");
-        match client.create_next_account(true) {
+        let addr = if params.len() == 2 { params[1] } else { "" };
+
+        match client.create_next_account(addr, true) {
             Ok(account_data) => println!(
                 "Created/retrieved local account #{} address {}",
                 account_data.index,

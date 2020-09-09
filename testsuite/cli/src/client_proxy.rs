@@ -213,13 +213,29 @@ impl ClientProxy {
     }
 
     /// Returns the account index that should be used by user to reference this account
-    pub fn create_next_account(&mut self, sync_with_validator: bool) -> Result<AddressAndIndex> {
-        let (auth_key, _) = self.wallet.new_address()?;
+    pub fn create_next_account(
+        &mut self,
+        //address: Option<AccountAddress>,
+        para: &str,
+        sync_with_validator: bool,
+    ) -> Result<AddressAndIndex> {
+        let address = if is_address(para) {
+            Some(ClientProxy::address_from_strings(para)?)
+        } else {
+            None
+        };
+
+        let (auth_key, child_number) = self.wallet.new_address()?;
+        let private_key = self.wallet.get_private_key(child_number)?;
+
         let account_data = Self::get_account_data_from_address(
             &mut self.client,
-            auth_key.derived_address(),
+            match address {
+                Some(addr) => addr,
+                None => auth_key.derived_address(),
+            },
             sync_with_validator,
-            None,
+            Some(KeyPair::from(private_key)),
             Some(auth_key.to_vec()),
         )?;
 

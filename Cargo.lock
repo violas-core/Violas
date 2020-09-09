@@ -3211,6 +3211,7 @@ dependencies = [
  "ed25519-dalek 1.0.0-pre.4 (registry+https://github.com/rust-lang/crates.io-index)",
  "hex 0.4.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "hmac 0.8.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "libra-canonical-serialization 0.1.0",
  "libra-crypto 0.1.0",
  "libra-temppath 0.1.0",
  "libra-types 0.1.0",
