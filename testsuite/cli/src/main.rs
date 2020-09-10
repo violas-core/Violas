@@ -83,11 +83,12 @@ fn main() {
     crash_handler::setup_panic_handler();
     let args = Args::from_args();
 
+    let mut logger = ::libra_logger::Logger::new();
+
     if !args.verbose {
-        ::libra_logger::Logger::new()
-            .level(::libra_logger::Level::Warn)
-            .init();
+        logger.level(::libra_logger::Level::Warn);
     }
+    logger.init();
 
     let (commands, alias_to_cmd) = get_commands(args.faucet_account_file.is_some());
 
@@ -95,8 +96,9 @@ fn main() {
         .faucet_account_file
         .clone()
         .unwrap_or_else(|| "".to_string());
-    // Faucet and TreasuryCompliance use the same keypair for now
+    // Faucet, TreasuryCompliance and DD use the same keypair for now
     let treasury_compliance_account_file = faucet_account_file.clone();
+    let dd_account_file = faucet_account_file.clone();
     let mnemonic_file = args.mnemonic_file.clone();
 
     // If waypoint is given explicitly, use its value,
@@ -116,6 +118,7 @@ fn main() {
         &args.url,
         &faucet_account_file,
         &treasury_compliance_account_file,
+        &dd_account_file,
         args.sync,
         args.faucet_url.clone(),
         mnemonic_file,

@@ -41,11 +41,11 @@ fn main() {
             .channel_size(config.logger.chan_size)
             .is_async(config.logger.is_async)
             .level(config.logger.level)
+            .read_env()
             .init();
-        libra_logger::init_struct_log_from_env().expect("Failed to initialize structured logging");
 
         // Let's now log some important information, since the logger is set up
-        sl_info!(StructuredLogEntry::new_named("config", "startup").data("config", &config));
+        info!(StructuredLogEntry::new_named("config", "startup").data("config", &config));
     }
 
     if config.metrics.enabled {
@@ -59,9 +59,15 @@ fn main() {
             setup_metrics(peer_id, &config);
         }
     }
-
-    if cfg!(feature = "enable-inject-error") {
-        warn!("Running with enable-inject-error!");
+    if fail::has_failpoints() {
+        warn!("Failpoints is enabled");
+        if let Some(failpoints) = &config.failpoints {
+            for (point, actions) in failpoints {
+                fail::cfg(point, actions).expect("fail to set actions for failpoint");
+            }
+        }
+    } else if config.failpoints.is_some() {
+        warn!("failpoints is set in config, but the binary doesn't compile with this feature");
     }
 
     let _node_handle = libra_node::main_node::setup_environment(&config);

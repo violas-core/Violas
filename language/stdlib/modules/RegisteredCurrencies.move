@@ -19,19 +19,21 @@ module RegisteredCurrencies {
     const ECURRENCY_CODE_ALREADY_TAKEN: u64 = 0;
 
     /// Initializes this module. Can only be called from genesis.
-    public fun initialize(config_account: &signer) {
+    public fun initialize(lr_account: &signer) {
         LibraTimestamp::assert_genesis();
-        Roles::assert_libra_root(config_account);
+        Roles::assert_libra_root(lr_account);
         LibraConfig::publish_new_config(
-            config_account,
+            lr_account,
             RegisteredCurrencies { currency_codes: Vector::empty() }
         );
     }
     spec fun initialize {
         include LibraTimestamp::AbortsIfNotGenesis;
-        include Roles::AbortsIfNotLibraRoot{account: config_account};
+        include Roles::AbortsIfNotLibraRoot{account: lr_account};
         include LibraConfig::PublishNewConfigAbortsIf<RegisteredCurrencies>;
-        include LibraConfig::PublishNewConfigEnsures<RegisteredCurrencies>;
+        include LibraConfig::PublishNewConfigEnsures<RegisteredCurrencies>{
+            payload: RegisteredCurrencies { currency_codes: Vector::empty() }
+        };
         ensures len(get_currency_codes()) == 0;
     }
 
@@ -51,19 +53,23 @@ module RegisteredCurrencies {
     }
     spec fun add_currency_code {
         include AddCurrencyCodeAbortsIf;
-        /// The resulting currency_codes is the one before this function is called, with the new one added to the end.
-        ensures Vector::eq_push_back(get_currency_codes(), old(get_currency_codes()), currency_code);
+        include AddCurrencyCodeEnsures;
     }
     spec schema AddCurrencyCodeAbortsIf {
         lr_account: &signer;
         currency_code: vector<u8>;
-        include LibraConfig::AbortsIfNotModifiable<RegisteredCurrencies>{account: lr_account};
-
+        include LibraConfig::SetAbortsIf<RegisteredCurrencies>{ account: lr_account };
         /// The same currency code can be only added once.
         aborts_if Vector::spec_contains(
             LibraConfig::spec_get<RegisteredCurrencies>().currency_codes,
             currency_code
         ) with Errors::INVALID_ARGUMENT;
+    }
+    spec schema AddCurrencyCodeEnsures {
+        currency_code: vector<u8>;
+        /// The resulting currency_codes is the one before this function is called, with the new one added to the end.
+        ensures Vector::eq_push_back(get_currency_codes(), old(get_currency_codes()), currency_code);
+        include LibraConfig::SetEnsures<RegisteredCurrencies> {payload: LibraConfig::get<RegisteredCurrencies>()};
     }
 
     // **************** Global Specification ****************

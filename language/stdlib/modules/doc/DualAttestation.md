@@ -7,6 +7,8 @@
 
 -  [Resource `Credential`](#0x1_DualAttestation_Credential)
 -  [Resource `Limit`](#0x1_DualAttestation_Limit)
+-  [Struct `ComplianceKeyRotationEvent`](#0x1_DualAttestation_ComplianceKeyRotationEvent)
+-  [Struct `BaseUrlRotationEvent`](#0x1_DualAttestation_BaseUrlRotationEvent)
 -  [Const `MAX_U64`](#0x1_DualAttestation_MAX_U64)
 -  [Const `ECREDENTIAL`](#0x1_DualAttestation_ECREDENTIAL)
 -  [Const `ELIMIT`](#0x1_DualAttestation_ELIMIT)
@@ -107,6 +109,25 @@ participate in off-chain protocols.
  Expiration date in microseconds from unix epoch. For V1, it is always set to
  U64_MAX. Mutable, but only by LibraRoot.
 </dd>
+<dt>
+
+<code>compliance_key_rotation_events: <a href="Event.md#0x1_Event_EventHandle">Event::EventHandle</a>&lt;<a href="#0x1_DualAttestation_ComplianceKeyRotationEvent">DualAttestation::ComplianceKeyRotationEvent</a>&gt;</code>
+</dt>
+<dd>
+ Event handle for
+<code>compliance_public_key</code> rotation events. Emitted
+ every time this
+<code>compliance_public_key</code> is rotated.
+</dd>
+<dt>
+
+<code>base_url_rotation_events: <a href="Event.md#0x1_Event_EventHandle">Event::EventHandle</a>&lt;<a href="#0x1_DualAttestation_BaseUrlRotationEvent">DualAttestation::BaseUrlRotationEvent</a>&gt;</code>
+</dt>
+<dd>
+ Event handle for
+<code>base_url</code> rotation events. Emitted every time this
+<code>base_url</code> is rotated.
+</dd>
 </dl>
 
 
@@ -135,6 +156,84 @@ Struct to store the limit on-chain
 </dt>
 <dd>
 
+</dd>
+</dl>
+
+
+</details>
+
+<a name="0x1_DualAttestation_ComplianceKeyRotationEvent"></a>
+
+## Struct `ComplianceKeyRotationEvent`
+
+The message sent whenever the compliance public key for a
+<code><a href="#0x1_DualAttestation">DualAttestation</a></code> resource is rotated.
+
+
+<pre><code><b>struct</b> <a href="#0x1_DualAttestation_ComplianceKeyRotationEvent">ComplianceKeyRotationEvent</a>
+</code></pre>
+
+
+
+<details>
+<summary>Fields</summary>
+
+
+<dl>
+<dt>
+
+<code>new_compliance_public_key: vector&lt;u8&gt;</code>
+</dt>
+<dd>
+ The new
+<code>compliance_public_key</code> that is being used for dual attestation checking.
+</dd>
+<dt>
+
+<code>time_rotated_seconds: u64</code>
+</dt>
+<dd>
+ The time at which the
+<code>compliance_public_key</code> was rotated
+</dd>
+</dl>
+
+
+</details>
+
+<a name="0x1_DualAttestation_BaseUrlRotationEvent"></a>
+
+## Struct `BaseUrlRotationEvent`
+
+The message sent whenever the base url for a
+<code><a href="#0x1_DualAttestation">DualAttestation</a></code> resource is rotated.
+
+
+<pre><code><b>struct</b> <a href="#0x1_DualAttestation_BaseUrlRotationEvent">BaseUrlRotationEvent</a>
+</code></pre>
+
+
+
+<details>
+<summary>Fields</summary>
+
+
+<dl>
+<dt>
+
+<code>new_base_url: vector&lt;u8&gt;</code>
+</dt>
+<dd>
+ The new
+<code>base_url</code> that is being used for dual attestation checking
+</dd>
+<dt>
+
+<code>time_rotated_seconds: u64</code>
+</dt>
+<dd>
+ The time at which the
+<code>base_url</code> was rotated
 </dd>
 </dl>
 
@@ -302,7 +401,7 @@ the
     human_name: vector&lt;u8&gt;,
 ) {
     <a href="Roles.md#0x1_Roles_assert_parent_vasp_or_designated_dealer">Roles::assert_parent_vasp_or_designated_dealer</a>(created);
-    <a href="Roles.md#0x1_Roles_assert_libra_root_or_treasury_compliance">Roles::assert_libra_root_or_treasury_compliance</a>(creator);
+    <a href="Roles.md#0x1_Roles_assert_treasury_compliance">Roles::assert_treasury_compliance</a>(creator);
     <b>assert</b>(
         !exists&lt;<a href="#0x1_DualAttestation_Credential">Credential</a>&gt;(<a href="Signer.md#0x1_Signer_address_of">Signer::address_of</a>(created)),
         <a href="Errors.md#0x1_Errors_already_published">Errors::already_published</a>(ECREDENTIAL)
@@ -313,6 +412,8 @@ the
         compliance_public_key: <a href="Vector.md#0x1_Vector_empty">Vector::empty</a>(),
         // For testnet and V1, so it should never expire. So set <b>to</b> u64::MAX
         expiration_date: U64_MAX,
+        compliance_key_rotation_events: <a href="Event.md#0x1_Event_new_event_handle">Event::new_event_handle</a>&lt;<a href="#0x1_DualAttestation_ComplianceKeyRotationEvent">ComplianceKeyRotationEvent</a>&gt;(created),
+        base_url_rotation_events: <a href="Event.md#0x1_Event_new_event_handle">Event::new_event_handle</a>&lt;<a href="#0x1_DualAttestation_BaseUrlRotationEvent">BaseUrlRotationEvent</a>&gt;(created),
     })
 }
 </code></pre>
@@ -342,7 +443,12 @@ Rotate the base URL for
 <pre><code><b>public</b> <b>fun</b> <a href="#0x1_DualAttestation_rotate_base_url">rotate_base_url</a>(account: &signer, new_url: vector&lt;u8&gt;) <b>acquires</b> <a href="#0x1_DualAttestation_Credential">Credential</a> {
     <b>let</b> addr = <a href="Signer.md#0x1_Signer_address_of">Signer::address_of</a>(account);
     <b>assert</b>(exists&lt;<a href="#0x1_DualAttestation_Credential">Credential</a>&gt;(addr), <a href="Errors.md#0x1_Errors_not_published">Errors::not_published</a>(ECREDENTIAL));
-    borrow_global_mut&lt;<a href="#0x1_DualAttestation_Credential">Credential</a>&gt;(addr).base_url = new_url
+    <b>let</b> credential = borrow_global_mut&lt;<a href="#0x1_DualAttestation_Credential">Credential</a>&gt;(addr);
+    credential.base_url = <b>copy</b> new_url;
+    <a href="Event.md#0x1_Event_emit_event">Event::emit_event</a>(&<b>mut</b> credential.base_url_rotation_events, <a href="#0x1_DualAttestation_BaseUrlRotationEvent">BaseUrlRotationEvent</a> {
+        new_base_url: new_url,
+        time_rotated_seconds: <a href="LibraTimestamp.md#0x1_LibraTimestamp_now_seconds">LibraTimestamp::now_seconds</a>(),
+    });
 }
 </code></pre>
 
@@ -375,7 +481,13 @@ Rotate the compliance public key for
     <b>let</b> addr = <a href="Signer.md#0x1_Signer_address_of">Signer::address_of</a>(account);
     <b>assert</b>(exists&lt;<a href="#0x1_DualAttestation_Credential">Credential</a>&gt;(addr), <a href="Errors.md#0x1_Errors_not_published">Errors::not_published</a>(ECREDENTIAL));
     <b>assert</b>(<a href="Signature.md#0x1_Signature_ed25519_validate_pubkey">Signature::ed25519_validate_pubkey</a>(<b>copy</b> new_key), <a href="Errors.md#0x1_Errors_invalid_argument">Errors::invalid_argument</a>(EINVALID_PUBLIC_KEY));
-    borrow_global_mut&lt;<a href="#0x1_DualAttestation_Credential">Credential</a>&gt;(addr).compliance_public_key = new_key
+    <b>let</b> credential = borrow_global_mut&lt;<a href="#0x1_DualAttestation_Credential">Credential</a>&gt;(addr);
+    credential.compliance_public_key = <b>copy</b> new_key;
+    <a href="Event.md#0x1_Event_emit_event">Event::emit_event</a>(&<b>mut</b> credential.compliance_key_rotation_events, <a href="#0x1_DualAttestation_ComplianceKeyRotationEvent">ComplianceKeyRotationEvent</a> {
+        new_compliance_public_key: new_key,
+        time_rotated_seconds: <a href="LibraTimestamp.md#0x1_LibraTimestamp_now_seconds">LibraTimestamp::now_seconds</a>(),
+    });
+
 }
 </code></pre>
 
@@ -722,7 +834,7 @@ Travel rule limit set during genesis
 
 <pre><code><b>public</b> <b>fun</b> <a href="#0x1_DualAttestation_initialize">initialize</a>(lr_account: &signer) {
     <a href="LibraTimestamp.md#0x1_LibraTimestamp_assert_genesis">LibraTimestamp::assert_genesis</a>();
-    <a href="CoreAddresses.md#0x1_CoreAddresses_assert_libra_root">CoreAddresses::assert_libra_root</a>(lr_account);
+    <a href="CoreAddresses.md#0x1_CoreAddresses_assert_libra_root">CoreAddresses::assert_libra_root</a>(lr_account); // operational constraint.
     <b>assert</b>(!exists&lt;<a href="#0x1_DualAttestation_Limit">Limit</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>()), <a href="Errors.md#0x1_Errors_already_published">Errors::already_published</a>(ELIMIT));
     <b>let</b> initial_limit = (INITIAL_DUAL_ATTESTATION_LIMIT <b>as</b> u128) * (<a href="Libra.md#0x1_Libra_scaling_factor">Libra::scaling_factor</a>&lt;<a href="LBR.md#0x1_LBR">LBR</a>&gt;() <b>as</b> u128);
     <b>assert</b>(initial_limit &lt;= MAX_U64, <a href="Errors.md#0x1_Errors_limit_exceeded">Errors::limit_exceeded</a>(ELIMIT));
@@ -821,11 +933,11 @@ Uninterpreted function for
 
 
 
-The permission "RotateDualAttestationInfo" is granted to ParentVASP, DesignatedDealer [B26].
+The permission "RotateDualAttestationInfo" is granted to ParentVASP and DesignatedDealer [B25].
 
 
 <pre><code><b>include</b> <a href="Roles.md#0x1_Roles_AbortsIfNotParentVaspOrDesignatedDealer">Roles::AbortsIfNotParentVaspOrDesignatedDealer</a>{account: created};
-<b>include</b> <a href="Roles.md#0x1_Roles_AbortsIfNotLibraRootOrTreasuryCompliance">Roles::AbortsIfNotLibraRootOrTreasuryCompliance</a>{account: creator};
+<b>include</b> <a href="Roles.md#0x1_Roles_AbortsIfNotTreasuryCompliance">Roles::AbortsIfNotTreasuryCompliance</a>{account: creator};
 <b>aborts_if</b> exists&lt;<a href="#0x1_DualAttestation_Credential">Credential</a>&gt;(<a href="Signer.md#0x1_Signer_spec_address_of">Signer::spec_address_of</a>(created)) with Errors::ALREADY_PUBLISHED;
 </code></pre>
 
@@ -842,9 +954,21 @@ The permission "RotateDualAttestationInfo" is granted to ParentVASP, DesignatedD
 
 
 
-<pre><code><b>include</b> <a href="#0x1_DualAttestation_AbortsIfNoCredential">AbortsIfNoCredential</a>{addr: <a href="Signer.md#0x1_Signer_spec_address_of">Signer::spec_address_of</a>(account)};
-<b>ensures</b>
-    <b>global</b>&lt;<a href="#0x1_DualAttestation_Credential">Credential</a>&gt;(<a href="Signer.md#0x1_Signer_spec_address_of">Signer::spec_address_of</a>(account)).base_url == new_url;
+<a name="0x1_DualAttestation_sender$23"></a>
+
+
+<pre><code><b>let</b> sender = <a href="Signer.md#0x1_Signer_spec_address_of">Signer::spec_address_of</a>(account);
+<b>include</b> <a href="LibraTimestamp.md#0x1_LibraTimestamp_AbortsIfNoTime">LibraTimestamp::AbortsIfNoTime</a>;
+<b>include</b> <a href="#0x1_DualAttestation_AbortsIfNoCredential">AbortsIfNoCredential</a>{addr: sender};
+<b>ensures</b> <b>global</b>&lt;<a href="#0x1_DualAttestation_Credential">Credential</a>&gt;(sender).base_url == new_url;
+</code></pre>
+
+
+The sender can only rotates its own base url [B25].
+
+
+<pre><code><b>ensures</b> forall addr:address where addr != sender:
+    <b>global</b>&lt;<a href="#0x1_DualAttestation_Credential">Credential</a>&gt;(addr).base_url == <b>old</b>(<b>global</b>&lt;<a href="#0x1_DualAttestation_Credential">Credential</a>&gt;(addr).base_url);
 </code></pre>
 
 
@@ -872,10 +996,20 @@ The permission "RotateDualAttestationInfo" is granted to ParentVASP, DesignatedD
 
 
 
-<pre><code><b>include</b> <a href="#0x1_DualAttestation_AbortsIfNoCredential">AbortsIfNoCredential</a>{addr: <a href="Signer.md#0x1_Signer_spec_address_of">Signer::spec_address_of</a>(account)};
+<pre><code><b>include</b> <a href="LibraTimestamp.md#0x1_LibraTimestamp_AbortsIfNoTime">LibraTimestamp::AbortsIfNoTime</a>;
+<a name="0x1_DualAttestation_sender$24"></a>
+<b>let</b> sender = <a href="Signer.md#0x1_Signer_spec_address_of">Signer::spec_address_of</a>(account);
+<b>include</b> <a href="#0x1_DualAttestation_AbortsIfNoCredential">AbortsIfNoCredential</a>{addr: sender};
 <b>aborts_if</b> !<a href="Signature.md#0x1_Signature_ed25519_validate_pubkey">Signature::ed25519_validate_pubkey</a>(new_key) with Errors::INVALID_ARGUMENT;
-<b>ensures</b> <b>global</b>&lt;<a href="#0x1_DualAttestation_Credential">Credential</a>&gt;(<a href="Signer.md#0x1_Signer_spec_address_of">Signer::spec_address_of</a>(account)).compliance_public_key
-     == new_key;
+<b>ensures</b> <b>global</b>&lt;<a href="#0x1_DualAttestation_Credential">Credential</a>&gt;(sender).compliance_public_key == new_key;
+</code></pre>
+
+
+The sender only rotates its own compliance_public_key [B25].
+
+
+<pre><code><b>ensures</b> forall addr:address where addr != sender:
+    <b>global</b>&lt;<a href="#0x1_DualAttestation_Credential">Credential</a>&gt;(addr).compliance_public_key == <b>old</b>(<b>global</b>&lt;<a href="#0x1_DualAttestation_Credential">Credential</a>&gt;(addr).compliance_public_key);
 </code></pre>
 
 
@@ -1193,7 +1327,7 @@ len(metadata_signature) == 64 &&
 <pre><code><b>include</b> <a href="LibraTimestamp.md#0x1_LibraTimestamp_AbortsIfNotGenesis">LibraTimestamp::AbortsIfNotGenesis</a>;
 <b>include</b> <a href="CoreAddresses.md#0x1_CoreAddresses_AbortsIfNotLibraRoot">CoreAddresses::AbortsIfNotLibraRoot</a>{account: lr_account};
 <b>aborts_if</b> exists&lt;<a href="#0x1_DualAttestation_Limit">Limit</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>()) with Errors::ALREADY_PUBLISHED;
-<a name="0x1_DualAttestation_initial_limit$23"></a>
+<a name="0x1_DualAttestation_initial_limit$25"></a>
 <b>let</b> initial_limit = INITIAL_DUAL_ATTESTATION_LIMIT * <a href="Libra.md#0x1_Libra_spec_scaling_factor">Libra::spec_scaling_factor</a>&lt;<a href="LBR.md#0x1_LBR">LBR</a>&gt;();
 <b>aborts_if</b> initial_limit &gt; MAX_U64 with Errors::LIMIT_EXCEEDED;
 <b>include</b> <a href="Libra.md#0x1_Libra_AbortsIfNoCurrency">Libra::AbortsIfNoCurrency</a>&lt;<a href="LBR.md#0x1_LBR">LBR</a>&gt;;
@@ -1228,6 +1362,9 @@ len(metadata_signature) == 64 &&
 </code></pre>
 
 
+
+Must abort if the signer does not have the TreasuryCompliance role [B15].
+The permission UpdateDualAttestationLimit is granted to TreasuryCompliance.
 
 
 <pre><code><b>include</b> <a href="Roles.md#0x1_Roles_AbortsIfNotTreasuryCompliance">Roles::AbortsIfNotTreasuryCompliance</a>{account: tc_account};
@@ -1271,4 +1408,67 @@ Mirrors
 <pre><code><b>define</b> <a href="#0x1_DualAttestation_spec_get_cur_microlibra_limit">spec_get_cur_microlibra_limit</a>(): u64 {
     <b>global</b>&lt;<a href="#0x1_DualAttestation_Limit">Limit</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>()).micro_lbr_limit
 }
+</code></pre>
+
+
+Only set_microlibra_limit can change the limit [B15].
+
+
+<a name="0x1_DualAttestation_DualAttestationLimitRemainsSame"></a>
+
+The DualAttestation limit stays constant.
+
+
+<pre><code><b>schema</b> <a href="#0x1_DualAttestation_DualAttestationLimitRemainsSame">DualAttestationLimitRemainsSame</a> {
+    <b>ensures</b> <b>old</b>(<a href="#0x1_DualAttestation_spec_is_published">spec_is_published</a>())
+        ==&gt; <a href="#0x1_DualAttestation_spec_get_cur_microlibra_limit">spec_get_cur_microlibra_limit</a>() == <b>old</b>(<a href="#0x1_DualAttestation_spec_get_cur_microlibra_limit">spec_get_cur_microlibra_limit</a>());
+}
+</code></pre>
+
+
+
+
+<pre><code><b>apply</b> <a href="#0x1_DualAttestation_DualAttestationLimitRemainsSame">DualAttestationLimitRemainsSame</a> <b>to</b> * <b>except</b> set_microlibra_limit;
+</code></pre>
+
+
+Only rotate_compliance_public_key can rotate the compliance public key [B25].
+
+
+<a name="0x1_DualAttestation_CompliancePublicKeyRemainsSame"></a>
+
+The compliance public key stays constant.
+
+
+<pre><code><b>schema</b> <a href="#0x1_DualAttestation_CompliancePublicKeyRemainsSame">CompliancePublicKeyRemainsSame</a> {
+    <b>ensures</b> forall addr1: address where <b>old</b>(exists&lt;<a href="#0x1_DualAttestation_Credential">Credential</a>&gt;(addr1)):
+        <b>global</b>&lt;<a href="#0x1_DualAttestation_Credential">Credential</a>&gt;(addr1).compliance_public_key == <b>old</b>(<b>global</b>&lt;<a href="#0x1_DualAttestation_Credential">Credential</a>&gt;(addr1).compliance_public_key);
+}
+</code></pre>
+
+
+
+
+<pre><code><b>apply</b> <a href="#0x1_DualAttestation_CompliancePublicKeyRemainsSame">CompliancePublicKeyRemainsSame</a> <b>to</b> * <b>except</b> rotate_compliance_public_key;
+</code></pre>
+
+
+Only rotate_base_url can rotate the base url [B25].
+
+
+<a name="0x1_DualAttestation_BaseURLRemainsSame"></a>
+
+The base url stays constant.
+
+
+<pre><code><b>schema</b> <a href="#0x1_DualAttestation_BaseURLRemainsSame">BaseURLRemainsSame</a> {
+    <b>ensures</b> forall addr1: address where <b>old</b>(exists&lt;<a href="#0x1_DualAttestation_Credential">Credential</a>&gt;(addr1)):
+        <b>global</b>&lt;<a href="#0x1_DualAttestation_Credential">Credential</a>&gt;(addr1).base_url == <b>old</b>(<b>global</b>&lt;<a href="#0x1_DualAttestation_Credential">Credential</a>&gt;(addr1).base_url);
+}
+</code></pre>
+
+
+
+
+<pre><code><b>apply</b> <a href="#0x1_DualAttestation_BaseURLRemainsSame">BaseURLRemainsSame</a> <b>to</b> * <b>except</b> rotate_base_url;
 </code></pre>

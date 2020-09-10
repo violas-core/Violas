@@ -14,6 +14,19 @@ fun main(account: &signer) {
 // check: "Keep(ABORTED { code: 258,"
 
 //! new-transaction
+//! sender: blessed
+script {
+use 0x1::DesignatedDealer;
+use 0x1::Coin1::Coin1;
+fun main(account: &signer) {
+    DesignatedDealer::publish_designated_dealer_credential<Coin1>(
+        account, account, false
+    );
+}
+}
+// check: "Keep(ABORTED { code: 1539,"
+
+//! new-transaction
 script {
 use 0x1::DesignatedDealer;
 use 0x1::Coin1::Coin1;
@@ -50,7 +63,7 @@ fun main(account: &signer) {
 //! args: 0, {{bob}}, {{bob::auth_key}}, x"", false
 
 stdlib_script::create_designated_dealer
-// check: EXECUTED
+// check: "Keep(EXECUTED)"
 
 //! new-transaction
 //! sender: blessed
@@ -83,7 +96,7 @@ fun main(account: &signer) {
     DesignatedDealer::update_tier<Coin1>(account, {{bob}}, 0, 500000 * Libra::scaling_factor<Coin1>());
 }
 }
-// check: EXECUTED
+// check: "Keep(EXECUTED)"
 
 //! new-transaction
 //! sender: blessed
@@ -137,7 +150,7 @@ script {
 }
 // check: ReceivedMintEvent
 // check: MintEvent
-// check: EXECUTED
+// check: "Keep(EXECUTED)"
 
 //! new-transaction
 //! sender: blessed
@@ -171,4 +184,4 @@ script {
 }
 // check: ReceivedMintEvent
 // check: MintEvent
-// check: EXECUTED
+// check: "Keep(EXECUTED)"

@@ -13,6 +13,7 @@ use crate::{
 use anyhow::{anyhow, Result};
 use bytes::Bytes;
 use libra_crypto::HashValue;
+use libra_logger::prelude::*;
 use libra_types::{
     account_state_blob::AccountStateBlob, ledger_info::LedgerInfoWithSignatures,
     proof::TransactionInfoWithProof, transaction::Version,
@@ -54,7 +55,7 @@ impl StateSnapshotBackupController {
     }
 
     pub async fn run(self) -> Result<FileHandle> {
-        println!(
+        info!(
             "State snapshot backup started, for version {}.",
             self.version,
         );
@@ -62,7 +63,7 @@ impl StateSnapshotBackupController {
             .run_impl()
             .await
             .map_err(|e| anyhow!("State snapshot backup failed: {}", e))?;
-        println!("State snapshot backup succeeded. Manifest: {}", ret);
+        info!("State snapshot backup succeeded. Manifest: {}", ret);
         Ok(ret)
     }
 
@@ -172,6 +173,7 @@ impl StateSnapshotBackupController {
             .create_for_write(backup_handle, &Self::chunk_name(first_idx))
             .await?;
         chunk_file.write_all(&chunk_bytes).await?;
+        chunk_file.shutdown().await?;
         let (proof_handle, mut proof_file) = self
             .storage
             .create_for_write(backup_handle, &Self::chunk_proof_name(first_idx, last_idx))
@@ -184,6 +186,7 @@ impl StateSnapshotBackupController {
             &mut proof_file,
         )
         .await?;
+        proof_file.shutdown().await?;
 
         Ok(StateSnapshotChunk {
             first_idx,
@@ -209,6 +212,7 @@ impl StateSnapshotBackupController {
             .create_for_write(&backup_handle, Self::proof_name())
             .await?;
         proof_file.write_all(&proof_bytes).await?;
+        proof_file.shutdown().await?;
 
         let manifest = StateSnapshotBackup {
             version: self.version,
@@ -224,6 +228,7 @@ impl StateSnapshotBackupController {
         manifest_file
             .write_all(&serde_json::to_vec(&manifest)?)
             .await?;
+        manifest_file.shutdown().await?;
 
         let metadata = Metadata::new_state_snapshot_backup(self.version, manifest_handle.clone());
         self.storage

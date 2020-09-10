@@ -353,7 +353,7 @@ Root accounts for multi-account entities will hold this resource at
 their root/parent account.
 
 
-<pre><code><b>public</b> <b>fun</b> <a href="#0x1_AccountLimits_publish_window">publish_window</a>&lt;CoinType&gt;(to_limit: &signer, _: &<a href="#0x1_AccountLimits_AccountLimitMutationCapability">AccountLimits::AccountLimitMutationCapability</a>, limit_address: address)
+<pre><code><b>public</b> <b>fun</b> <a href="#0x1_AccountLimits_publish_window">publish_window</a>&lt;CoinType&gt;(lr_account: &signer, to_limit: &signer, limit_address: address)
 </code></pre>
 
 
@@ -363,11 +363,13 @@ their root/parent account.
 
 
 <pre><code><b>public</b> <b>fun</b> <a href="#0x1_AccountLimits_publish_window">publish_window</a>&lt;CoinType&gt;(
+    lr_account: &signer,
     to_limit: &signer,
-    _: &<a href="#0x1_AccountLimits_AccountLimitMutationCapability">AccountLimitMutationCapability</a>,
     limit_address: address,
 ) {
+    <a href="Roles.md#0x1_Roles_assert_libra_root">Roles::assert_libra_root</a>(lr_account);
     <b>assert</b>(exists&lt;<a href="#0x1_AccountLimits_LimitsDefinition">LimitsDefinition</a>&lt;CoinType&gt;&gt;(limit_address), <a href="Errors.md#0x1_Errors_not_published">Errors::not_published</a>(ELIMITS_DEFINITION));
+    <a href="Roles.md#0x1_Roles_assert_parent_vasp_or_child_vasp">Roles::assert_parent_vasp_or_child_vasp</a>(to_limit);
     <b>assert</b>(
         !exists&lt;<a href="#0x1_AccountLimits_Window">Window</a>&lt;CoinType&gt;&gt;(<a href="Signer.md#0x1_Signer_address_of">Signer::address_of</a>(to_limit)),
         <a href="Errors.md#0x1_Errors_already_published">Errors::already_published</a>(EWINDOW)
@@ -590,7 +592,7 @@ specified the
     amount: u64,
     receiving: &<b>mut</b> <a href="#0x1_AccountLimits_Window">Window</a>&lt;CoinType&gt;,
 ): bool <b>acquires</b> <a href="#0x1_AccountLimits_LimitsDefinition">LimitsDefinition</a> {
-    <b>let</b> limits_definition = borrow_global_mut&lt;<a href="#0x1_AccountLimits_LimitsDefinition">LimitsDefinition</a>&lt;CoinType&gt;&gt;(receiving.limit_address);
+    <b>let</b> limits_definition = borrow_global&lt;<a href="#0x1_AccountLimits_LimitsDefinition">LimitsDefinition</a>&lt;CoinType&gt;&gt;(receiving.limit_address);
     // If the limits are unrestricted then don't do any more work.
     <b>if</b> (<a href="#0x1_AccountLimits_is_unrestricted">is_unrestricted</a>(limits_definition)) <b>return</b> <b>true</b>;
 
@@ -638,7 +640,7 @@ in its
     amount: u64,
     sending: &<b>mut</b> <a href="#0x1_AccountLimits_Window">Window</a>&lt;CoinType&gt;,
 ): bool <b>acquires</b> <a href="#0x1_AccountLimits_LimitsDefinition">LimitsDefinition</a> {
-    <b>let</b> limits_definition = borrow_global_mut&lt;<a href="#0x1_AccountLimits_LimitsDefinition">LimitsDefinition</a>&lt;CoinType&gt;&gt;(sending.limit_address);
+    <b>let</b> limits_definition = borrow_global&lt;<a href="#0x1_AccountLimits_LimitsDefinition">LimitsDefinition</a>&lt;CoinType&gt;&gt;(sending.limit_address);
     // If the limits are unrestricted then don't do any more work.
     <b>if</b> (<a href="#0x1_AccountLimits_is_unrestricted">is_unrestricted</a>(limits_definition)) <b>return</b> <b>true</b>;
 
@@ -878,8 +880,10 @@ Invariant that
 
 
 
-<pre><code><b>include</b> <a href="#0x1_AccountLimits_UpdateDepositLimitsAbortsIf">UpdateDepositLimitsAbortsIf</a>&lt;CoinType&gt;;
-<b>ensures</b> result == <b>old</b>(<a href="#0x1_AccountLimits_spec_update_deposit_limits">spec_update_deposit_limits</a>&lt;CoinType&gt;(amount, addr));
+<pre><code>pragma opaque;
+<b>modifies</b> <b>global</b>&lt;<a href="#0x1_AccountLimits_Window">Window</a>&lt;CoinType&gt;&gt;(addr);
+<b>include</b> <a href="#0x1_AccountLimits_UpdateDepositLimitsAbortsIf">UpdateDepositLimitsAbortsIf</a>&lt;CoinType&gt;;
+<b>include</b> <a href="#0x1_AccountLimits_CanReceiveEnsures">CanReceiveEnsures</a>&lt;CoinType&gt;{receiving: <b>global</b>&lt;<a href="#0x1_AccountLimits_Window">Window</a>&lt;CoinType&gt;&gt;(addr)};
 </code></pre>
 
 
@@ -932,8 +936,10 @@ Invariant that
 
 
 
-<pre><code><b>include</b> <a href="#0x1_AccountLimits_UpdateWithdrawalLimitsAbortsIf">UpdateWithdrawalLimitsAbortsIf</a>&lt;CoinType&gt;;
-<b>ensures</b> result == <b>old</b>(<a href="#0x1_AccountLimits_spec_update_withdrawal_limits">spec_update_withdrawal_limits</a>&lt;CoinType&gt;(amount, addr));
+<pre><code>pragma opaque;
+<b>modifies</b> <b>global</b>&lt;<a href="#0x1_AccountLimits_Window">Window</a>&lt;CoinType&gt;&gt;(addr);
+<b>include</b> <a href="#0x1_AccountLimits_UpdateWithdrawalLimitsAbortsIf">UpdateWithdrawalLimitsAbortsIf</a>&lt;CoinType&gt;;
+<b>include</b> <a href="#0x1_AccountLimits_CanWithdrawEnsures">CanWithdrawEnsures</a>&lt;CoinType&gt;{sending: <b>global</b>&lt;<a href="#0x1_AccountLimits_Window">Window</a>&lt;CoinType&gt;&gt;(addr)};
 </code></pre>
 
 
@@ -968,14 +974,30 @@ Invariant that
 ### Function `publish_window`
 
 
-<pre><code><b>public</b> <b>fun</b> <a href="#0x1_AccountLimits_publish_window">publish_window</a>&lt;CoinType&gt;(to_limit: &signer, _: &<a href="#0x1_AccountLimits_AccountLimitMutationCapability">AccountLimits::AccountLimitMutationCapability</a>, limit_address: address)
+<pre><code><b>public</b> <b>fun</b> <a href="#0x1_AccountLimits_publish_window">publish_window</a>&lt;CoinType&gt;(lr_account: &signer, to_limit: &signer, limit_address: address)
 </code></pre>
 
 
 
 
-<pre><code><b>aborts_if</b> !exists&lt;<a href="#0x1_AccountLimits_LimitsDefinition">LimitsDefinition</a>&lt;CoinType&gt;&gt;(limit_address) with Errors::NOT_PUBLISHED;
-<b>aborts_if</b> exists&lt;<a href="#0x1_AccountLimits_Window">Window</a>&lt;CoinType&gt;&gt;(<a href="Signer.md#0x1_Signer_spec_address_of">Signer::spec_address_of</a>(to_limit)) with Errors::ALREADY_PUBLISHED;
+<pre><code><b>include</b> <a href="#0x1_AccountLimits_PublishWindowAbortsIf">PublishWindowAbortsIf</a>&lt;CoinType&gt;;
+</code></pre>
+
+
+
+
+<a name="0x1_AccountLimits_PublishWindowAbortsIf"></a>
+
+
+<pre><code><b>schema</b> <a href="#0x1_AccountLimits_PublishWindowAbortsIf">PublishWindowAbortsIf</a>&lt;CoinType&gt; {
+    lr_account: signer;
+    to_limit: signer;
+    limit_address: address;
+    <b>include</b> <a href="Roles.md#0x1_Roles_AbortsIfNotLibraRoot">Roles::AbortsIfNotLibraRoot</a>{account: lr_account};
+    <b>include</b> <a href="Roles.md#0x1_Roles_AbortsIfNotParentVaspOrChildVasp">Roles::AbortsIfNotParentVaspOrChildVasp</a>{account: to_limit};
+    <b>aborts_if</b> !exists&lt;<a href="#0x1_AccountLimits_LimitsDefinition">LimitsDefinition</a>&lt;CoinType&gt;&gt;(limit_address) with Errors::NOT_PUBLISHED;
+    <b>aborts_if</b> exists&lt;<a href="#0x1_AccountLimits_Window">Window</a>&lt;CoinType&gt;&gt;(<a href="Signer.md#0x1_Signer_spec_address_of">Signer::spec_address_of</a>(to_limit)) with Errors::ALREADY_PUBLISHED;
+}
 </code></pre>
 
 
@@ -1008,7 +1030,8 @@ Invariant that
 
 
 
-<pre><code><b>include</b> <a href="#0x1_AccountLimits_ResetWindowAbortsIf">ResetWindowAbortsIf</a>&lt;CoinType&gt;;
+<pre><code>pragma opaque;
+<b>include</b> <a href="#0x1_AccountLimits_ResetWindowAbortsIf">ResetWindowAbortsIf</a>&lt;CoinType&gt;;
 <b>include</b> <a href="#0x1_AccountLimits_ResetWindowEnsures">ResetWindowEnsures</a>&lt;CoinType&gt;;
 </code></pre>
 
@@ -1083,14 +1106,9 @@ Invariant that
 
 
 
-<pre><code><b>include</b> <a href="#0x1_AccountLimits_CanReceiveAbortsIf">CanReceiveAbortsIf</a>&lt;CoinType&gt;;
-<b>ensures</b> result == <a href="#0x1_AccountLimits_spec_receiving_limits_ok">spec_receiving_limits_ok</a>(<b>old</b>(receiving), amount);
-<b>ensures</b>
-    <b>if</b> (result && !<a href="#0x1_AccountLimits_spec_window_unrestricted">spec_window_unrestricted</a>(<b>old</b>(receiving)))
-        receiving.window_inflow == <a href="#0x1_AccountLimits_spec_window_reset">spec_window_reset</a>(<b>old</b>(receiving)).window_inflow + amount &&
-        receiving.tracked_balance == <a href="#0x1_AccountLimits_spec_window_reset">spec_window_reset</a>(<b>old</b>(receiving)).tracked_balance + amount
-    <b>else</b>
-        receiving == <a href="#0x1_AccountLimits_spec_window_reset">spec_window_reset</a>(<b>old</b>(receiving)) || receiving == <b>old</b>(receiving);
+<pre><code>pragma opaque;
+<b>include</b> <a href="#0x1_AccountLimits_CanReceiveAbortsIf">CanReceiveAbortsIf</a>&lt;CoinType&gt;;
+<b>include</b> <a href="#0x1_AccountLimits_CanReceiveEnsures">CanReceiveEnsures</a>&lt;CoinType&gt;;
 </code></pre>
 
 
@@ -1122,6 +1140,26 @@ Invariant that
     };
     <b>aborts_if</b> <a href="#0x1_AccountLimits_spec_window_reset">spec_window_reset</a>(receiving).window_inflow + amount &gt; max_u64();
     <b>aborts_if</b> <a href="#0x1_AccountLimits_spec_window_reset">spec_window_reset</a>(receiving).tracked_balance + amount &gt; max_u64();
+}
+</code></pre>
+
+
+
+
+<a name="0x1_AccountLimits_CanReceiveEnsures"></a>
+
+
+<pre><code><b>schema</b> <a href="#0x1_AccountLimits_CanReceiveEnsures">CanReceiveEnsures</a>&lt;CoinType&gt; {
+    amount: num;
+    receiving: <a href="#0x1_AccountLimits_Window">Window</a>&lt;CoinType&gt;;
+    result: bool;
+    <b>ensures</b> result == <a href="#0x1_AccountLimits_spec_receiving_limits_ok">spec_receiving_limits_ok</a>(<b>old</b>(receiving), amount);
+    <b>ensures</b>
+        <b>if</b> (result && !<a href="#0x1_AccountLimits_spec_window_unrestricted">spec_window_unrestricted</a>(<b>old</b>(receiving)))
+            receiving.window_inflow == <a href="#0x1_AccountLimits_spec_window_reset">spec_window_reset</a>(<b>old</b>(receiving)).window_inflow + amount &&
+            receiving.tracked_balance == <a href="#0x1_AccountLimits_spec_window_reset">spec_window_reset</a>(<b>old</b>(receiving)).tracked_balance + amount
+        <b>else</b>
+            receiving == <a href="#0x1_AccountLimits_spec_window_reset">spec_window_reset</a>(<b>old</b>(receiving)) || receiving == <b>old</b>(receiving);
 }
 </code></pre>
 
@@ -1165,13 +1203,9 @@ Invariant that
 
 
 
-<pre><code><b>include</b> <a href="#0x1_AccountLimits_CanWithdrawAbortsIf">CanWithdrawAbortsIf</a>&lt;CoinType&gt;;
-<b>ensures</b> result == <a href="#0x1_AccountLimits_spec_withdrawal_limits_ok">spec_withdrawal_limits_ok</a>(<b>old</b>(sending), amount);
-<b>ensures</b>
-    <b>if</b> (result && !<a href="#0x1_AccountLimits_spec_window_unrestricted">spec_window_unrestricted</a>(<b>old</b>(sending)))
-        sending.window_outflow == <a href="#0x1_AccountLimits_spec_window_reset">spec_window_reset</a>(<b>old</b>(sending)).window_outflow + amount
-    <b>else</b>
-        sending == <a href="#0x1_AccountLimits_spec_window_reset">spec_window_reset</a>(<b>old</b>(sending)) || sending == <b>old</b>(sending);
+<pre><code>pragma opaque;
+<b>include</b> <a href="#0x1_AccountLimits_CanWithdrawAbortsIf">CanWithdrawAbortsIf</a>&lt;CoinType&gt;;
+<b>include</b> <a href="#0x1_AccountLimits_CanWithdrawEnsures">CanWithdrawEnsures</a>&lt;CoinType&gt;;
 </code></pre>
 
 
@@ -1202,6 +1236,25 @@ Invariant that
         limits_definition: <a href="#0x1_AccountLimits_spec_window_limits">spec_window_limits</a>&lt;CoinType&gt;(sending)
     };
     <b>aborts_if</b> <a href="#0x1_AccountLimits_spec_window_reset">spec_window_reset</a>(sending).window_outflow + amount &gt; max_u64();
+}
+</code></pre>
+
+
+
+
+<a name="0x1_AccountLimits_CanWithdrawEnsures"></a>
+
+
+<pre><code><b>schema</b> <a href="#0x1_AccountLimits_CanWithdrawEnsures">CanWithdrawEnsures</a>&lt;CoinType&gt; {
+    result: bool;
+    amount: u64;
+    sending: &<b>mut</b> <a href="#0x1_AccountLimits_Window">Window</a>&lt;CoinType&gt;;
+    <b>ensures</b> result == <a href="#0x1_AccountLimits_spec_withdrawal_limits_ok">spec_withdrawal_limits_ok</a>(<b>old</b>(sending), amount);
+    <b>ensures</b>
+        <b>if</b> (result && !<a href="#0x1_AccountLimits_spec_window_unrestricted">spec_window_unrestricted</a>(<b>old</b>(sending)))
+            sending.window_outflow == <a href="#0x1_AccountLimits_spec_window_reset">spec_window_reset</a>(<b>old</b>(sending)).window_outflow + amount
+        <b>else</b>
+            sending == <a href="#0x1_AccountLimits_spec_window_reset">spec_window_reset</a>(<b>old</b>(sending)) || sending == <b>old</b>(sending);
 }
 </code></pre>
 

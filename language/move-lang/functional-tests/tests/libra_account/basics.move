@@ -41,7 +41,7 @@ script {
         LibraAccount::restore_withdraw_capability(with_cap);
     }
 }
-// check: EXECUTED
+// check: "Keep(EXECUTED)"
 
 //! new-transaction
 //! sender: bob
@@ -130,7 +130,7 @@ script {
         LibraAccount::restore_withdraw_capability(with_cap);
     }
 }
-// check: EXECUTED
+// check: "Keep(EXECUTED)"
 
 //! new-transaction
 //! sender: bob
@@ -144,17 +144,17 @@ script {
         assert(LibraAccount::balance<LBR>({{alice}}) == 10000, 60)
     }
 }
-// check: EXECUTED
+// check: "Keep(EXECUTED)"
 
 //! new-transaction
-//! sender: libraroot
+//! sender: blessed
 //! type-args: 0x1::Coin1::Coin1
 //! args: 0, 0x0, {{bob::auth_key}}, b"bob", true
 stdlib_script::create_parent_vasp_account
 // check: "Keep(ABORTED { code: 2567,"
 
 //! new-transaction
-//! sender: libraroot
+//! sender: blessed
 //! type-args: 0x1::Coin1::Coin1
 //! args: 0, {{abby}}, x"", b"bob", true
 stdlib_script::create_parent_vasp_account

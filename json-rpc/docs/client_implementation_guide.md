@@ -17,7 +17,7 @@ Libra JSON-RPC APIs extend to JSON-RPC 2.0 Spec for specific use case, check [Li
 
 ### Testnet
 
-A simplest way to validate your client works is connecting it to Testnet(https://client.testnet.libra.org/v1).
+A simplest way to validate your client works is connecting it to Testnet(https://testnet.libra.org/v1).
 For some query blockchain methods like [get_currencies](method_get_currencies.md) or [get_metadata](method_get_metadata.md), you don't need anything else other than a HTTP client to get back response from server.
 Try out [get_currencies example](method_get_currencies.md#example) on Testnet, and this can be the first query blockchain API you implement for your client.
 
@@ -186,9 +186,9 @@ When you implement above logic, you may extract `createRawTransaction` and `crea
 
 ```Java
 
-import com.facebook.lcs.LcsSerializer;
-import com.facebook.serde.Bytes;
-import com.facebook.serde.Serializer;
+import com.novi.lcs.LcsSerializer;
+import com.novi.serde.Bytes;
+import com.novi.serde.Serializer;
 import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters;
 import org.bouncycastle.crypto.signers.Ed25519Signer;
 import org.libra.stdlib.Helpers;
@@ -324,7 +324,7 @@ Once the above basic function works, you have a minimum client ready for usage.
 To make a production quality client, please checkout our [Client CHECKLIST](client_checklist.md).
 
 [1]: https://libra.github.io/libra/libra_types/transaction/struct.SignedTransaction.html "SignedTransaction"
-[2]: ./../../language/transaction-builder/generator/README.md "Transaction Builder Generator"
+[2]: ../../language/transaction-builder/generator/README.md "Transaction Builder Generator"
 [3]: ./../../client/swiss-knife/README.md "Libra Swiss Knife"
 [4]: https://libra.github.io/libra/libra_types/transaction/struct.RawTransaction.html "RawTransaction"
 [5]: https://libra.github.io/libra/libra_canonical_serialization/index.html "LCS"
@@ -332,6 +332,6 @@ To make a production quality client, please checkout our [Client CHECKLIST](clie
 [7]: ./../../language/stdlib/transaction_scripts/doc/peer_to_peer_with_metadata.md#function-peer_to_peer_with_metadata-1 "P2P script doc"
 [8]: ./../../client/swiss-knife/readme.md#examples-for-generate-raw-txn-and-generate-signed-txn-operations "Swiss Knife gen txn"
 [9]: ./../../client/swiss-knife/readme.md#building-the-binary-in-a-release-optimized-mode "Swiss Knife binary"
-[10]: ./../../language/transaction-builder/generator/README.md#supported-languages "Transaction Builder Generator supports"
+[10]: ../../language/transaction-builder/generator/README.md#supported-languages "Transaction Builder Generator supports"
 [11]: ./../../client/libra-dev/include/data.h "C binding head file"
-[12]: ./../../language/transaction-builder/generator/README.md#java "Generate Java Txn Builder"
+[12]: ../../language/transaction-builder/generator/README.md#java "Generate Java Txn Builder"

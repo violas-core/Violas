@@ -8,6 +8,7 @@ use crate::{
 };
 use anyhow::{bail, ensure, format_err};
 use libra_crypto::{ed25519::Ed25519Signature, hash::CryptoHash, HashValue};
+use libra_time::duration_since_epoch;
 use libra_types::{
     account_address::AccountAddress, block_info::BlockInfo, block_metadata::BlockMetadata,
     epoch_state::EpochState, ledger_info::LedgerInfo, transaction::Version,
@@ -148,6 +149,20 @@ impl Block {
         }
     }
 
+    #[cfg(any(test, feature = "fuzzing"))]
+    // This method should only used by tests and fuzzers to produce arbitrary Block types.
+    pub fn new_for_testing(
+        id: HashValue,
+        block_data: BlockData,
+        signature: Option<Ed25519Signature>,
+    ) -> Self {
+        Block {
+            id,
+            block_data,
+            signature,
+        }
+    }
+
     /// The NIL blocks are special: they're not carrying any real payload and are generated
     /// independently by different validators just to fill in the round with some QC.
     pub fn new_nil(round: Round, quorum_cert: QuorumCert) -> Self {
@@ -240,6 +255,15 @@ impl Block {
             ensure!(
                 self.timestamp_usecs() > parent.timestamp_usecs(),
                 "Blocks must have strictly increasing timestamps"
+            );
+
+            let current_ts = duration_since_epoch();
+
+            // we can say that too far is 5 minutes in the future
+            const TIMEBOUND: u64 = 300_000_000;
+            ensure!(
+                self.timestamp_usecs() <= current_ts.as_micros() as u64 + TIMEBOUND,
+                "Blocks must not be too far in the future"
             );
         }
         ensure!(

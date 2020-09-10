@@ -2,10 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::Result;
-use libra_transaction_replay::{
-    libra_client::LibraJsonRpcDebugger, transaction_debugger_interface::LocalDBDebugger,
-    LibraDebugger,
-};
+use libra_transaction_replay::LibraDebugger;
 use libra_types::{account_address::AccountAddress, transaction::Version};
 use std::path::PathBuf;
 use structopt::StructOpt;
@@ -40,17 +37,26 @@ enum Command {
         account: AccountAddress,
         version: Version,
     },
+    #[structopt(name = "bisect-transaction")]
+    BisectTransaction {
+        #[structopt(parse(from_os_str))]
+        script_path: PathBuf,
+        #[structopt(parse(try_from_str))]
+        sender: AccountAddress,
+        begin: Version,
+        end: Version,
+    },
 }
 
 fn main() -> Result<()> {
     let opt = Opt::from_args();
-    let debugger = LibraDebugger::new(if let Some(p) = opt.db {
-        Box::new(LocalDBDebugger::open(p)?)
+    let debugger = if let Some(p) = opt.db {
+        LibraDebugger::db(p)?
     } else if let Some(url) = opt.url {
-        Box::new(LibraJsonRpcDebugger::new(url.as_str())?)
+        LibraDebugger::json_rpc(url.as_str())?
     } else {
         panic!("No debugger attached")
-    });
+    };
 
     println!("Connection Succeeded");
 
@@ -83,6 +89,20 @@ fn main() -> Result<()> {
             debugger
                 .annotate_account_state_at_version(account, version)?
                 .expect("Account not found")
+        ),
+        Command::BisectTransaction {
+            sender,
+            script_path,
+            begin,
+            end,
+        } => println!(
+            "{:?}",
+            debugger.bisect_transactions_by_script(
+                script_path.to_str().expect("Expect an str"),
+                sender,
+                begin,
+                end,
+            )
         ),
     }
     Ok(())

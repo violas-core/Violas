@@ -22,13 +22,15 @@ use libra_logger::info;
 use std::{fs::File, io::Write, path::Path};
 use structopt::StructOpt;
 
+use consensus_types::safety_data::SafetyData;
 use libra_genesis_tool::layout::Layout;
 use libra_global_constants::{
-    CONSENSUS_KEY, EPOCH, EXECUTION_KEY, FULLNODE_NETWORK_KEY, LAST_VOTED_ROUND, LIBRA_ROOT_KEY,
-    OPERATOR_KEY, OWNER_KEY, PREFERRED_ROUND, VALIDATOR_NETWORK_KEY, WAYPOINT,
+    CONSENSUS_KEY, EXECUTION_KEY, FULLNODE_NETWORK_KEY, LIBRA_ROOT_KEY, OPERATOR_KEY, OWNER_KEY,
+    SAFETY_DATA, TREASURY_COMPLIANCE_KEY, VALIDATOR_NETWORK_ADDRESS_KEYS, VALIDATOR_NETWORK_KEY,
+    WAYPOINT,
 };
 use libra_network_address::NetworkAddress;
-use libra_secure_storage::{CryptoStorage, KVStorage, Value, VaultStorage};
+use libra_secure_storage::{CryptoStorage, KVStorage, Storage, VaultStorage};
 use libra_types::{chain_id::ChainId, waypoint::Waypoint};
 use std::str::FromStr;
 
@@ -42,8 +44,6 @@ const GENESIS_PATH: &str = "/tmp/genesis.blob";
 pub struct ClusterBuilderParams {
     #[structopt(long, default_value = "1")]
     pub fullnodes_per_validator: u32,
-    #[structopt(long, use_delimiter = true, default_value = "")]
-    cfg: Vec<String>,
     #[structopt(long, parse(try_from_str), default_value = "30")]
     pub num_validators: u32,
     #[structopt(long)]
@@ -57,16 +57,6 @@ pub struct ClusterBuilderParams {
 }
 
 impl ClusterBuilderParams {
-    pub fn cfg_overrides(&self) -> Vec<String> {
-        // Default overrides
-        let mut overrides = vec!["prune_window=50000".to_string()];
-
-        // overrides from the command line
-        overrides.extend(self.cfg.iter().cloned());
-
-        overrides
-    }
-
     pub fn enable_lsr(&self) -> bool {
         self.enable_lsr.unwrap_or(true)
     }
@@ -133,7 +123,6 @@ impl ClusterBuilder {
                 params.enable_lsr(),
                 &params.lsr_backend,
                 current_tag,
-                &params.cfg_overrides(),
                 clean_data,
             )
             .await
@@ -156,7 +145,6 @@ impl ClusterBuilder {
         enable_lsr: bool,
         lsr_backend: &str,
         image_tag: &str,
-        config_overrides: &[String],
         clean_data: bool,
     ) -> Result<(
         Vec<Instance>,
@@ -220,7 +208,6 @@ impl ClusterBuilder {
                             None
                         };
                         let lsr_config = LSRConfig {
-                            num_validators,
                             image_tag: image_tag.to_string(),
                             lsr_backend: lsr_backend.to_string(),
                             vault_addr,
@@ -297,24 +284,17 @@ impl ClusterBuilder {
                 } else {
                     None
                 };
-                let seed_peer_ip = validator_nodes[0].internal_ip.clone();
                 let safety_rules_addr = if enable_lsr {
                     Some(lsr_nodes[i as usize].internal_ip.clone())
                 } else {
                     None
                 };
-                let enable_mgmt_tool = enable_lsr && lsr_backend == "vault";
                 let validator_config = ValidatorConfig {
-                    num_validators,
-                    num_fullnodes: num_fullnodes_per_validator,
                     enable_lsr,
                     image_tag: image_tag.to_string(),
-                    config_overrides: config_overrides.to_vec(),
-                    seed_peer_ip,
                     safety_rules_addr,
                     vault_addr,
                     vault_namespace,
-                    enable_mgmt_tool,
                 };
                 if clean_data {
                     self.cluster_swarm
@@ -348,17 +328,12 @@ impl ClusterBuilder {
                 let seed_peer_ip = validator_nodes[validator_index as usize]
                     .internal_ip
                     .clone();
-                let enable_mgmt_tool = enable_lsr && lsr_backend == "vault";
                 let fullnode_config = FullnodeConfig {
                     fullnode_index,
-                    num_fullnodes_per_validator,
-                    num_validators,
                     image_tag: image_tag.to_string(),
-                    config_overrides: config_overrides.to_vec(),
                     seed_peer_ip,
                     vault_addr,
                     vault_namespace,
-                    enable_mgmt_tool,
                 };
                 if clean_data {
                     self.cluster_swarm
@@ -388,7 +363,7 @@ impl ClusterBuilder {
         let addr = vault_node.internal_ip.clone();
         tokio::task::spawn_blocking(move || {
             let pod_name = validator_pod_name(validator_index);
-            let mut vault_storage = Box::new(VaultStorage::new(
+            let mut vault_storage = Storage::from(VaultStorage::new(
                 format!("http://{}:{}", addr, VAULT_PORT),
                 VAULT_TOKEN.to_string(),
                 Some(pod_name.clone()),
@@ -399,6 +374,21 @@ impl ClusterBuilder {
                 vault_storage.create_key(LIBRA_ROOT_KEY).map_err(|e| {
                     format_err!("Failed to create {}__{} : {}", pod_name, LIBRA_ROOT_KEY, e)
                 })?;
+                let key = vault_storage
+                    .export_private_key(LIBRA_ROOT_KEY)
+                    .map_err(|e| {
+                        format_err!("Failed to export {}__{} : {}", pod_name, LIBRA_ROOT_KEY, e)
+                    })?;
+                vault_storage
+                    .import_private_key(TREASURY_COMPLIANCE_KEY, key)
+                    .map_err(|e| {
+                        format_err!(
+                            "Failed to import {}__{} : {}",
+                            pod_name,
+                            TREASURY_COMPLIANCE_KEY,
+                            e
+                        )
+                    })?;
             }
             let keys = vec![
                 OWNER_KEY,
@@ -414,21 +404,21 @@ impl ClusterBuilder {
                     .map_err(|e| format_err!("Failed to create {}__{} : {}", pod_name, key, e))?;
             }
             vault_storage
-                .set(EPOCH, Value::U64(0))
-                .map_err(|e| format_err!("Failed to create {}/{} : {}", pod_name, EPOCH, e))?;
+                .set(SAFETY_DATA, SafetyData::new(0, 0, 0, None))
+                .map_err(|e| format_err!("Failed to create {}/{}: {}", pod_name, SAFETY_DATA, e))?;
             vault_storage
-                .set(LAST_VOTED_ROUND, Value::U64(0))
-                .map_err(|e| {
-                    format_err!("Failed to create {}/{} : {}", pod_name, LAST_VOTED_ROUND, e)
-                })?;
-            vault_storage
-                .set(PREFERRED_ROUND, Value::U64(0))
-                .map_err(|e| {
-                    format_err!("Failed to create {}/{} : {}", pod_name, PREFERRED_ROUND, e)
-                })?;
-            vault_storage
-                .set(WAYPOINT, Value::String("".into()))
+                .set(WAYPOINT, Waypoint::default())
                 .map_err(|e| format_err!("Failed to create {}/{} : {}", pod_name, WAYPOINT, e))?;
+            libra_network_address_encryption::Encryptor::new(vault_storage)
+                .initialize_for_testing()
+                .map_err(|e| {
+                    format_err!(
+                        "Failed to create {}/{} : {}",
+                        pod_name,
+                        VALIDATOR_NETWORK_ADDRESS_KEYS,
+                        e
+                    )
+                })?;
             Ok::<(), anyhow::Error>(())
         })
         .await??;
@@ -447,7 +437,8 @@ impl ClusterBuilder {
         let layout = Layout {
             owners: owners.clone(),
             operators: owners,
-            libra_root: vec![LIBRA_ROOT_NS.to_string()],
+            libra_root: LIBRA_ROOT_NS.to_string(),
+            treasury_compliance: LIBRA_ROOT_NS.to_string(),
         };
         let layout_path = "/tmp/layout.yaml";
         write!(
@@ -477,6 +468,16 @@ impl ClusterBuilder {
             .map_err(|e| format_err!("Failed to set_layout : {}", e))?;
         genesis_helper
             .libra_root_key(
+                VAULT_BACKEND,
+                format!("http://{}:{}", vault_nodes[0].internal_ip, VAULT_PORT).as_str(),
+                token_path,
+                LIBRA_ROOT_NS,
+                LIBRA_ROOT_NS,
+            )
+            .await
+            .map_err(|e| format_err!("Failed to libra_root_key : {}", e))?;
+        genesis_helper
+            .treasury_compliance_key(
                 VAULT_BACKEND,
                 format!("http://{}:{}", vault_nodes[0].internal_ip, VAULT_PORT).as_str(),
                 token_path,

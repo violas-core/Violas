@@ -4,7 +4,6 @@
 use libra_global_constants::{OWNER_ACCOUNT, OWNER_KEY};
 use libra_management::{constants, error::Error, secure_backend::SharedBackend};
 use libra_network_address::NetworkAddress;
-use libra_secure_storage::Value;
 use libra_types::{account_address, transaction::Transaction};
 use structopt::StructOpt;
 
@@ -35,7 +34,7 @@ impl ValidatorConfig {
         let owner_account = account_address::from_public_key(&owner_key);
 
         let mut validator_storage = config.validator_backend();
-        validator_storage.set(OWNER_ACCOUNT, Value::String(owner_account.to_string()))?;
+        validator_storage.set(OWNER_ACCOUNT, owner_account)?;
 
         let txn = self.validator_config.build_transaction(
             0,
@@ -46,7 +45,7 @@ impl ValidatorConfig {
 
         // Upload the validator config to shared storage
         let mut shared_storage = config.shared_backend();
-        shared_storage.set(constants::VALIDATOR_CONFIG, Value::Transaction(txn.clone()))?;
+        shared_storage.set(constants::VALIDATOR_CONFIG, txn.clone())?;
 
         Ok(txn)
     }

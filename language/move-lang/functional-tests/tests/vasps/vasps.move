@@ -3,7 +3,7 @@
 
 // create a parent VASP
 //! new-transaction
-//! sender: libraroot
+//! sender: blessed
 script {
 use 0x1::DualAttestation;
 use 0x1::LBR::LBR;
@@ -36,7 +36,7 @@ fun main(lr_account: &signer) {
 
 }
 }
-// check: EXECUTED
+// check: "Keep(EXECUTED)"
 
 // create some child VASP accounts
 //! new-transaction
@@ -61,7 +61,7 @@ fun main(parent_vasp: &signer) {
     assert(VASP::parent_address(0xBB) == {{parent}}, 2014);
 }
 }
-// check: EXECUTED
+// check: "Keep(EXECUTED)"
 
 //! new-transaction
 //! sender: parent
@@ -75,7 +75,8 @@ fun main(parent_vasp: &signer) {
     assert(DualAttestation::compliance_public_key({{parent}}) == new_pubkey, 2015);
 }
 }
-// check: EXECUTED
+// check: ComplianceKeyRotationEvent
+// check: "Keep(EXECUTED)"
 
 // getting the parent VASP address of a non-VASP should abort
 //! new-transaction
@@ -110,7 +111,7 @@ fun main(account: &signer) {
 // check: "Keep(ABORTED { code: 2,"
 
 //! new-transaction
-//! sender: libraroot
+//! sender: blessed
 script {
 use 0x1::VASP;
 fun main(account: &signer) {
@@ -121,14 +122,14 @@ fun main(account: &signer) {
 // check: "Keep(ABORTED { code: 771,"
 
 //! new-transaction
-//! sender: blessed
+//! sender: libraroot
 script {
 use 0x1::VASP;
 fun main(account: &signer) {
     VASP::publish_parent_vasp_credential(account, account);
 }
 }
-// check: "Keep(ABORTED { code: 2,"
+// check: "Keep(ABORTED { code: 258,"
 
 //! new-transaction
 //! sender: blessed
@@ -168,7 +169,7 @@ fun main() {
     assert(!VASP::is_same_vasp({{parent}}, {{blessed}}), 42);
 }
 }
-// check: EXECUTED
+// check: "Keep(EXECUTED)"
 
 //! new-transaction
 //! sender: parent
@@ -178,4 +179,4 @@ fun main() {
     assert(!VASP::is_same_vasp({{blessed}}, {{parent}}), 42);
 }
 }
-// check: EXECUTED
+// check: "Keep(EXECUTED)"

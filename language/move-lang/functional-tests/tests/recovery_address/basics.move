@@ -11,15 +11,15 @@
 // create parent VASP accounts for parent1 and 2
 // create a parent VASP
 //! new-transaction
-//! sender: libraroot
+//! sender: blessed
 script {
 use 0x1::LBR::LBR;
 use 0x1::LibraAccount;
-fun main(lr_account: &signer) {
+fun main(tc_account: &signer) {
     let add_all_currencies = false;
 
     LibraAccount::create_parent_vasp_account<LBR>(
-        lr_account,
+        tc_account,
         {{parent1}},
         {{parent1::auth_key}},
         x"A1",
@@ -27,7 +27,7 @@ fun main(lr_account: &signer) {
     );
 
     LibraAccount::create_parent_vasp_account<LBR>(
-        lr_account,
+        tc_account,
         {{parent2}},
         {{parent2::auth_key}},
         x"B1",
@@ -36,7 +36,7 @@ fun main(lr_account: &signer) {
 
 }
 }
-// check: EXECUTED
+// check: "Keep(EXECUTED)"
 
 // create two children for parent1
 //! new-transaction
@@ -49,7 +49,7 @@ fun main(account: &signer) {
     LibraAccount::create_child_vasp_account<LBR>(account, {{child2}}, {{child2::auth_key}}, false)
 }
 }
-// check: EXECUTED
+// check: "Keep(EXECUTED)"
 
 // === Intended usage ===
 
@@ -63,7 +63,7 @@ fun main(account: &signer) {
     RecoveryAddress::publish(account, LibraAccount::extract_key_rotation_capability(account))
 }
 }
-// check: EXECUTED
+// check: "Keep(EXECUTED)"
 
 // delegate parent1's key to child1
 //! new-transaction
@@ -77,7 +77,7 @@ fun main(account: &signer) {
     );
 }
 }
-// check: EXECUTED
+// check: "Keep(EXECUTED)"
 
 // ==== Abort cases ===
 
@@ -174,18 +174,18 @@ module Holder {
 }
 
 //! new-transaction
-//! sender: libraroot
+//! sender: blessed
 //! type-args: 0x1::Coin1::Coin1
 //! args: 0, {{vasp1}}, {{vasp1::auth_key}}, b"bob", true
 stdlib_script::create_parent_vasp_account
-// check: EXECUTED
+// check: "Keep(EXECUTED)"
 
 //! new-transaction
-//! sender: libraroot
+//! sender: blessed
 //! type-args: 0x1::Coin1::Coin1
 //! args: 0, {{vasp2}}, {{vasp2::auth_key}}, b"bob", true
 stdlib_script::create_parent_vasp_account
-// check: EXECUTED
+// check: "Keep(EXECUTED)"
 
 //! new-transaction
 //! sender: vasp1
@@ -196,7 +196,7 @@ fun main(account: &signer) {
     Holder::hold(account, LibraAccount::extract_key_rotation_capability(account));
 }
 }
-// check: EXECUTED
+// check: "Keep(EXECUTED)"
 
 // Try to create a recovery address with an invalid key rotation capability
 //! new-transaction

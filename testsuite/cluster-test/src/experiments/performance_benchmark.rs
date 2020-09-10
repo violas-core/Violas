@@ -8,12 +8,13 @@ use crate::{
     instance::Instance,
     stats::PrometheusRangeView,
     tx_emitter::{EmitJobRequest, TxStats},
-    util::{human_readable_bytes_per_sec, unix_timestamp_now},
+    util::human_readable_bytes_per_sec,
 };
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use futures::{future::try_join_all, join};
 use libra_logger::{info, warn};
+use libra_time::duration_since_epoch;
 use libra_trace::{
     trace::{random_node, trace_node},
     LibraTraceClient,
@@ -257,7 +258,7 @@ impl PerformanceBenchmark {
         window: Duration,
         stats: TxStats,
     ) -> Result<()> {
-        let end = unix_timestamp_now() - buffer;
+        let end = duration_since_epoch() - buffer;
         let start = end - window + 2 * buffer;
         info!(
             "Link to dashboard : {}",
@@ -272,23 +273,19 @@ impl PerformanceBenchmark {
                 .report
                 .report_metric(&self, "avg_txns_per_block", avg_txns_per_block);
         }
-        context
-            .report
-            .report_txn_stats(self.to_string(), stats, window);
-
-        // Backup throughput
-        if self.backup {
+        let additional = if self.backup {
+            // Backup throughput
             let bytes_per_sec = pv.avg_backup_bytes_per_second().unwrap_or(-1.0);
             context
                 .report
                 .report_metric(&self, "avg_backup_bytes_per_second", bytes_per_sec);
-            context.report.report_text(format!(
-                "{}: Average backup throughput: {}",
-                self,
-                human_readable_bytes_per_sec(bytes_per_sec)
-            ));
-        }
-
+            format!(" backup: {},", human_readable_bytes_per_sec(bytes_per_sec))
+        } else {
+            "".to_string()
+        };
+        context
+            .report
+            .report_txn_stats(self.to_string(), stats, window, &additional);
         Ok(())
     }
 }

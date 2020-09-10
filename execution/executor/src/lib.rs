@@ -7,6 +7,7 @@
 mod executor_test;
 #[cfg(any(test, feature = "fuzzing"))]
 pub mod fuzzing;
+mod logging;
 mod metrics;
 #[cfg(test)]
 mod mock_vm;
@@ -16,6 +17,7 @@ mod types;
 pub mod db_bootstrapper;
 
 use crate::{
+    logging::{LogEntry, LogSchema},
     metrics::{
         LIBRA_EXECUTOR_EXECUTE_BLOCK_SECONDS, LIBRA_EXECUTOR_SAVE_TRANSACTIONS_SECONDS,
         LIBRA_EXECUTOR_TRANSACTIONS_SAVED, LIBRA_EXECUTOR_VM_EXECUTE_BLOCK_SECONDS,
@@ -184,8 +186,10 @@ where
         let first_txn_version = match txn_list_with_proof.first_transaction_version {
             Some(tx) => tx as Version,
             None => {
-                sl_error!(StructuredLogEntry::new_named("MUST_FIX", "assertion")
-                    .data("details", "first_transaction_version should exist."));
+                error!(
+                    category = "MUST_FIX",
+                    "first_transaction_version should exist"
+                );
                 return Err(anyhow!("first_transaction_version should exist."));
             }
         };
@@ -205,9 +209,11 @@ where
 
         // 2. Verify that skipped transactions match what's already persisted (no fork):
         let num_txns_to_skip = num_committed_txns - first_txn_version;
-        if num_txns_to_skip > 0 {
-            info!("Skipping the first {} transactions.", num_txns_to_skip);
-        }
+
+        info!(
+            LogSchema::new(LogEntry::ChunkExecutor).num(num_txns_to_skip),
+            "skipping_chunk_txns"
+        );
 
         // If the proof is verified, then the length of txn_infos and txns must be the same.
         let skipped_transaction_infos =
@@ -318,11 +324,10 @@ where
                 }
                 TransactionStatus::Discard(status) => {
                     if !vm_output.write_set().is_empty() || !vm_output.events().is_empty() {
-                        crit!(
+                        error!(
                             "Discarded transaction has non-empty write set or events. \
                              Transaction: {:?}. Status: {:?}.",
-                            txn,
-                            status,
+                            txn, status,
                         );
                     }
                 }
@@ -523,11 +528,11 @@ impl<V: VMExecutor> ChunkExecutor for Executor<V> {
         self.reset_cache()?;
 
         info!(
-            "Local synced version: {}. First transaction version in request: {:?}. \
-             Number of transactions in request: {}.",
-            self.cache.synced_trees().txn_accumulator().num_leaves() - 1,
-            txn_list_with_proof.first_transaction_version,
-            txn_list_with_proof.transactions.len(),
+            LogSchema::new(LogEntry::ChunkExecutor)
+                .local_synced_version(self.cache.synced_trees().txn_accumulator().num_leaves() - 1)
+                .first_version_in_request(txn_list_with_proof.first_transaction_version)
+                .num_txns_in_request(txn_list_with_proof.transactions.len()),
+            "sync_request_received",
         );
 
         // 2. Verify input transaction list.
@@ -566,17 +571,17 @@ impl<V: VMExecutor> ChunkExecutor for Executor<V> {
         self.cache.reset();
 
         info!(
-            "Synced to version {}, the corresponding LedgerInfo is {}.",
-            self.cache
-                .synced_trees()
-                .version()
-                .expect("version must exist"),
-            if ledger_info_to_commit.is_some() {
-                "committed"
-            } else {
-                "not committed"
-            },
+            LogSchema::new(LogEntry::ChunkExecutor)
+                .synced_to_version(
+                    self.cache
+                        .synced_trees()
+                        .version()
+                        .expect("version must exist")
+                )
+                .committed_with_ledger_info(ledger_info_to_commit.is_some()),
+            "sync_finished",
         );
+
         Ok(reconfig_events)
     }
 }
@@ -639,9 +644,10 @@ impl<V: VMExecutor> BlockExecutor for Executor<V> {
             let parent = self.cache.get_block(&parent_block_id)?;
             let parent_block = parent.lock().unwrap();
             let parent_output = parent_block.output();
-            debug!(
-                "Received block {:x} which is a descendant of a reconfiguration block.",
-                block_id
+
+            info!(
+                LogSchema::new(LogEntry::BlockExecutor).block_id(block_id),
+                "reconfig_descendant_block_received"
             );
 
             let output = ProcessedVMOutput::new(
@@ -661,7 +667,10 @@ impl<V: VMExecutor> BlockExecutor for Executor<V> {
 
             (output, state_compute_result)
         } else {
-            debug!("Received block {:x} to execute.", block_id);
+            info!(
+                LogSchema::new(LogEntry::BlockExecutor).block_id(block_id),
+                "execute_block"
+            );
 
             let __timer = OP_COUNTERS.timer("block_execute_time_s");
             let _timer = LIBRA_EXECUTOR_EXECUTE_BLOCK_SECONDS.start_timer();
@@ -722,12 +731,20 @@ impl<V: VMExecutor> BlockExecutor for Executor<V> {
         ledger_info_with_sigs: LedgerInfoWithSignatures,
     ) -> Result<(Vec<Transaction>, Vec<ContractEvent>), Error> {
         let block_id_to_commit = ledger_info_with_sigs.ledger_info().consensus_block_id();
-        debug!("Received request to commit block {:x}.", block_id_to_commit);
+
+        info!(
+            LogSchema::new(LogEntry::BlockExecutor).block_id(block_id_to_commit),
+            "commit_block"
+        );
 
         let version = ledger_info_with_sigs.ledger_info().version();
+
+        let num_txns_in_li = version
+            .checked_add(1)
+            .ok_or_else(|| format_err!("version + 1 overflows"))?;
         let num_persistent_txns = self.cache.synced_trees().txn_accumulator().num_leaves();
 
-        if version + 1 < num_persistent_txns {
+        if num_txns_in_li < num_persistent_txns {
             return Err(Error::InternalError {
                 error: format!(
                     "Try to commit stale transactions with the last version as {}",
@@ -736,7 +753,7 @@ impl<V: VMExecutor> BlockExecutor for Executor<V> {
             });
         }
 
-        if version + 1 == num_persistent_txns {
+        if num_txns_in_li == num_persistent_txns {
             return Ok(self.cache.committed_txns_and_events());
         }
 
@@ -768,7 +785,7 @@ impl<V: VMExecutor> BlockExecutor for Executor<V> {
 
         let last_block = blocks
             .last()
-            .expect("CommittableBlockBatch has at least 1 block.");
+            .ok_or_else(|| format_err!("CommittableBlockBatch is empty"))?;
 
         // Check that the version in ledger info (computed by consensus) matches the version
         // computed by us.
@@ -778,18 +795,16 @@ impl<V: VMExecutor> BlockExecutor for Executor<V> {
             .txn_accumulator()
             .num_leaves();
         assert_eq!(
-            version + 1,
-            num_txns_in_speculative_accumulator as Version,
+            num_txns_in_li, num_txns_in_speculative_accumulator as Version,
             "Number of transactions in ledger info ({}) does not match number of transactions \
              in accumulator ({}).",
-            version + 1,
-            num_txns_in_speculative_accumulator,
+            num_txns_in_li, num_txns_in_speculative_accumulator,
         );
 
         let num_txns_to_keep = txns_to_keep.len() as u64;
 
         // Skip txns that are already committed to allow failures in state sync process.
-        let first_version_to_keep = version + 1 - num_txns_to_keep;
+        let first_version_to_keep = num_txns_in_li - num_txns_to_keep;
         assert!(
             first_version_to_keep <= num_persistent_txns,
             "first_version {} in the blocks to commit cannot exceed # of committed txns: {}.",
@@ -799,14 +814,15 @@ impl<V: VMExecutor> BlockExecutor for Executor<V> {
 
         let num_txns_to_skip = num_persistent_txns - first_version_to_keep;
         let first_version_to_commit = first_version_to_keep + num_txns_to_skip;
+
         if num_txns_to_skip != 0 {
             info!(
-                "The lastest committed/synced version: {}, the first version to keep in the batch: {}.\
-                 Skipping the first {} transactions and start committing from version {}",
-                num_persistent_txns - 1, /* latest persistent version */
-                first_version_to_keep,
-                num_txns_to_skip,
-                first_version_to_commit
+                LogSchema::new(LogEntry::BlockExecutor)
+                    .latest_synced_version(num_persistent_txns - 1)
+                    .first_version_to_keep(first_version_to_keep)
+                    .num_txns_to_keep(num_txns_to_keep)
+                    .first_version_to_commit(first_version_to_commit),
+                "skip_transactions_when_committing"
             );
         }
 
@@ -820,7 +836,7 @@ impl<V: VMExecutor> BlockExecutor for Executor<V> {
             OP_COUNTERS.observe("storage_save_transactions.count", num_txns_to_commit as f64);
             LIBRA_EXECUTOR_TRANSACTIONS_SAVED.observe(num_txns_to_commit as f64);
 
-            assert_eq!(first_version_to_commit, version + 1 - num_txns_to_commit);
+            assert_eq!(first_version_to_commit, num_txns_in_li - num_txns_to_commit);
             self.db.writer.save_transactions(
                 txns_to_commit,
                 first_version_to_commit,

@@ -1,3 +1,15 @@
+aliases:
+  - &filter-only-prs-dependabot
+    branches:
+      only:
+        - /^pull\/.+$/
+        - /^dependabot\/.+$/
+  - &filter-only-auto-canary
+    branches:
+      only:
+        - auto
+        - canary
+
 version: 2.1
 
 orbs:
@@ -8,27 +20,27 @@ orbs:
 executors:
   build-executor:
     docker:
-      - image: docker.io/libra/build_environment:latest
+      - image: docker.io/libra/build_environment:circleci-latest
     resource_class: 2xlarge
   unittest-executor:
     docker:
-      - image: docker.io/libra/build_environment:latest
+      - image: docker.io/libra/build_environment:circleci-latest
     resource_class: 2xlarge+
   test-executor:
     docker:
-      - image: docker.io/libra/build_environment:latest
+      - image: docker.io/libra/build_environment:circleci-latest
     resource_class: xlarge
   premainnet-cluster-test-executor:
     docker:
-      - image: docker.io/libra/build_environment:latest
+      - image: docker.io/libra/build_environment:circleci-latest
     resource_class: xlarge
   audit-executor:
     docker:
-      - image: docker.io/libra/build_environment:latest
+      - image: docker.io/libra/build_environment:circleci-latest
     resource_class: medium
   terraform-executor:
     docker:
-      - image: libra/build_environment:latest
+      - image: docker.io/libra/build_environment:circleci-latest
     resource_class: small
   docker-executor:
     machine:
@@ -261,17 +273,22 @@ commands:
   setup_docker_signing:
     steps:
       - run:
-          name: Setup docker login and signing
+          name: Setup docker login and signing if creds are available.
           command: |
             set -x
-            # echo 'export DOCKER_CONTENT_TRUST=1' >> $BASH_ENV
-            echo "$DOCKERHUB_PASSWORD" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
-            export DOCKER_CONTENT_TRUST_REPOSITORY_PASSPHRASE=${DOCKERHUB_KEY_PASSWORD}
-            echo 'export DOCKER_CONTENT_TRUST_REPOSITORY_PASSPHRASE=${DOCKERHUB_KEY_PASSWORD}' >> $BASH_ENV
-            mkdir -p ~/.docker/trust/private/
-            echo ${DOCKERHUB_KEY_MATERIAL} | base64 -d > ~/.docker/trust/private/${DOCKERHUB_KEY_NAME}.key
-            chmod 600 ~/.docker/trust/private/${DOCKERHUB_KEY_NAME}.key
-            docker trust key load ~/.docker/trust/private/${DOCKERHUB_KEY_NAME}.key --name "$DOCKERHUB_USERNAME"
+            if [[ -z "$DOCKERHUB_PASSWORD" ]]; then
+              echo Lacking credentials for docker hub, not signing in.
+            else
+              # echo 'export DOCKER_CONTENT_TRUST=1' >> $BASH_ENV
+              echo "$DOCKERHUB_PASSWORD" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
+              export DOCKER_CONTENT_TRUST_REPOSITORY_PASSPHRASE=${DOCKERHUB_KEY_PASSWORD}
+              echo 'export DOCKER_CONTENT_TRUST_REPOSITORY_PASSPHRASE=${DOCKERHUB_KEY_PASSWORD}' >> $BASH_ENV
+              mkdir -p ~/.docker/trust/private/
+              echo ${DOCKERHUB_KEY_MATERIAL} | base64 -d > ~/.docker/trust/private/${DOCKERHUB_KEY_NAME}.key
+              chmod 600 ~/.docker/trust/private/${DOCKERHUB_KEY_NAME}.key
+              docker trust key load ~/.docker/trust/private/${DOCKERHUB_KEY_NAME}.key --name "$DOCKERHUB_USERNAME"
+              echo Docker hub is logged in, and signing is available.
+            fi
   setup_aws:
     description: Set up access to AWS
     steps:
@@ -279,7 +296,6 @@ commands:
           name: Compose AWS Env Variables
           command: |
             echo 'export AWS_ECR_ACCOUNT_URL="${AWS_ECR_ACCOUNT_NUM}.dkr.ecr.${AWS_REGION}.amazonaws.com"' >> $BASH_ENV
-      - aws-cli/install
       - aws-cli/configure:
           aws-access-key-id: AWS_ACCESS_KEY_ID
           aws-secret-access-key: AWS_SECRET_ACCESS_KEY
@@ -317,24 +333,6 @@ jobs:
       - run:
           name: cargo fmt
           command: $CARGO $CARGOFLAGS xfmt --check
-      - run:
-          name: cargo x generate-summaries
-          command: |
-            cargo x generate-summaries
-            set +e
-            failed=false
-            for s in $(ls summaries/*.toml) ; do
-              cmp --silent ${s} target/summaries/$(basename ${s})
-              status=$?
-              if [[ ${status} != 0 ]] ; then
-                echo "${s} not updated"
-                diff -u ${s} target/summaries/$(basename ${s})
-                failed=true
-              fi
-            done
-            if [[ "${failed}" == "true" ]] ; then
-              exit 1
-            fi
       - save_sccache
   build-dev:
     executor: build-executor
@@ -634,6 +632,12 @@ jobs:
 
   ######################################################################################################
   # Building docker ci base image if relevant files have changed                                       #
+  # Be warned those who dare to touch this:                                                            #
+  # 1. Builds on master of circlci-latest are expected to occur daily, but cannot run in a scheduled   #
+  #    job and still recieve a context "docker" that only the automated user may see                   #
+  # 2. This job is parameterized for multiple docker builds to test dev_setup.sh execution, but only   #
+  #    when one of the relevant files have changed.                                                    #
+  # 3. Finally prunes dockerhub libra/repos of older images (14 days non-release, 90 days releases)    #
   ######################################################################################################
   docker-ci-build:
     executor: docker-large-executor
@@ -643,13 +647,32 @@ jobs:
     description: build cimg/base (ubuntu) CI docker image.
     steps:
       - checkout
+      - setup_docker_signing
+      - restore_cache:
+          name: restore daily latch cache file.
+          key: docker-circleci-lastest-daily-<< parameters.base-image >>
       - run:
           name: Should build/test << parameters.base-image >> docker image file
           command: |
+            # This trickery is used to build the libra/build_environment:circleci-latest once a day durring
+            # A push from bors to master, such the context will be properly set and pushing to dockerhub
+            # Will be possible.  Otherwise we will only build and not push on relevant file changes in non
+            # master branches below (this job will not be configured on master except for circle ci.)
+            if [[  $CIRCLE_BRANCH == "master" ]]; then
+              NOW=`date +%Y-%m-%d`
+              LAST=`cat /home/circleci/lastbuild` || true
+              if [[ "$LAST" != "$NOW" ]]; then
+                echo Last build occured $LAST, so building.
+                #since we're building, time to update the cache key file.
+                date +%Y-%m-%d > /home/circleci/lastbuild
+                exit 0
+              fi
+            fi
+
             #detect if any relevant files have changed requiring base docker file rebuilding.
-            #this is specific for prs targeting master.   TODO: figure out target release branch.
+            #this is specific for prs targeting master.
+            #TODO: figure out if we need this for release branchs?
             git --no-pager diff --name-only HEAD $(git merge-base HEAD origin/master) | sort > /tmp/changed_files
-            echo ".circleci/config.yml" >> /tmp/ci_docker_files
             echo "cargo-toolchain" >> /tmp/ci_docker_files
             echo "docker/ci/<< parameters.base-image >>/Dockerfile" >> /tmp/ci_docker_files
             echo "rust-toolchain" >> /tmp/ci_docker_files
@@ -657,9 +680,21 @@ jobs:
 
             #if no relevant files have changed - exit
             if [ `join /tmp/changed_files /tmp/ci_docker_files | wc -l` == 0 ]; then
-              echo no relevant files have changed - exit
+              echo no relevant files have changed - halting
               circleci step halt
+            elif [[ $CIRCLE_BRANCH == "master" ]]; then
+              echo Updating cache latch file, Relevant files have changed, building.
+              #since we're building, time to update the cache key file.
+              date +%Y-%m-%d > /home/circleci/lastbuild
+            else
+              echo Relevant files have changed, building.
             fi
+
+      - save_cache:
+          name: store updated daily latch file.
+          key: docker-circleci-lastest-daily-<< parameters.base-image >>-{{ epoch }}
+          paths:
+            - /home/circleci/lastbuild
       - run:
           name: Build/test << parameters.base-image >> docker image file
           command: |
@@ -670,10 +705,14 @@ jobs:
               circleci step halt
             fi
       - run:
-          name: push libra/build_environment:<< parameters.base-image >>-latest image
+          name: push libra/build_environment:<< parameters.base-image >>-latest docker image
           command: |
             #signs the pushed image
             docker push --disable-content-trust=false libra/build_environment:<< parameters.base-image >>-latest
+      - run:
+          name: daily docker image pruning.
+          command: |
+            scripts/dockerhub_prune.sh -u "${DOCKERHUB_USERNAME}"" -p ${DOCKERHUB_PASSWORD}" -x
 
   ######################################################################################################
   # Publish docker artifacts for prs targeting release branches built in "auto" by bors                #
@@ -752,12 +791,30 @@ jobs:
       MESSAGE_PAYLOAD_FILE: "/tmp/message_payload"
     steps:
       - build_setup
-      - install_code_coverage_deps
-      - aws-cli/install
+      - restore_cache:
+          name: restore daily latch cache file.
+          key: code-coverage-daily
+      - run:
+          name: Halt job if already built code coverage today.
+          command: |
+            NOW=`date +%Y-%m-%d`
+            LAST=`cat /home/circleci/lastbuild` || true
+            if [[ "$LAST" == "$NOW" ]]; then
+              echo Last build occured today, halting.
+              circleci step halt
+            else
+              echo Last build occured $LAST, building.
+              date +%Y-%m-%d > /home/circleci/lastbuild
+            fi
+      - save_cache:
+          name: store updated daily latch file.
+          key: code-coverage-daily-{{ epoch }}
+          paths:
+            - /home/circleci/lastbuild
       - aws-cli/configure:
           aws-access-key-id: AWS_ACCESS_KEY_ID
           aws-secret-access-key: AWS_SECRET_ACCESS_KEY
-          aws-region: AWS_DEFAULT_REGION
+          aws-region: AWS_REGION
       - run:
           name: Setup code coverage output
           command: |
@@ -770,122 +827,52 @@ jobs:
           name: Upload result to codecov.io
           command: bash <(curl -s https://codecov.io/bash) -f $CODECOV_OUTPUT/lcov.info -F unittest;
       - run:
-          name: Grcov html report to S3
+          name: Push Coverage Reports to S3
           command: |
             set -x
-            export AWS_REGION=$AWS_DEFAULT_REGION
-            export GIT_SHORT_REV=$(git rev-parse --short=8 HEAD)
-            export reportdir=${CODECOV_OUTPUT}/grcovhtml;
-            _bucket="ci-artifacts.libra.org/coverage/unit-coverage/$(date +"%Y-%m-%d")-${GIT_SHORT_REV}";
-            aws s3 cp --recursive $reportdir "s3://$_bucket";
-            echo "have to reupload as aws user doesn't have read access";
-            aws s3 cp --recursive $reportdir "s3://ci-artifacts.libra.org/coverage/unit-coverage/latest";
-            _s3_url="https://ci-artifacts.libra.org/coverage/unit-coverage/latest/index.html";
-            echo "Grcov available in s3 ${_s3_url}" >> ${MESSAGE_PAYLOAD_FILE}
+            SUFFIX="$(date +"%Y-%m-%d")-$(git rev-parse --short=8 HEAD)"
+            PREFIX="ci-artifacts.libra.org/coverage";
+            #Push grcov
+            aws s3 cp --recursive ${CODECOV_OUTPUT}/grcovhtml "s3://${PREFIX}/unit-coverage/${SUFFIX}/";
+            aws s3 cp --recursive ${CODECOV_OUTPUT}/grcovhtml "s3://${PREFIX}/unit-coverage/latest/";
+            echo "Grcov available in s3 https://${PREFIX}/unit-coverage/${SUFFIX}/index.html" >> ${MESSAGE_PAYLOAD_FILE}
+            #Push lcov
+            aws s3 cp --recursive ${CODECOV_OUTPUT}/lcovhtml "s3://${PREFIX}/lcov-unit-coverage/${SUFFIX}/";
+            aws s3 cp --recursive ${CODECOV_OUTPUT}/lcovhtml "s3://${PREFIX}/lcov-unit-coverage/latest/";
+            echo "lcov available in s3 https://${PREFIX}/lcov-unit-coverage/${SUFFIX}/index.html" >> ${MESSAGE_PAYLOAD_FILE}
       - send_message:
           payload_file: "${MESSAGE_PAYLOAD_FILE}"
           build_url: "${CIRCLE_BUILD_URL}#tests/containers/${CIRCLE_NODE_INDEX}"
           webhook: "${WEBHOOK_COVERAGE_INFO}"
 
 workflows:
-  commit-workflow:
+  ######################################################################################################################
+  # Once a day when a change lands on master, rebuild the CI base image and code coverage.
+  # Will build the CI base image when relevant files are changed vs on master, on either master or test branches.
+  ######################################################################################################################
+  latched-publish-workflow:
     jobs:
-      - lint-docker:
-          filters:
-            branches:
-              ignore:
-                - master
-                - /^test-[\d|.]+$/
-                - /^release-[\d|.]+$/
-      - terraform:
-          filters:
-            branches:
-              ignore:
-                - master
-                - /^test-[\d|.]+$/
-                - /^release-[\d|.]+$/
-      - prefetch-crates
-      - lint:
-          requires:
-            - prefetch-crates
-          filters:
-            branches:
-              ignore:
-                - gh-pages
-                - /^test-[\d|.]+$/
-                - /^release-[\d|.]+$/
-      - build-dev:
-          requires:
-            - prefetch-crates
-          filters:
-            branches:
-              ignore:
-                - master
-                - /^test-[\d|.]+$/
-                - /^release-[\d|.]+$/
-      - run-e2e-test:
-          requires:
-            - prefetch-crates
-          filters:
-            branches:
-              ignore:
-                - master
-                - /^test-[\d|.]+$/
-                - /^release-[\d|.]+$/
-      - run-unit-test:
-          requires:
-            - prefetch-crates
-          filters:
-            branches:
-              ignore:
-                - master
-                - /^test-[\d|.]+$/
-                - /^release-[\d|.]+$/
-      - run-crypto-unit-test:
-          requires:
-            - prefetch-crates
-          filters:
-            branches:
-              ignore:
-                - master
-                - /^test-[\d|.]+$/
-                - /^release-[\d|.]+$/
-      - build-benchmark:
-          requires:
-            - prefetch-crates
-          filters:
-            branches:
-              ignore:
-                - master
-                - /^test-[\d|.]+$/
-                - /^release-[\d|.]+$/
-      - build-docs:
-          requires:
-            - lint
-          filters:
-            branches:
-              ignore:
-                - gh-pages
-                - /^test-[\d|.]+$/
-                - /^release-[\d|.]+$/
-      - deploy-docs:
-          requires:
-            - build-docs
-          filters:
-            branches:
-              only: master
-      - check-breaking-change:
-          requires:
-            - prefetch-crates
-          filters:
-            branches:
-              only: master
-      - docker-pre-publish:
-          context: docker
+      - code_coverage:
+          context: libra_ci
           filters:
             branches:
               only:
-                - auto
+                - /^test-[\d|.]+$/
+                - master
+      - docker-ci-build:
+          context: docker
+          base-image: circleci
+          filters:
+            branches:
+              only:
+                - /^test-[\d|.]+$/
+                - master
+
+  ######################################################################################################################
+  # Will publish release images to dockerhub and aws when commits land on a release/testing branch.
+  ######################################################################################################################
+  release-dockerhub-publish:
+    jobs:
       - docker-publish:
           context: docker
           filters:
@@ -893,46 +880,122 @@ workflows:
               only:
                 - /^test-[\d|.]+$/
                 - /^release-[\d|.]+$/
-      - docker-ci-build:
+
+  ######################################################################################################################
+  # Updates documentation when code is committed to master, and checks for breaking changes.
+  ######################################################################################################################
+  document-publish-workflow:
+    jobs:
+      - prefetch-crates:
+          filters:
+            branches:
+              only: master
+      - lint:
+          requires:
+            - prefetch-crates
+      - build-docs:
+          requires:
+            - lint
+      - deploy-docs:
+          requires:
+            - build-docs
+      - check-breaking-change:
+          requires:
+            - prefetch-crates
+
+  ######################################################################################################################
+  # Used by bors to test prs on master's head before committing to master.
+  # Must support auto and canary branchs...
+  ######################################################################################################################
+  commit-workflow:
+    jobs:
+      - docker-pre-publish:
           context: docker
-          base-image: circleci
-          filters:
-            branches:
-              only:
-                - master
+          filters: *filter-only-auto-canary
+      - lint-docker:
+          filters: *filter-only-auto-canary
+      - terraform:
+          filters: *filter-only-auto-canary
+      - prefetch-crates:
+          filters: *filter-only-auto-canary
+      - lint:
+          requires:
+            - prefetch-crates
+      - build-dev:
+          requires:
+            - prefetch-crates
+      - run-e2e-test:
+          requires:
+            - prefetch-crates
+      - run-unit-test:
+          requires:
+            - prefetch-crates
+      - run-crypto-unit-test:
+          requires:
+            - prefetch-crates
+      - build-benchmark:
+          requires:
+            - prefetch-crates
+      - build-docs:
+          requires:
+            - lint
       - docker-ci-build:
           base-image: circleci
-          filters:
-            branches:
-              ignore:
-                - /^test-[\d|.]+$/
-                - /^release-[\d|.]+$/
-                - master
+          filters: *filter-only-auto-canary
       - docker-ci-build:
           base-image: centos
-          filters:
-            branches:
-              ignore:
-                - /^test-[\d|.]+$/
-                - /^release-[\d|.]+$/
-                - master
+          filters: *filter-only-auto-canary
       - docker-ci-build:
           #sccache fails to execute in alpine.
           base-image: alpine
-          filters:
-            branches:
-              ignore:
-                - /^test-[\d|.]+$/
-                - /^release-[\d|.]+$/
-                - master
+          filters: *filter-only-auto-canary
       - docker-ci-build:
           base-image: arch
-          filters:
-            branches:
-              ignore:
-                - /^test-[\d|.]+$/
-                - /^release-[\d|.]+$/
-                - master
+          filters: *filter-only-auto-canary
+
+  pull-request-workflow:
+    jobs:
+      - lint-docker:
+          filters: *filter-only-prs-dependabot
+      - terraform:
+          filters: *filter-only-prs-dependabot
+      - prefetch-crates:
+          filters: *filter-only-prs-dependabot
+      - lint:
+          requires:
+            - prefetch-crates
+      - build-dev:
+          requires:
+            - prefetch-crates
+      - run-e2e-test:
+          requires:
+            - prefetch-crates
+      - run-unit-test:
+          requires:
+            - prefetch-crates
+      - run-crypto-unit-test:
+          requires:
+            - prefetch-crates
+      - build-benchmark:
+          requires:
+            - prefetch-crates
+      - build-docs:
+          requires:
+            - lint
+      - docker-ci-build:
+          base-image: circleci
+          filters: *filter-only-prs-dependabot
+      - docker-ci-build:
+          base-image: centos
+          filters: *filter-only-prs-dependabot
+      - docker-ci-build:
+          #sccache fails to execute in alpine.
+          base-image: alpine
+          filters: *filter-only-prs-dependabot
+      - docker-ci-build:
+          base-image: arch
+          filters: *filter-only-prs-dependabot
+
   scheduled-workflow:
     triggers:
       - schedule:

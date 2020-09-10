@@ -13,7 +13,86 @@ module FooConfig {
     }
 }
 
-// check: EXECUTED
+// check: "Keep(EXECUTED)"
+
+
+//! new-transaction
+script {
+use 0x1::LibraTransactionPublishingOption;
+fun main(account: &signer) {
+    assert(LibraTransactionPublishingOption::is_script_allowed(account, &x""), 0);
+}
+}
+// check: "Keep(EXECUTED)"
+
+//! new-transaction
+script {
+use 0x1::LibraTransactionPublishingOption;
+fun main(account: &signer) {
+    LibraTransactionPublishingOption::set_open_script(account)
+}
+}
+// check: "Keep(ABORTED { code: 2,"
+
+//! new-transaction
+//! sender: libraroot
+script {
+use 0x1::LibraTransactionPublishingOption;
+fun main(account: &signer) {
+    LibraTransactionPublishingOption::set_open_script(account)
+}
+}
+// check: "Keep(EXECUTED)"
+
+//! new-transaction
+//! sender: libraroot
+script {
+use 0x1::LibraTransactionPublishingOption;
+fun main(account: &signer) {
+    let x = x"0000000000000000000000000000000000000000000000000000000000000001";
+    LibraTransactionPublishingOption::add_to_script_allow_list(account, x);
+}
+}
+// check: "Keep(EXECUTED)"
+
+//! new-transaction
+script {
+fun main() {
+}
+}
+// check: "Discard(UNKNOWN_SCRIPT)"
+
+//! new-transaction
+//! sender: libraroot
+script {
+use 0x1::LibraTransactionPublishingOption;
+fun main(account: &signer) {
+    LibraTransactionPublishingOption::set_open_script(account)
+}
+}
+// check: "Keep(EXECUTED)"
+
+//! new-transaction
+//! sender: libraroot
+script {
+use 0x1::LibraTransactionPublishingOption;
+fun main(account: &signer) {
+    let x = x"0000000000000000000000000000000000000000000000000000000000000001";
+    LibraTransactionPublishingOption::add_to_script_allow_list(account, *&x);
+    LibraTransactionPublishingOption::add_to_script_allow_list(account, x);
+}
+}
+// check: "Keep(ABORTED { code: 263,"
+
+//! new-transaction
+//! sender: libraroot
+script {
+use 0x1::LibraTransactionPublishingOption;
+fun main(account: &signer) {
+    LibraTransactionPublishingOption::add_to_script_allow_list(account, x"");
+}
+}
+// check: "Keep(ABORTED { code: 7,"
 
 //! block-prologue
 //! proposer: vivian
@@ -30,7 +109,7 @@ fun main(config: &signer) {
 }
 }
 
-// check: EXECUTED
+// check: "Keep(EXECUTED)"
 // check: NewEpochEvent
 
 //! new-transaction
@@ -43,5 +122,4 @@ module FooConfig2 {
         T { version: version }
     }
 }
-
 // check: INVALID_MODULE_PUBLISHER

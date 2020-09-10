@@ -158,25 +158,27 @@ pub(crate) async fn coordinator<V>(
                                 };
                             }
                             Event::RpcRequest((peer_id, msg, res_tx)) => {
-                                sl_error!(security_log(security_events::INVALID_NETWORK_EVENT_MP)
-                                    .data("message", &msg)
-                                    .data("peer_id", &peer_id)
+                                error!(
+                                    SecurityEvent::InvalidNetworkEventMempool,
+                                    message = msg,
+                                    peer_id = peer_id,
                                 );
                                 debug_assert!(false, "Unexpected network event rpc request");
                             }
                         }
                     },
                     Err(e) => {
-                        sl_error!(security_log(security_events::INVALID_NETWORK_EVENT_MP)
-                            .data_display("error", &e)
-                    );
+                        error!(
+                            SecurityEvent::InvalidNetworkEventMempool,
+                            StructuredLogEntry::default().data_display("error", &e),
+                        );
                     }
                 };
             },
             complete => break,
         }
     }
-    crit!("[shared mempool] inbound_network_task terminated");
+    error!("[shared mempool] inbound_network_task terminated");
 }
 
 /// GC all expired transactions by SystemTTL
@@ -189,5 +191,5 @@ pub(crate) async fn gc_coordinator(mempool: Arc<Mutex<CoreMempool>>, gc_interval
             .gc();
     }
 
-    crit!("SharedMempool gc_task terminated");
+    error!("SharedMempool gc_task terminated");
 }

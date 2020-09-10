@@ -3,11 +3,15 @@
 
 use crate::{
     backup_types::state_snapshot::manifest::StateSnapshotBackup,
+    metrics::restore::{
+        STATE_SNAPSHOT_LEAF_INDEX, STATE_SNAPSHOT_TARGET_LEAF_INDEX, STATE_SNAPSHOT_VERSION,
+    },
     storage::{BackupStorage, FileHandle},
     utils::{read_record_bytes::ReadRecordBytes, storage_ext::BackupStorageExt, GlobalRestoreOpt},
 };
 use anyhow::{anyhow, Result};
 use libra_crypto::HashValue;
+use libra_logger::prelude::*;
 use libra_types::{account_state_blob::AccountStateBlob, transaction::Version};
 use libradb::backup::restore_handler::RestoreHandler;
 use std::sync::Arc;
@@ -49,14 +53,14 @@ impl StateSnapshotRestoreController {
     }
 
     pub async fn run(self) -> Result<()> {
-        println!(
+        info!(
             "State snapshot restore started. Manifest: {}",
             self.manifest_handle
         );
         self.run_impl()
             .await
             .map_err(|e| anyhow!("State snapshot restore failed: {}", e))?;
-        println!("State snapshot restore succeeded.");
+        info!("State snapshot restore succeeded.");
         Ok(())
     }
 }
@@ -64,8 +68,8 @@ impl StateSnapshotRestoreController {
 impl StateSnapshotRestoreController {
     async fn run_impl(self) -> Result<()> {
         if self.version > self.target_version {
-            println!(
-                "Trying to restore state snapshot to version {}, which is newer than the target version {}.",
+            warn!(
+                "Trying to restore state snapshot to version {}, which is newer than the target version {}, skipping.",
                 self.version,
                 self.target_version,
             );
@@ -79,15 +83,18 @@ impl StateSnapshotRestoreController {
             .restore_handler
             .get_state_restore_receiver(self.version, manifest.root_hash)?;
 
+        STATE_SNAPSHOT_VERSION.set(self.version as i64);
+        STATE_SNAPSHOT_TARGET_LEAF_INDEX
+            .set(manifest.chunks.last().map_or(0, |c| c.last_idx as i64));
         for chunk in manifest.chunks {
             let blobs = self.read_account_state_chunk(chunk.blobs).await?;
             let proof = self.storage.load_lcs_file(&chunk.proof).await?;
 
             receiver.add_chunk(blobs, proof)?;
+            STATE_SNAPSHOT_LEAF_INDEX.set(chunk.last_idx as i64);
         }
 
         receiver.finish()?;
-        println!("Finished restoring state snapshot.");
         Ok(())
     }
 

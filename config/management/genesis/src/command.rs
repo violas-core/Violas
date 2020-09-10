@@ -24,6 +24,8 @@ pub enum Command {
     SetLayout(crate::layout::SetLayout),
     #[structopt(about = "Sets the validator operator chosen by the owner")]
     SetOperator(crate::validator_operator::ValidatorOperator),
+    #[structopt(about = "Submits an Ed25519PublicKey for the treasury root")]
+    TreasuryComplianceKey(crate::key::TreasuryComplianceKey),
     #[structopt(about = "Constructs and signs a ValidatorConfig")]
     ValidatorConfig(crate::validator_config::ValidatorConfig),
     #[structopt(about = "Verifies and prints the current configuration state")]
@@ -40,6 +42,7 @@ pub enum CommandName {
     OwnerKey,
     SetLayout,
     SetOperator,
+    TreasuryComplianceKey,
     ValidatorConfig,
     Verify,
 }
@@ -55,6 +58,7 @@ impl From<&Command> for CommandName {
             Command::OwnerKey(_) => CommandName::OwnerKey,
             Command::SetLayout(_) => CommandName::SetLayout,
             Command::SetOperator(_) => CommandName::SetOperator,
+            Command::TreasuryComplianceKey(_) => CommandName::TreasuryComplianceKey,
             Command::ValidatorConfig(_) => CommandName::ValidatorConfig,
             Command::Verify(_) => CommandName::Verify,
         }
@@ -72,6 +76,7 @@ impl std::fmt::Display for CommandName {
             CommandName::OwnerKey => "owner-key",
             CommandName::SetLayout => "set-layout",
             CommandName::SetOperator => "set-operator",
+            CommandName::TreasuryComplianceKey => "treasury-compliance-key",
             CommandName::ValidatorConfig => "validator-config",
             CommandName::Verify => "verify",
         };
@@ -83,17 +88,36 @@ impl Command {
     pub fn execute(self) -> String {
         match &self {
             Command::CreateAndInsertWaypoint(_) => {
-                self.create_and_insert_waypoint().unwrap().to_string()
+                Self::print_waypoint(self.create_and_insert_waypoint())
             }
-            Command::CreateWaypoint(_) => self.create_waypoint().unwrap().to_string(),
-            Command::Genesis(_) => format!("{:?}", self.genesis().unwrap()),
-            Command::LibraRootKey(_) => self.libra_root_key().unwrap().to_string(),
-            Command::OperatorKey(_) => self.operator_key().unwrap().to_string(),
-            Command::OwnerKey(_) => self.owner_key().unwrap().to_string(),
-            Command::SetLayout(_) => self.set_layout().unwrap().to_string(),
-            Command::SetOperator(_) => format!("{:?}", self.set_operator().unwrap()),
-            Command::ValidatorConfig(_) => format!("{:?}", self.validator_config().unwrap()),
+            Command::CreateWaypoint(_) => Self::print_waypoint(self.create_waypoint()),
+            Command::Genesis(_) => Self::print(self.genesis()),
+            Command::LibraRootKey(_) => Self::print(self.libra_root_key()),
+            Command::OperatorKey(_) => Self::print(self.operator_key()),
+            Command::OwnerKey(_) => Self::print(self.owner_key()),
+            Command::SetLayout(_) => Self::print(self.set_layout()),
+            Command::SetOperator(_) => Self::print(self.set_operator()),
+            Command::TreasuryComplianceKey(_) => Self::print(self.treasury_compliance_key()),
+            Command::ValidatorConfig(_) => Self::print(self.validator_config()),
             Command::Verify(_) => self.verify().unwrap(),
+        }
+    }
+
+    fn print<T>(result: Result<T, Error>) -> String {
+        match result {
+            Ok(_) => "Success!".to_string(),
+            Err(e) => Self::print_error(e),
+        }
+    }
+
+    fn print_error(error: Error) -> String {
+        format!("Operation unsuccessful: {}", error.to_string())
+    }
+
+    fn print_waypoint(result: Result<Waypoint, Error>) -> String {
+        match result {
+            Ok(waypoint) => format!("Waypoint value: {}", waypoint),
+            Err(e) => Self::print_error(e),
         }
     }
 
@@ -133,6 +157,14 @@ impl Command {
         execute_command!(self, Command::SetOperator, CommandName::SetOperator)
     }
 
+    pub fn treasury_compliance_key(self) -> Result<Ed25519PublicKey, Error> {
+        execute_command!(
+            self,
+            Command::TreasuryComplianceKey,
+            CommandName::TreasuryComplianceKey
+        )
+    }
+
     pub fn validator_config(self) -> Result<Transaction, Error> {
         execute_command!(self, Command::ValidatorConfig, CommandName::ValidatorConfig)
     }
@@ -154,7 +186,7 @@ pub mod tests {
     use libra_crypto::{ed25519::Ed25519PrivateKey, PrivateKey, Uniform};
     use libra_global_constants::{OPERATOR_KEY, OWNER_KEY};
     use libra_management::constants;
-    use libra_secure_storage::{KVStorage, Value};
+    use libra_secure_storage::KVStorage;
     use libra_types::{
         account_address,
         chain_id::ChainId,
@@ -189,7 +221,8 @@ pub mod tests {
         let layout_text = "\
             operators = [\"operator_alice_shared\", \"operator_bob_shared\", \"operator_carol_shared\"]\n\
             owners = [\"alice_shared\", \"bob_shared\", \"carol_shared\"]\n\
-            libra_root = [\"dave_shared\"]\n\
+            libra_root = \"dave_shared\"\n\
+            treasury_compliance = \"dave_shared\"\n\
         ";
 
         let temppath = libra_temppath::TempPath::new();
@@ -203,10 +236,13 @@ pub mod tests {
             .set_layout(temppath.path().to_str().unwrap(), constants::COMMON_NS)
             .unwrap();
 
-        // Step 2) Upload the libra root key:
+        // Step 2) Upload the root keys:
         helper.initialize(dave_ns.into());
         helper
             .libra_root_key(dave_ns, &(dave_ns.to_string() + shared))
+            .unwrap();
+        helper
+            .treasury_compliance_key(dave_ns, &(dave_ns.to_string() + shared))
             .unwrap();
 
         // Step 3) Upload each owner key:
@@ -290,7 +326,8 @@ pub mod tests {
         let layout_text = "\
             operators = [\"alice\", \"bob\"]\n\
             owners = [\"carol\"]\n\
-            libra_root = [\"dave\"]\n\
+            libra_root = \"dave\"\n\
+            treasury_compliance = \"other_dave\"\n\
         ";
         file.write_all(&layout_text.to_string().into_bytes())
             .unwrap();
@@ -300,12 +337,7 @@ pub mod tests {
             .set_layout(temppath.path().to_str().unwrap(), namespace)
             .unwrap();
         let storage = helper.storage(namespace.into());
-        let stored_layout = storage
-            .get(constants::LAYOUT)
-            .unwrap()
-            .value
-            .string()
-            .unwrap();
+        let stored_layout = storage.get::<String>(constants::LAYOUT).unwrap().value;
         assert_eq!(layout_text, stored_layout);
     }
 
@@ -327,7 +359,7 @@ pub mod tests {
         let owner_account = account_address::from_public_key(&owner_key);
         let mut shared_storage = storage_helper.storage(owner_name.into());
         shared_storage
-            .set(OWNER_KEY, Value::Ed25519PublicKey(owner_key))
+            .set(OWNER_KEY, owner_key)
             .map_err(|e| Error::StorageWriteError("shared", OWNER_KEY, e.to_string()))
             .unwrap();
 
@@ -346,11 +378,9 @@ pub mod tests {
         // Verify that a validator config transaction was uploaded to the remote storage
         let shared_storage = storage_helper.storage(remote_operator_ns.into());
         let uploaded_config_tx = shared_storage
-            .get(constants::VALIDATOR_CONFIG)
+            .get::<Transaction>(constants::VALIDATOR_CONFIG)
             .unwrap()
-            .value
-            .transaction()
-            .unwrap();
+            .value;
         assert_eq!(local_config_tx, uploaded_config_tx);
 
         // Verify the transaction sender is the operator account address
@@ -361,7 +391,7 @@ pub mod tests {
         // Verify the validator config in the transaction has the correct account address
         match uploaded_user_transaction.payload() {
             TransactionPayload::Script(script) => {
-                assert_eq!(6, script.args().len());
+                assert_eq!(4, script.args().len());
 
                 match script.args().get(0).unwrap() {
                     TransactionArgument::Address(account_address) => {
@@ -388,7 +418,7 @@ pub mod tests {
         let operator_key = Ed25519PrivateKey::generate_for_testing().public_key();
         let mut shared_storage = storage_helper.storage(operator_name.into());
         shared_storage
-            .set(OPERATOR_KEY, Value::Ed25519PublicKey(operator_key))
+            .set(OPERATOR_KEY, operator_key)
             .map_err(|e| Error::StorageWriteError("shared", OPERATOR_KEY, e.to_string()))
             .unwrap();
 
@@ -400,11 +430,9 @@ pub mod tests {
         // Verify that a file setting the operator was uploaded to the remote storage
         let shared_storage = storage_helper.storage(remote_owner_ns.into());
         let uploaded_operator_name = shared_storage
-            .get(constants::VALIDATOR_OPERATOR)
+            .get::<String>(constants::VALIDATOR_OPERATOR)
             .unwrap()
-            .value
-            .string()
-            .unwrap();
+            .value;
         assert_eq!(local_operator_name, uploaded_operator_name);
     }
 
@@ -418,8 +446,8 @@ pub mod tests {
             .unwrap()
             .split("Key not set")
             .count();
-        // 11 KeyNotSet results in 12 splits
-        assert_eq!(output, 12);
+        // 9 KeyNotSet results in 10 splits
+        assert_eq!(output, 10);
 
         helper.initialize(namespace.into());
 

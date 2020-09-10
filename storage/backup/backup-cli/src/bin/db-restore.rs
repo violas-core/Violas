@@ -12,6 +12,8 @@ use backup_cli::{
     storage::StorageOpt,
     utils::GlobalRestoreOpt,
 };
+use libra_logger::{prelude::*, Level, Logger};
+use libra_secure_push_metrics::MetricsPusher;
 use libradb::{GetRestoreHandler, LibraDB};
 use std::sync::Arc;
 use structopt::StructOpt;
@@ -55,8 +57,17 @@ enum RestoreType {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let opt = Opt::from_args();
+    main_impl().await.map_err(|e| {
+        error!("main_impl() failed: {}", e);
+        e
+    })
+}
 
+async fn main_impl() -> Result<()> {
+    Logger::new().level(Level::Info).init();
+    let _mp = MetricsPusher::start();
+
+    let opt = Opt::from_args();
     let db = Arc::new(
         LibraDB::open(
             &opt.global.db_dir,
@@ -66,8 +77,8 @@ async fn main() -> Result<()> {
         .expect("Failed opening DB."),
     );
     let restore_handler = Arc::new(db.get_restore_handler());
-    let global_opt = opt.global;
 
+    let global_opt = opt.global;
     match opt.restore_type {
         RestoreType::EpochEnding { opt, storage } => {
             EpochEndingRestoreController::new(

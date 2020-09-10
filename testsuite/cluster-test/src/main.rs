@@ -61,6 +61,8 @@ struct Args {
     #[structopt(long, group = "action", requires = "swarm")]
     diag: bool,
     #[structopt(long, group = "action")]
+    no_teardown: bool,
+    #[structopt(long, group = "action")]
     suite: Option<String>,
     #[structopt(long, group = "action")]
     exec: Option<String>,
@@ -172,7 +174,9 @@ pub async fn main() {
             warn!("Tearing down cluster now");
         }
     }
-    runner.teardown().await;
+    if !args.no_teardown {
+        runner.teardown().await;
+    }
     let perf_msg = exit_on_error(result);
 
     if let Some(mut changelog) = args.changelog {
@@ -200,7 +204,14 @@ async fn handle_cluster_test_runner_commands(
     let startup_timeout = Duration::from_secs(5 * 60);
     runner
         .wait_until_all_healthy(Instant::now() + startup_timeout)
-        .await?;
+        .await
+        .map_err(|err| {
+            runner
+                .report
+                .report_text(format!("Cluster setup failed: `{}`", err));
+            runner.print_report();
+            err
+        })?;
     let mut perf_msg = None;
     if args.health_check {
         let duration = Duration::from_secs(args.duration);
@@ -553,6 +564,7 @@ impl ClusterTestRunner {
                     }
                     let commit_lines: Vec<_> = commit.commit.message.split('\n').collect();
                     let commit_head = commit_lines[0];
+                    let commit_head = commit_head.replace("[breaking]", "*[breaking]*");
                     let short_sha = &commit.sha[..6];
                     let email_parts: Vec<_> = commit.commit.author.email.split('@').collect();
                     let author = email_parts[0];

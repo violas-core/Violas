@@ -44,7 +44,6 @@ pub struct VaultConfig {}
 
 #[derive(Debug, Clone)]
 pub struct LSRConfig {
-    pub num_validators: u32,
     pub image_tag: String,
     pub lsr_backend: String,
     pub vault_addr: Option<String>,
@@ -53,29 +52,20 @@ pub struct LSRConfig {
 
 #[derive(Debug, Clone)]
 pub struct ValidatorConfig {
-    pub num_validators: u32,
-    pub num_fullnodes: u32,
     pub enable_lsr: bool,
     pub image_tag: String,
-    pub config_overrides: Vec<String>,
-    pub seed_peer_ip: String,
     pub safety_rules_addr: Option<String>,
     pub vault_addr: Option<String>,
     pub vault_namespace: Option<String>,
-    pub enable_mgmt_tool: bool,
 }
 
 #[derive(Debug, Clone)]
 pub struct FullnodeConfig {
     pub fullnode_index: u32,
-    pub num_fullnodes_per_validator: u32,
-    pub num_validators: u32,
     pub image_tag: String,
-    pub config_overrides: Vec<String>,
     pub seed_peer_ip: String,
     pub vault_addr: Option<String>,
     pub vault_namespace: Option<String>,
-    pub enable_mgmt_tool: bool,
 }
 
 #[derive(Clone)]
@@ -114,6 +104,24 @@ impl ValidatorGroup {
             None => self.index,
             _ => panic!("Only validator has twin index"),
         }
+    }
+}
+
+impl ApplicationConfig {
+    pub fn needs_genesis(&self) -> bool {
+        matches!(self, Self::Validator(_)) || matches!(self, Self::Fullnode(_))
+    }
+
+    pub fn needs_config(&self) -> bool {
+        matches!(self, Self::Validator(_))
+            || matches!(self, Self::Fullnode(_))
+            || matches!(self, Self::LSR(_))
+    }
+
+    pub fn needs_fluentbit(&self) -> bool {
+        matches!(self, Self::Validator(_))
+            || matches!(self, Self::Fullnode(_))
+            || matches!(self, Self::LSR(_))
     }
 }
 

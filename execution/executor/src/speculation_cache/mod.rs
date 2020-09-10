@@ -17,7 +17,10 @@
 #[cfg(test)]
 mod test;
 
-use crate::types::ProcessedVMOutput;
+use crate::{
+    logging::{LogEntry, LogSchema},
+    types::ProcessedVMOutput,
+};
 use anyhow::{format_err, Result};
 use consensus_types::block::Block;
 use executor_types::{Error, ExecutedTrees};
@@ -93,7 +96,10 @@ impl Drop for SpeculationBlock {
             .unwrap()
             .remove(&self.id())
             .expect("Speculation block must exist in block_map before being dropped.");
-        debug!("Speculation block {} is dropped.", self.id())
+        debug!(
+            LogSchema::new(LogEntry::SpeculationCache).block_id(self.id()),
+            "Block dropped"
+        );
     }
 }
 
@@ -184,15 +190,19 @@ impl SpeculationCache {
             // Update the root block id with reconfig virtual block id, to be consistent
             // with the logic of Consensus.
             let id = Block::make_genesis_block_from_ledger_info(committed_ledger_info).id();
-            debug!(
-                "Updated with a new root block {} as a virtual block of reconfiguration block {}",
-                id,
-                committed_ledger_info.consensus_block_id()
+            info!(
+                LogSchema::new(LogEntry::SpeculationCache)
+                    .root_block_id(id)
+                    .original_reconfiguration_block_id(committed_ledger_info.consensus_block_id()),
+                "Updated with a new root block as a virtual block of reconfiguration block"
             );
             id
         } else {
             let id = committed_ledger_info.consensus_block_id();
-            debug!("updated with a new root block {}", id);
+            info!(
+                LogSchema::new(LogEntry::SpeculationCache).root_block_id(id),
+                "Updated with a new root block",
+            );
             id
         };
         self.committed_block_id = new_root_block_id;

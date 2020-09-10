@@ -177,14 +177,11 @@ impl VMStatus {
                     // to decoding, running the prologue etc.
                     StatusType::Deserialization => Ok(KeptVMStatus::DeserializationError),
                     // Any error encountered during the execution of the transaction will charge gas.
-                    StatusType::Execution => {
-                        debug_assert!(code.should_skip_checks_for_todo());
-                        Ok(KeptVMStatus::ExecutionFailure {
-                            location: AbortLocation::Script,
-                            function: 0,
-                            code_offset: 0,
-                        })
-                    }
+                    StatusType::Execution => Ok(KeptVMStatus::ExecutionFailure {
+                        location: AbortLocation::Script,
+                        function: 0,
+                        code_offset: 0,
+                    }),
                 }
             }
         }
@@ -495,7 +492,6 @@ pub enum StatusCode {
     INVALID_MODULE_HANDLE = 1013,
     UNIMPLEMENTED_HANDLE = 1014,
     LOOKUP_FAILED = 1017,
-    TYPE_RESOLUTION_FAILURE = 1019,
     TYPE_MISMATCH = 1020,
     MISSING_DEPENDENCY = 1021,
     POP_RESOURCE_ERROR = 1023,
@@ -588,6 +584,10 @@ pub enum StatusCode {
     VERIFIER_INVARIANT_VIOLATION = 2016,
     UNEXPECTED_VERIFIER_ERROR = 2017,
     UNEXPECTED_DESERIALIZATION_ERROR = 2018,
+    FAILED_TO_SERIALIZE_WRITE_SET_CHANGES = 2019,
+    FAILED_TO_DESERIALIZE_RESOURCE = 2020,
+    // Failed to resolve type due to linking being broken after verification
+    TYPE_RESOLUTION_FAILURE = 2021,
 
     // Errors that can arise from binary decoding (deserialization)
     // Deserializtion Errors: 3000-3999
@@ -623,7 +623,6 @@ pub enum StatusCode {
     RESOURCE_ALREADY_EXISTS = 4004,
     MISSING_DATA = 4008,
     DATA_FORMAT_ERROR = 4009,
-    INVALID_DATA = 4010,
     ABORTED = 4016,
     ARITHMETIC_ERROR = 4017,
     EXECUTION_STACK_OVERFLOW = 4020,
@@ -672,18 +671,6 @@ impl StatusCode {
         }
 
         StatusType::Unknown
-    }
-
-    /// Should only be used in debug asserts. These status codes are missing some data
-    /// checked in debug asserts
-    pub fn should_skip_checks_for_todo(self) -> bool {
-        fn todo_needs_execution_trace_information() -> std::collections::HashSet<StatusCode> {
-            vec![StatusCode::VM_MAX_VALUE_DEPTH_REACHED]
-                .into_iter()
-                .collect()
-        }
-
-        todo_needs_execution_trace_information().contains(&self)
     }
 }
 

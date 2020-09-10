@@ -34,7 +34,8 @@ fn test_that_python_code_parses_and_passes_pyre_check() {
     let src_dir_path = dir.path().join("src");
     let installer =
         serdegen::python3::Installer::new(src_dir_path.clone(), /* package */ None);
-    let config = serdegen::CodeGeneratorConfig::new("libra_types".to_string());
+    let config = serdegen::CodeGeneratorConfig::new("libra_types".to_string())
+        .with_encodings(vec![serdegen::Encoding::Lcs]);
     installer.install_module(&config, &registry).unwrap();
     installer.install_serde_runtime().unwrap();
     installer.install_lcs_runtime().unwrap();
@@ -44,7 +45,7 @@ fn test_that_python_code_parses_and_passes_pyre_check() {
     let source_path = stdlib_dir_path.join("__init__.py");
 
     let mut source = std::fs::File::create(&source_path).unwrap();
-    buildgen::python3::output(&mut source, &abis).unwrap();
+    buildgen::python3::output(&mut source, None, None, &abis).unwrap();
 
     std::fs::copy(
         "examples/python3/stdlib_demo.py",
@@ -180,7 +181,8 @@ fn test_that_cpp_code_compiles_and_demo_runs() {
     let abis = get_stdlib_script_abis();
     let dir = tempdir().unwrap();
 
-    let config = serdegen::CodeGeneratorConfig::new("libra_types".to_string());
+    let config = serdegen::CodeGeneratorConfig::new("libra_types".to_string())
+        .with_encodings(vec![serdegen::Encoding::Lcs]);
     let lcs_installer = serdegen::cpp::Installer::new(dir.path().to_path_buf());
     lcs_installer.install_module(&config, &registry).unwrap();
     lcs_installer.install_serde_runtime().unwrap();
@@ -225,7 +227,8 @@ fn test_that_java_code_compiles_and_demo_runs() {
     let abis = get_stdlib_script_abis();
     let dir = tempdir().unwrap();
 
-    let config = serdegen::CodeGeneratorConfig::new("org.libra.types".to_string());
+    let config = serdegen::CodeGeneratorConfig::new("org.libra.types".to_string())
+        .with_encodings(vec![serdegen::Encoding::Lcs]);
     let lcs_installer = serdegen::java::Installer::new(dir.path().to_path_buf());
     lcs_installer.install_module(&config, &registry).unwrap();
     lcs_installer.install_serde_runtime().unwrap();
@@ -242,20 +245,32 @@ fn test_that_java_code_compiles_and_demo_runs() {
     )
     .unwrap();
 
-    let paths = std::iter::empty()
-        .chain(std::fs::read_dir(dir.path().join("com/facebook/serde")).unwrap())
-        .chain(std::fs::read_dir(dir.path().join("com/facebook/lcs")).unwrap())
-        .chain(std::fs::read_dir(dir.path().join("org/libra/types")).unwrap())
-        .chain(std::fs::read_dir(dir.path().join("org/libra/stdlib")).unwrap())
-        .map(|e| e.unwrap().path())
-        .chain(std::iter::once(dir.path().join("StdlibDemo.java")));
+    let paths = || {
+        std::iter::empty()
+            .chain(std::fs::read_dir(dir.path().join("com/novi/serde")).unwrap())
+            .chain(std::fs::read_dir(dir.path().join("com/novi/lcs")).unwrap())
+            .chain(std::fs::read_dir(dir.path().join("org/libra/types")).unwrap())
+            .chain(std::fs::read_dir(dir.path().join("org/libra/stdlib")).unwrap())
+            .map(|e| e.unwrap().path())
+            .chain(std::iter::once(dir.path().join("StdlibDemo.java")))
+    };
+
+    let status = Command::new("javadoc")
+        .arg("-sourcepath")
+        .arg(dir.path())
+        .arg("-d")
+        .arg(dir.path().join("html"))
+        .args(paths())
+        .status()
+        .unwrap();
+    assert!(status.success());
 
     let status = Command::new("javac")
         .arg("-cp")
         .arg(dir.path())
         .arg("-d")
         .arg(dir.path())
-        .args(paths)
+        .args(paths())
         .status()
         .unwrap();
     assert!(status.success());
@@ -268,6 +283,69 @@ fn test_that_java_code_compiles_and_demo_runs() {
         .output()
         .unwrap();
     assert_eq!(std::str::from_utf8(&output.stderr).unwrap(), String::new());
+    assert_eq!(
+        std::str::from_utf8(&output.stdout).unwrap(),
+        EXPECTED_OUTPUT
+    );
+    assert!(output.status.success());
+}
+
+#[test]
+#[ignore]
+fn test_that_golang_code_compiles_and_demo_runs() {
+    let registry = get_libra_registry();
+    let abis = get_stdlib_script_abis();
+    let dir = tempdir().unwrap();
+
+    let config = serdegen::CodeGeneratorConfig::new("libratypes".to_string())
+        .with_encodings(vec![serdegen::Encoding::Lcs]);
+    let lcs_installer = serdegen::golang::Installer::new(
+        dir.path().to_path_buf(),
+        /* default Serde module */ None,
+    );
+    lcs_installer.install_module(&config, &registry).unwrap();
+
+    let abi_installer = buildgen::golang::Installer::new(
+        dir.path().to_path_buf(),
+        /* default Serde module */ None,
+        Some("testing".to_string()),
+    );
+    abi_installer
+        .install_transaction_builders("librastdlib", &abis)
+        .unwrap();
+
+    std::fs::copy(
+        "examples/golang/stdlib_demo.go",
+        dir.path().join("stdlib_demo.go"),
+    )
+    .unwrap();
+
+    let status = Command::new("go")
+        .current_dir(dir.path())
+        .arg("mod")
+        .arg("init")
+        .arg("testing")
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let status = Command::new("go")
+        .current_dir(dir.path())
+        .arg("mod")
+        .arg("edit")
+        .arg("-replace")
+        .arg(format!("testing={}", dir.path().to_string_lossy(),))
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let output = Command::new("go")
+        .current_dir(dir.path())
+        .arg("run")
+        .arg(dir.path().join("stdlib_demo.go"))
+        .output()
+        .unwrap();
+    eprintln!("{}", std::str::from_utf8(&output.stderr).unwrap());
     assert_eq!(
         std::str::from_utf8(&output.stdout).unwrap(),
         EXPECTED_OUTPUT

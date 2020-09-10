@@ -9,17 +9,10 @@ module ValidatorConfig {
     use 0x1::Roles;
     use 0x1::ValidatorOperatorConfig;
 
-    resource struct UpdateValidatorConfig {}
-
     struct Config {
         consensus_pubkey: vector<u8>,
-        /// TODO(philiphayes): restructure
-        ///   3) remove validator_network_identity_pubkey
-        ///   4) remove full_node_network_identity_pubkey
-        validator_network_identity_pubkey: vector<u8>,
-        validator_network_address: vector<u8>,
-        full_node_network_identity_pubkey: vector<u8>,
-        full_node_network_address: vector<u8>,
+        validator_network_addresses: vector<u8>,
+        fullnode_network_addresses: vector<u8>,
     }
 
     resource struct ValidatorConfig {
@@ -45,6 +38,9 @@ module ValidatorConfig {
     // Validator setup methods
     ///////////////////////////////////////////////////////////////////////////
 
+    /// Publishes a mostly empty ValidatorConfig struct. Eventually, it
+    /// will have critical info such as keys, network addresses for validators,
+    /// and the address of the validator operator.
     public fun publish(
         account: &signer,
         lr_account: &signer,
@@ -88,9 +84,12 @@ module ValidatorConfig {
     ///////////////////////////////////////////////////////////////////////////
 
     /// Sets a new operator account, preserving the old config.
+    /// Note: Access control.  No one but the owner of the account may change .operator_account
     public fun set_operator(account: &signer, operator_account: address) acquires ValidatorConfig {
         Roles::assert_validator(account);
-        // Role check is not necessary since the role is checked when the config resource is published.
+        // Check for validator role is not necessary since the role is checked when the config
+        // resource is published.
+        // TODO (dd): Probably need to prove an invariant about role.
         assert(
             ValidatorOperatorConfig::has_validator_operator_config(operator_account),
             Errors::invalid_argument(ENOT_A_VALIDATOR_OPERATOR)
@@ -99,9 +98,10 @@ module ValidatorConfig {
         assert(exists_config(sender), Errors::not_published(EVALIDATOR_CONFIG));
         (borrow_global_mut<ValidatorConfig>(sender)).operator_account = Option::some(operator_account);
     }
-
     spec fun set_operator {
+        /// Must abort if the signer does not have the Validator role [B24].
         include Roles::AbortsIfNotValidator;
+
         aborts_if !ValidatorOperatorConfig::has_validator_operator_config(operator_account)
             with Errors::INVALID_ARGUMENT;
         let sender = Signer::spec_address_of(account);
@@ -109,6 +109,10 @@ module ValidatorConfig {
         aborts_if !ValidatorOperatorConfig::has_validator_operator_config(operator_account) with Errors::NOT_PUBLISHED;
         ensures spec_has_operator(sender);
         ensures spec_get_operator(sender) == operator_account;
+
+        /// The signer can only change its own operator account [B24].
+        ensures forall addr: address where addr != sender:
+            global<ValidatorConfig>(addr).operator_account == old(global<ValidatorConfig>(addr).operator_account);
     }
 
     spec module {
@@ -144,11 +148,17 @@ module ValidatorConfig {
     }
 
     spec fun remove_operator {
+        /// Must abort if the signer does not have the Validator role [B24].
         include Roles::AbortsIfNotValidator;
+
         let sender = Signer::spec_address_of(account);
         include AbortsIfNoValidatorConfig{addr: sender};
         ensures !spec_has_operator(Signer::spec_address_of(account));
         ensures spec_get_operator(sender) == sender;
+
+        /// The signer can only change its own operator account [B24].
+        ensures forall addr: address where addr != sender:
+            global<ValidatorConfig>(addr).operator_account == old(global<ValidatorConfig>(addr).operator_account);
     }
 
     ///////////////////////////////////////////////////////////////////////////
@@ -162,10 +172,8 @@ module ValidatorConfig {
         signer: &signer,
         validator_account: address,
         consensus_pubkey: vector<u8>,
-        validator_network_identity_pubkey: vector<u8>,
-        validator_network_address: vector<u8>,
-        full_node_network_identity_pubkey: vector<u8>,
-        full_node_network_address: vector<u8>,
+        validator_network_addresses: vector<u8>,
+        fullnode_network_addresses: vector<u8>,
     ) acquires ValidatorConfig {
         assert(
             Signer::address_of(signer) == get_operator(validator_account),
@@ -180,10 +188,8 @@ module ValidatorConfig {
         let t_ref = borrow_global_mut<ValidatorConfig>(validator_account);
         t_ref.config = Option::some(Config {
             consensus_pubkey,
-            validator_network_identity_pubkey,
-            validator_network_address,
-            full_node_network_identity_pubkey,
-            full_node_network_address,
+            validator_network_addresses,
+            fullnode_network_addresses,
         });
     }
 
@@ -224,7 +230,7 @@ module ValidatorConfig {
     }
 
     /// # Validator stays valid once it becomes valid
-
+    /// See comment on set_config -- LibraSystem depends on this.
     spec module {
         invariant update [global]
             forall validator: address where old(spec_is_valid(validator)): spec_is_valid(validator);
@@ -286,20 +292,28 @@ module ValidatorConfig {
         &config_ref.consensus_pubkey
     }
 
-    /// Get validator's network identity pubkey from Config
-    /// Never aborts
-    public fun get_validator_network_identity_pubkey(config_ref: &Config): &vector<u8> {
-        &config_ref.validator_network_identity_pubkey
-    }
-
     /// Get validator's network address from Config
     /// Never aborts
-    public fun get_validator_network_address(config_ref: &Config): &vector<u8> {
-        &config_ref.validator_network_address
+    public fun get_validator_network_addresses(config_ref: &Config): &vector<u8> {
+        &config_ref.validator_network_addresses
     }
 
     spec module {
         pragma verify = true, aborts_if_is_strict = true;
+    }
+
+    /// Specifies that only set_operator and remove_operator may change the operator for a
+    /// particular (validator owner) address. Those two functions have a &signer argument for
+    /// the validator account, so we know that the change has been authorized by the validator
+    /// owner via signing the transaction. But other functions in this module could also
+    /// change the operator_account field of ValidatorConfig, and this shows that they do not.
+    spec schema OperatorRemainsSame {
+        ensures forall addr1: address where old(exists<ValidatorConfig>(addr1)):
+            global<ValidatorConfig>(addr1).operator_account == old(global<ValidatorConfig>(addr1).operator_account);
+    }
+    spec module {
+        ///  set_operator, remove_operator can change the operator account [B24].
+        apply OperatorRemainsSame to * except set_operator, remove_operator;
     }
 }
 }

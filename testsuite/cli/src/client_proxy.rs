@@ -12,31 +12,23 @@ use compiler::Compiler;
 use libra_crypto::{
     ed25519::{Ed25519PrivateKey, Ed25519PublicKey, Ed25519Signature},
     test_utils::KeyPair,
-    traits::ValidCryptoMaterial,
-    x25519, ValidCryptoMaterialStringExt,
 };
 use libra_json_rpc_client::views::{
     AccountView, BlockMetadata, EventView, TransactionView, VMStatusView,
 };
 use libra_logger::prelude::*;
-use libra_network_address::{
-    encrypted::{
-        RawEncNetworkAddress, TEST_SHARED_VAL_NETADDR_KEY, TEST_SHARED_VAL_NETADDR_KEY_VERSION,
-    },
-    NetworkAddress, RawNetworkAddress,
-};
 use libra_temppath::TempPath;
 use libra_types::{
     access_path::AccessPath,
     account_address::AccountAddress,
     account_config::{
         from_currency_code_string, libra_root_address, testnet_dd_account_address,
-        type_tag_for_currency_code, ACCOUNT_RECEIVED_EVENT_PATH, ACCOUNT_SENT_EVENT_PATH, LBR_NAME,
+        treasury_compliance_account_address, type_tag_for_currency_code,
+        ACCOUNT_RECEIVED_EVENT_PATH, ACCOUNT_SENT_EVENT_PATH, LBR_NAME,
     },
     account_state::AccountState,
     chain_id::ChainId,
     ledger_info::LedgerInfoWithSignatures,
-    on_chain_config::LibraVersion,
     transaction::{
         authenticator::AuthenticationKey,
         helpers::{create_unsigned_txn, create_user_txn, TransactionSigner},
@@ -63,7 +55,6 @@ use std::{
     str::{self, FromStr},
     thread, time,
 };
-use transaction_builder::encode_register_validator_config_script;
 
 const CLIENT_WALLET_MNEMONIC_FILE: &str = "client.mnemonic";
 const GAS_UNIT_PRICE: u64 = 0;
@@ -117,6 +108,8 @@ pub struct ClientProxy {
     faucet_url: Url,
     /// Account used for Libra Root operations (e.g., adding a new transaction script)
     pub libra_root_account: Option<AccountData>,
+    /// Account used for Treasury Compliance operations
+    pub tc_account: Option<AccountData>,
     /// Account used for "minting" operations
     pub testnet_designated_dealer_account: Option<AccountData>,
     /// Wallet library managing user accounts.
@@ -134,6 +127,7 @@ impl ClientProxy {
         chain_id: ChainId,
         url: &str,
         libra_root_account_file: &str,
+        tc_account_file: &str,
         testnet_designated_dealer_account_file: &str,
         sync_on_wallet_recovery: bool,
         faucet_url: Option<String>,
@@ -159,6 +153,21 @@ impl ClientProxy {
             )?;
             Some(libra_root_account_data)
         };
+
+        let tc_account = if tc_account_file.is_empty() {
+            None
+        } else {
+            let tc_account_key = generate_key::load_key(tc_account_file);
+            let tc_account_data = Self::get_account_data_from_address(
+                &mut client,
+                treasury_compliance_account_address(),
+                true,
+                Some(KeyPair::from(tc_account_key)),
+                None,
+            )?;
+            Some(tc_account_data)
+        };
+
         let dd_account = if testnet_designated_dealer_account_file.is_empty() {
             None
         } else {
@@ -192,6 +201,7 @@ impl ClientProxy {
             address_to_ref_id,
             faucet_url,
             libra_root_account,
+            tc_account,
             testnet_designated_dealer_account: dd_account,
             wallet: Self::get_libra_wallet(mnemonic_file)?,
             sync_on_wallet_recovery,
@@ -270,6 +280,14 @@ impl ClientProxy {
                 hex::encode(&libra_root_account.address),
                 libra_root_account.sequence_number,
                 libra_root_account.status,
+            );
+        }
+        if let Some(tc_account) = &self.tc_account {
+            println!(
+                "TC account address: {}, sequence_number: {}, status: {:?}",
+                hex::encode(&tc_account.address),
+                tc_account.sequence_number,
+                tc_account.status,
             );
         }
         if let Some(testnet_dd_account) = &self.testnet_designated_dealer_account {
@@ -363,6 +381,12 @@ impl ClientProxy {
             if let Some(libra_root_account) = &mut self.libra_root_account {
                 if libra_root_account.address == address {
                     libra_root_account.sequence_number = sequence_number;
+                    return Ok(sequence_number);
+                }
+            }
+            if let Some(tc_account) = &mut self.tc_account {
+                if tc_account.address == address {
+                    tc_account.sequence_number = sequence_number;
                     return Ok(sequence_number);
                 }
             }
@@ -481,7 +505,7 @@ impl ClientProxy {
             "Invalid number of coins to transfer from faucet."
         );
 
-        if self.libra_root_account.is_some() {
+        if self.tc_account.is_some() {
             let script = transaction_builder::encode_create_parent_vasp_account_script(
                 type_tag_for_currency_code(currency_code.clone()),
                 0,
@@ -500,7 +524,7 @@ impl ClientProxy {
                 if &AccountStatus::Local == status {
                     println!(">> Creating recipient account before minting from faucet");
                     // This needs to be blocking since the mint can't happen until it completes
-                    self.association_transaction_with_local_libra_root_account(
+                    self.association_transaction_with_local_tc_account(
                         TransactionPayload::Script(script),
                         true,
                     )?;
@@ -509,7 +533,7 @@ impl ClientProxy {
             } else {
                 // We can't determine the account state. So try and create the account, but
                 // if it already exists don't error.
-                let _result = self.association_transaction_with_local_libra_root_account(
+                let _result = self.association_transaction_with_local_tc_account(
                     TransactionPayload::Script(script),
                     true,
                 );
@@ -633,9 +657,7 @@ impl ClientProxy {
                 TransactionPayload::Script(
                     transaction_builder::encode_update_libra_version_script(
                         self.libra_root_account.as_ref().unwrap().sequence_number,
-                        LibraVersion {
-                            major: space_delim_strings[1].parse::<u64>().unwrap(),
-                        },
+                        space_delim_strings[1].parse::<u64>().unwrap(),
                     ),
                 ),
                 is_blocking,
@@ -669,135 +691,6 @@ impl ClientProxy {
             ),
             None => unimplemented!(),
         }
-    }
-
-    /// Remove an existing validator from Validator Set.
-    pub fn remove_validator(
-        &mut self,
-        space_delim_strings: &[&str],
-        is_blocking: bool,
-    ) -> Result<()> {
-        ensure!(
-            space_delim_strings[0] == "remove_validator",
-            "inconsistent command '{}' for remove_validator",
-            space_delim_strings[0]
-        );
-        ensure!(
-            space_delim_strings.len() == 2,
-            "Invalid number of arguments for removing validator"
-        );
-        let (account_address, _) =
-            self.get_account_address_from_parameter(space_delim_strings[1])?;
-        match self.libra_root_account {
-            Some(_) => self.association_transaction_with_local_libra_root_account(
-                TransactionPayload::Script(
-                    transaction_builder::encode_remove_validator_and_reconfigure_script(
-                        self.libra_root_account.as_ref().unwrap().sequence_number,
-                        vec![],
-                        account_address,
-                    ),
-                ),
-                is_blocking,
-            ),
-            None => unimplemented!(),
-        }
-    }
-
-    /// Add a new validator to the Validator Set.
-    pub fn add_validator(&mut self, space_delim_strings: &[&str], is_blocking: bool) -> Result<()> {
-        ensure!(
-            space_delim_strings[0] == "add_validator",
-            "inconsistent command '{}' for add_validator",
-            space_delim_strings[0]
-        );
-        ensure!(
-            space_delim_strings.len() == 2,
-            "Invalid number of arguments for adding validator"
-        );
-        let (account_address, _) =
-            self.get_account_address_from_parameter(space_delim_strings[1])?;
-        match self.libra_root_account {
-            Some(_) => self.association_transaction_with_local_libra_root_account(
-                TransactionPayload::Script(
-                    transaction_builder::encode_add_validator_and_reconfigure_script(
-                        self.libra_root_account.as_ref().unwrap().sequence_number,
-                        vec![],
-                        account_address,
-                    ),
-                ),
-                is_blocking,
-            ),
-            None => unimplemented!(),
-        }
-    }
-
-    /// Register an account as validator candidate with ValidatorConfig
-    pub fn register_validator(
-        &mut self,
-        space_delim_strings: &[&str],
-        is_blocking: bool,
-    ) -> Result<()> {
-        ensure!(
-            space_delim_strings[0] == "register_validator",
-            "inconsistent command '{}' for register_validator",
-            space_delim_strings[0]
-        );
-        ensure!(
-            space_delim_strings.len() == 9,
-            "Invalid number of arguments for registering validator"
-        );
-
-        // parse args
-        let (address, _) = self.get_account_address_from_parameter(space_delim_strings[1])?;
-        let private_key = Ed25519PrivateKey::from_encoded_string(space_delim_strings[2])?;
-        let consensus_public_key = Ed25519PublicKey::from_encoded_string(space_delim_strings[3])?;
-        let network_identity_key = x25519::PublicKey::from_encoded_string(space_delim_strings[4])?;
-        let network_address = NetworkAddress::from_str(space_delim_strings[5])?;
-        let raw_network_address = RawNetworkAddress::try_from(&network_address)?;
-        let fullnode_identity_key = x25519::PublicKey::from_encoded_string(space_delim_strings[6])?;
-        let fullnode_network_address = NetworkAddress::from_str(space_delim_strings[7])?;
-        let raw_fullnode_network_address = RawNetworkAddress::try_from(&fullnode_network_address)?;
-
-        let mut sender = Self::get_account_data_from_address(
-            &mut self.client,
-            address,
-            true,
-            Some(KeyPair::from(private_key)),
-            None,
-        )?;
-
-        let seq_num = sender.sequence_number;
-        let addr_idx = 0;
-
-        let enc_network_address = raw_network_address.encrypt(
-            &TEST_SHARED_VAL_NETADDR_KEY,
-            TEST_SHARED_VAL_NETADDR_KEY_VERSION,
-            &address,
-            seq_num,
-            addr_idx,
-        );
-        let raw_enc_network_address = RawEncNetworkAddress::try_from(&enc_network_address)?;
-
-        let program = encode_register_validator_config_script(
-            address,
-            consensus_public_key.to_bytes().to_vec(),
-            network_identity_key.to_bytes(),
-            raw_enc_network_address.into(),
-            fullnode_identity_key.to_bytes(),
-            raw_fullnode_network_address.into(),
-        );
-        let txn = self.create_txn_to_submit(
-            TransactionPayload::Script(program),
-            &sender,
-            None,
-            None,
-            None,
-        )?;
-        self.client.submit_transaction(Some(&mut sender), txn)?;
-        if is_blocking {
-            self.wait_for_transaction(sender.address, sender.sequence_number)?;
-        }
-        Ok(())
     }
 
     /// Waits for the next transaction for a specific address and prints it
@@ -1534,6 +1427,30 @@ impl ClientProxy {
         Ok(())
     }
 
+    fn association_transaction_with_local_tc_account(
+        &mut self,
+        payload: TransactionPayload,
+        is_blocking: bool,
+    ) -> Result<()> {
+        ensure!(
+            self.tc_account.is_some(),
+            "No treasury compliance account loaded"
+        );
+        let sender = self.tc_account.as_ref().unwrap();
+        let sender_address = sender.address;
+        let txn = self.create_txn_to_submit(payload, sender, None, None, None)?;
+        let mut sender_mut = self.tc_account.as_mut().unwrap();
+        self.client.submit_transaction(Some(&mut sender_mut), txn)?;
+
+        if is_blocking {
+            self.wait_for_transaction(
+                sender_address,
+                self.tc_account.as_ref().unwrap().sequence_number,
+            )?;
+        }
+        Ok(())
+    }
+
     fn association_transaction_with_local_testnet_dd_account(
         &mut self,
         payload: TransactionPayload,
@@ -1776,6 +1693,7 @@ mod tests {
         let mut client_proxy = ClientProxy::new(
             ChainId::test(),
             "http://localhost:8080/v1",
+            &"",
             &"",
             &"",
             false,

@@ -606,6 +606,12 @@ function {:inline} $SelectField(val: $Value, field: $FieldName): $Value {
     $select_vector(val, field)
 }
 
+// Updates a field.
+function {:inline} $UpdateField(val: $Value, field: $FieldName, new_value: $Value): $Value {
+    $update_vector(val, field, new_value)
+}
+
+
 // Dereferences a reference.
 function {:inline} $Dereference(ref: $Mutation): $Value {
     v#$Mutation(ref)
@@ -877,6 +883,7 @@ function $shr(src1: $Value, src2: $Value): $Value {
    )
 }
 
+// TODO: fix this and $Shr to drop bits on overflow. Requires $Shl8, $Shl64, and $Shl128
 procedure {:inline 1} $Shl(src1: $Value, src2: $Value) returns (dst: $Value)
 requires is#$Integer(src1) && is#$Integer(src2);
 {

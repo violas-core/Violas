@@ -3,7 +3,7 @@
 
 #![forbid(unsafe_code)]
 
-use anyhow::{bail, format_err, Result};
+use anyhow::{anyhow, bail, format_err, Result};
 use reqwest::Url;
 use serde::Deserialize;
 use std::{collections::HashMap, time::Duration};
@@ -64,8 +64,13 @@ impl Prometheus {
                 end.as_secs(),
                 step
             ))
-            .expect("Failed to make query_range url");
-
+            .map_err(|e| {
+                anyhow!(
+                    "Failed to make query range due to unparseable url: {} resulting in Error: {}",
+                    self.url,
+                    e
+                )
+            })?;
         let response = self
             .client
             .get(url.clone())

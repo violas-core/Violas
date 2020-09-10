@@ -5,7 +5,6 @@
 
 ### Table of Contents
 
--  [Resource `UpdateValidatorConfig`](#0x1_ValidatorConfig_UpdateValidatorConfig)
 -  [Struct `Config`](#0x1_ValidatorConfig_Config)
 -  [Resource `ValidatorConfig`](#0x1_ValidatorConfig_ValidatorConfig)
 -  [Const `EVALIDATOR_CONFIG`](#0x1_ValidatorConfig_EVALIDATOR_CONFIG)
@@ -22,8 +21,7 @@
 -  [Function `get_human_name`](#0x1_ValidatorConfig_get_human_name)
 -  [Function `get_operator`](#0x1_ValidatorConfig_get_operator)
 -  [Function `get_consensus_pubkey`](#0x1_ValidatorConfig_get_consensus_pubkey)
--  [Function `get_validator_network_identity_pubkey`](#0x1_ValidatorConfig_get_validator_network_identity_pubkey)
--  [Function `get_validator_network_address`](#0x1_ValidatorConfig_get_validator_network_address)
+-  [Function `get_validator_network_addresses`](#0x1_ValidatorConfig_get_validator_network_addresses)
 -  [Specification](#0x1_ValidatorConfig_Specification)
     -  [Function `publish`](#0x1_ValidatorConfig_Specification_publish)
     -  [Function `set_operator`](#0x1_ValidatorConfig_Specification_set_operator)
@@ -36,34 +34,6 @@
     -  [Function `get_operator`](#0x1_ValidatorConfig_Specification_get_operator)
 
 
-
-<a name="0x1_ValidatorConfig_UpdateValidatorConfig"></a>
-
-## Resource `UpdateValidatorConfig`
-
-
-
-<pre><code><b>resource</b> <b>struct</b> <a href="#0x1_ValidatorConfig_UpdateValidatorConfig">UpdateValidatorConfig</a>
-</code></pre>
-
-
-
-<details>
-<summary>Fields</summary>
-
-
-<dl>
-<dt>
-
-<code>dummy_field: bool</code>
-</dt>
-<dd>
-
-</dd>
-</dl>
-
-
-</details>
 
 <a name="0x1_ValidatorConfig_Config"></a>
 
@@ -90,30 +60,14 @@
 </dd>
 <dt>
 
-<code>validator_network_identity_pubkey: vector&lt;u8&gt;</code>
-</dt>
-<dd>
- TODO(philiphayes): restructure
-   3) remove validator_network_identity_pubkey
-   4) remove full_node_network_identity_pubkey
-</dd>
-<dt>
-
-<code>validator_network_address: vector&lt;u8&gt;</code>
+<code>validator_network_addresses: vector&lt;u8&gt;</code>
 </dt>
 <dd>
 
 </dd>
 <dt>
 
-<code>full_node_network_identity_pubkey: vector&lt;u8&gt;</code>
-</dt>
-<dd>
-
-</dd>
-<dt>
-
-<code>full_node_network_address: vector&lt;u8&gt;</code>
+<code>fullnode_network_addresses: vector&lt;u8&gt;</code>
 </dt>
 <dd>
 
@@ -218,6 +172,9 @@ Tried to set an account without the correct operator role as a Validator Operato
 
 ## Function `publish`
 
+Publishes a mostly empty ValidatorConfig struct. Eventually, it
+will have critical info such as keys, network addresses for validators,
+and the address of the validator operator.
 
 
 <pre><code><b>public</b> <b>fun</b> <a href="#0x1_ValidatorConfig_publish">publish</a>(account: &signer, lr_account: &signer, human_name: vector&lt;u8&gt;)
@@ -283,6 +240,7 @@ Returns true if a ValidatorConfig resource exists under addr.
 ## Function `set_operator`
 
 Sets a new operator account, preserving the old config.
+Note: Access control.  No one but the owner of the account may change .operator_account
 
 
 <pre><code><b>public</b> <b>fun</b> <a href="#0x1_ValidatorConfig_set_operator">set_operator</a>(account: &signer, operator_account: address)
@@ -296,7 +254,9 @@ Sets a new operator account, preserving the old config.
 
 <pre><code><b>public</b> <b>fun</b> <a href="#0x1_ValidatorConfig_set_operator">set_operator</a>(account: &signer, operator_account: address) <b>acquires</b> <a href="#0x1_ValidatorConfig">ValidatorConfig</a> {
     <a href="Roles.md#0x1_Roles_assert_validator">Roles::assert_validator</a>(account);
-    // Role check is not necessary since the role is checked when the config <b>resource</b> is published.
+    // Check for validator role is not necessary since the role is checked when the config
+    // <b>resource</b> is published.
+    // TODO (dd): Probably need <b>to</b> prove an <b>invariant</b> about role.
     <b>assert</b>(
         <a href="ValidatorOperatorConfig.md#0x1_ValidatorOperatorConfig_has_validator_operator_config">ValidatorOperatorConfig::has_validator_operator_config</a>(operator_account),
         <a href="Errors.md#0x1_Errors_invalid_argument">Errors::invalid_argument</a>(ENOT_A_VALIDATOR_OPERATOR)
@@ -350,7 +310,7 @@ NB! Once the config is set, it can not go to Option::none - this is crucial for 
 of the LibraSystem's code
 
 
-<pre><code><b>public</b> <b>fun</b> <a href="#0x1_ValidatorConfig_set_config">set_config</a>(signer: &signer, validator_account: address, consensus_pubkey: vector&lt;u8&gt;, validator_network_identity_pubkey: vector&lt;u8&gt;, validator_network_address: vector&lt;u8&gt;, full_node_network_identity_pubkey: vector&lt;u8&gt;, full_node_network_address: vector&lt;u8&gt;)
+<pre><code><b>public</b> <b>fun</b> <a href="#0x1_ValidatorConfig_set_config">set_config</a>(signer: &signer, validator_account: address, consensus_pubkey: vector&lt;u8&gt;, validator_network_addresses: vector&lt;u8&gt;, fullnode_network_addresses: vector&lt;u8&gt;)
 </code></pre>
 
 
@@ -363,10 +323,8 @@ of the LibraSystem's code
     signer: &signer,
     validator_account: address,
     consensus_pubkey: vector&lt;u8&gt;,
-    validator_network_identity_pubkey: vector&lt;u8&gt;,
-    validator_network_address: vector&lt;u8&gt;,
-    full_node_network_identity_pubkey: vector&lt;u8&gt;,
-    full_node_network_address: vector&lt;u8&gt;,
+    validator_network_addresses: vector&lt;u8&gt;,
+    fullnode_network_addresses: vector&lt;u8&gt;,
 ) <b>acquires</b> <a href="#0x1_ValidatorConfig">ValidatorConfig</a> {
     <b>assert</b>(
         <a href="Signer.md#0x1_Signer_address_of">Signer::address_of</a>(signer) == <a href="#0x1_ValidatorConfig_get_operator">get_operator</a>(validator_account),
@@ -381,10 +339,8 @@ of the LibraSystem's code
     <b>let</b> t_ref = borrow_global_mut&lt;<a href="#0x1_ValidatorConfig">ValidatorConfig</a>&gt;(validator_account);
     t_ref.config = <a href="Option.md#0x1_Option_some">Option::some</a>(<a href="#0x1_ValidatorConfig_Config">Config</a> {
         consensus_pubkey,
-        validator_network_identity_pubkey,
-        validator_network_address,
-        full_node_network_identity_pubkey,
-        full_node_network_address,
+        validator_network_addresses,
+        fullnode_network_addresses,
     });
 }
 </code></pre>
@@ -533,41 +489,15 @@ Never aborts
 
 </details>
 
-<a name="0x1_ValidatorConfig_get_validator_network_identity_pubkey"></a>
+<a name="0x1_ValidatorConfig_get_validator_network_addresses"></a>
 
-## Function `get_validator_network_identity_pubkey`
-
-Get validator's network identity pubkey from Config
-Never aborts
-
-
-<pre><code><b>public</b> <b>fun</b> <a href="#0x1_ValidatorConfig_get_validator_network_identity_pubkey">get_validator_network_identity_pubkey</a>(config_ref: &<a href="#0x1_ValidatorConfig_Config">ValidatorConfig::Config</a>): &vector&lt;u8&gt;
-</code></pre>
-
-
-
-<details>
-<summary>Implementation</summary>
-
-
-<pre><code><b>public</b> <b>fun</b> <a href="#0x1_ValidatorConfig_get_validator_network_identity_pubkey">get_validator_network_identity_pubkey</a>(config_ref: &<a href="#0x1_ValidatorConfig_Config">Config</a>): &vector&lt;u8&gt; {
-    &config_ref.validator_network_identity_pubkey
-}
-</code></pre>
-
-
-
-</details>
-
-<a name="0x1_ValidatorConfig_get_validator_network_address"></a>
-
-## Function `get_validator_network_address`
+## Function `get_validator_network_addresses`
 
 Get validator's network address from Config
 Never aborts
 
 
-<pre><code><b>public</b> <b>fun</b> <a href="#0x1_ValidatorConfig_get_validator_network_address">get_validator_network_address</a>(config_ref: &<a href="#0x1_ValidatorConfig_Config">ValidatorConfig::Config</a>): &vector&lt;u8&gt;
+<pre><code><b>public</b> <b>fun</b> <a href="#0x1_ValidatorConfig_get_validator_network_addresses">get_validator_network_addresses</a>(config_ref: &<a href="#0x1_ValidatorConfig_Config">ValidatorConfig::Config</a>): &vector&lt;u8&gt;
 </code></pre>
 
 
@@ -576,8 +506,8 @@ Never aborts
 <summary>Implementation</summary>
 
 
-<pre><code><b>public</b> <b>fun</b> <a href="#0x1_ValidatorConfig_get_validator_network_address">get_validator_network_address</a>(config_ref: &<a href="#0x1_ValidatorConfig_Config">Config</a>): &vector&lt;u8&gt; {
-    &config_ref.validator_network_address
+<pre><code><b>public</b> <b>fun</b> <a href="#0x1_ValidatorConfig_get_validator_network_addresses">get_validator_network_addresses</a>(config_ref: &<a href="#0x1_ValidatorConfig_Config">Config</a>): &vector&lt;u8&gt; {
+    &config_ref.validator_network_addresses
 }
 </code></pre>
 
@@ -633,16 +563,26 @@ Describes abort if ValidatorConfig does not exist.
 
 
 
+Must abort if the signer does not have the Validator role [B24].
+
 
 <pre><code><b>include</b> <a href="Roles.md#0x1_Roles_AbortsIfNotValidator">Roles::AbortsIfNotValidator</a>;
 <b>aborts_if</b> !<a href="ValidatorOperatorConfig.md#0x1_ValidatorOperatorConfig_has_validator_operator_config">ValidatorOperatorConfig::has_validator_operator_config</a>(operator_account)
     with Errors::INVALID_ARGUMENT;
-<a name="0x1_ValidatorConfig_sender$18"></a>
+<a name="0x1_ValidatorConfig_sender$17"></a>
 <b>let</b> sender = <a href="Signer.md#0x1_Signer_spec_address_of">Signer::spec_address_of</a>(account);
 <b>include</b> <a href="#0x1_ValidatorConfig_AbortsIfNoValidatorConfig">AbortsIfNoValidatorConfig</a>{addr: sender};
 <b>aborts_if</b> !<a href="ValidatorOperatorConfig.md#0x1_ValidatorOperatorConfig_has_validator_operator_config">ValidatorOperatorConfig::has_validator_operator_config</a>(operator_account) with Errors::NOT_PUBLISHED;
 <b>ensures</b> <a href="#0x1_ValidatorConfig_spec_has_operator">spec_has_operator</a>(sender);
 <b>ensures</b> <a href="#0x1_ValidatorConfig_spec_get_operator">spec_get_operator</a>(sender) == operator_account;
+</code></pre>
+
+
+The signer can only change its own operator account [B24].
+
+
+<pre><code><b>ensures</b> forall addr: address where addr != sender:
+    <b>global</b>&lt;<a href="#0x1_ValidatorConfig">ValidatorConfig</a>&gt;(addr).operator_account == <b>old</b>(<b>global</b>&lt;<a href="#0x1_ValidatorConfig">ValidatorConfig</a>&gt;(addr).operator_account);
 </code></pre>
 
 
@@ -699,13 +639,23 @@ Returns the human name of the validator
 
 
 
+Must abort if the signer does not have the Validator role [B24].
+
 
 <pre><code><b>include</b> <a href="Roles.md#0x1_Roles_AbortsIfNotValidator">Roles::AbortsIfNotValidator</a>;
-<a name="0x1_ValidatorConfig_sender$19"></a>
+<a name="0x1_ValidatorConfig_sender$18"></a>
 <b>let</b> sender = <a href="Signer.md#0x1_Signer_spec_address_of">Signer::spec_address_of</a>(account);
 <b>include</b> <a href="#0x1_ValidatorConfig_AbortsIfNoValidatorConfig">AbortsIfNoValidatorConfig</a>{addr: sender};
 <b>ensures</b> !<a href="#0x1_ValidatorConfig_spec_has_operator">spec_has_operator</a>(<a href="Signer.md#0x1_Signer_spec_address_of">Signer::spec_address_of</a>(account));
 <b>ensures</b> <a href="#0x1_ValidatorConfig_spec_get_operator">spec_get_operator</a>(sender) == sender;
+</code></pre>
+
+
+The signer can only change its own operator account [B24].
+
+
+<pre><code><b>ensures</b> forall addr: address where addr != sender:
+    <b>global</b>&lt;<a href="#0x1_ValidatorConfig">ValidatorConfig</a>&gt;(addr).operator_account == <b>old</b>(<b>global</b>&lt;<a href="#0x1_ValidatorConfig">ValidatorConfig</a>&gt;(addr).operator_account);
 </code></pre>
 
 
@@ -715,13 +665,13 @@ Returns the human name of the validator
 ### Function `set_config`
 
 
-<pre><code><b>public</b> <b>fun</b> <a href="#0x1_ValidatorConfig_set_config">set_config</a>(signer: &signer, validator_account: address, consensus_pubkey: vector&lt;u8&gt;, validator_network_identity_pubkey: vector&lt;u8&gt;, validator_network_address: vector&lt;u8&gt;, full_node_network_identity_pubkey: vector&lt;u8&gt;, full_node_network_address: vector&lt;u8&gt;)
+<pre><code><b>public</b> <b>fun</b> <a href="#0x1_ValidatorConfig_set_config">set_config</a>(signer: &signer, validator_account: address, consensus_pubkey: vector&lt;u8&gt;, validator_network_addresses: vector&lt;u8&gt;, fullnode_network_addresses: vector&lt;u8&gt;)
 </code></pre>
 
 
 
 
-<a name="0x1_ValidatorConfig_sender$20"></a>
+<a name="0x1_ValidatorConfig_sender$19"></a>
 
 
 <pre><code><b>let</b> sender = <a href="Signer.md#0x1_Signer_spec_address_of">Signer::spec_address_of</a>(signer);
@@ -779,6 +729,7 @@ Returns true if addr is a valid validator.
 
 ### Validator stays valid once it becomes valid
 
+See comment on set_config -- LibraSystem depends on this.
 
 
 <pre><code><b>invariant</b> <b>update</b> [<b>global</b>]
@@ -856,4 +807,29 @@ Returns the config published under addr.
 
 
 <pre><code>pragma verify = <b>true</b>, aborts_if_is_strict = <b>true</b>;
+</code></pre>
+
+
+Specifies that only set_operator and remove_operator may change the operator for a
+particular (validator owner) address. Those two functions have a &signer argument for
+the validator account, so we know that the change has been authorized by the validator
+owner via signing the transaction. But other functions in this module could also
+change the operator_account field of ValidatorConfig, and this shows that they do not.
+
+
+<a name="0x1_ValidatorConfig_OperatorRemainsSame"></a>
+
+
+<pre><code><b>schema</b> <a href="#0x1_ValidatorConfig_OperatorRemainsSame">OperatorRemainsSame</a> {
+    <b>ensures</b> forall addr1: address where <b>old</b>(exists&lt;<a href="#0x1_ValidatorConfig">ValidatorConfig</a>&gt;(addr1)):
+        <b>global</b>&lt;<a href="#0x1_ValidatorConfig">ValidatorConfig</a>&gt;(addr1).operator_account == <b>old</b>(<b>global</b>&lt;<a href="#0x1_ValidatorConfig">ValidatorConfig</a>&gt;(addr1).operator_account);
+}
+</code></pre>
+
+
+
+set_operator, remove_operator can change the operator account [B24].
+
+
+<pre><code><b>apply</b> <a href="#0x1_ValidatorConfig_OperatorRemainsSame">OperatorRemainsSame</a> <b>to</b> * <b>except</b> set_operator, remove_operator;
 </code></pre>

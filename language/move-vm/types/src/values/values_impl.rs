@@ -6,8 +6,8 @@ use libra_types::vm_status::{sub_status::NFE_VECTOR_ERROR_BASE, StatusCode};
 use move_core_types::{
     account_address::AccountAddress,
     gas_schedule::{
-        words_in, AbstractMemorySize, GasAlgebra, GasCarrier, GasUnits, CONST_SIZE, REFERENCE_SIZE,
-        STRUCT_SIZE,
+        AbstractMemorySize, GasAlgebra, GasCarrier, GasUnits, CONST_SIZE, MIN_EXISTS_DATA_SIZE,
+        REFERENCE_SIZE, STRUCT_SIZE,
     },
     value::{MoveKind, MoveKindInfo, MoveStructLayout, MoveTypeLayout},
 };
@@ -201,6 +201,16 @@ enum GlobalValueImpl {
 /// hold a resource.
 #[derive(Debug)]
 pub struct GlobalValue(GlobalValueImpl);
+
+/// Simple enum for the change state of a GlobalValue, used by `into_effect`.
+pub enum GlobalValueEffect<T> {
+    /// There was no value, or the value was not changed
+    None,
+    /// The value was removed
+    Deleted,
+    /// Updated with a new value
+    Changed(T),
+}
 
 /***************************************************************************************
  *
@@ -1790,7 +1800,7 @@ fn check_elem_layout(
     ty: &Type,
     v: &Container,
 ) -> PartialVMResult<()> {
-    let is_resource = context.is_resource(ty)?;
+    let is_resource = context.is_resource(ty);
 
     match (ty, v) {
         (Type::U8, Container::VecU8(_))
@@ -2006,7 +2016,7 @@ impl Vector {
             )))),
 
             Type::Vector(_) | Type::Struct(_) | Type::StructInstantiation(_, _) => {
-                if context.is_resource(type_param)? {
+                if context.is_resource(type_param) {
                     Value(ValueImpl::Container(Container::VecR(Rc::new(
                         RefCell::new(vec![]),
                     ))))
@@ -2090,13 +2100,13 @@ impl Container {
 
 impl ContainerRef {
     fn size(&self) -> AbstractMemorySize<GasCarrier> {
-        words_in(REFERENCE_SIZE)
+        REFERENCE_SIZE
     }
 }
 
 impl IndexedRef {
     fn size(&self) -> AbstractMemorySize<GasCarrier> {
-        words_in(REFERENCE_SIZE)
+        REFERENCE_SIZE
     }
 }
 
@@ -2153,10 +2163,8 @@ impl GlobalValue {
         // REVIEW: this doesn't seem quite right. Consider changing it to
         // a constant positive size or better, something proportional to the size of the value.
         match &self.0 {
-            GlobalValueImpl::Fresh { .. } | GlobalValueImpl::Cached { .. } => {
-                words_in(REFERENCE_SIZE)
-            }
-            GlobalValueImpl::Deleted | GlobalValueImpl::None => AbstractMemorySize::new(0),
+            GlobalValueImpl::Fresh { .. } | GlobalValueImpl::Cached { .. } => REFERENCE_SIZE,
+            GlobalValueImpl::Deleted | GlobalValueImpl::None => MIN_EXISTS_DATA_SIZE,
         }
     }
 }
@@ -2268,16 +2276,18 @@ impl GlobalValueImpl {
         }
     }
 
-    fn into_effect(self) -> PartialVMResult<Option<Option<ValueImpl>>> {
+    fn into_effect(self) -> PartialVMResult<GlobalValueEffect<ValueImpl>> {
         Ok(match self {
-            Self::None => None,
-            Self::Deleted => Some(None),
-            Self::Fresh { fields } => Some(Some(ValueImpl::Container(Container::StructR(fields)))),
+            Self::None => GlobalValueEffect::None,
+            Self::Deleted => GlobalValueEffect::Deleted,
+            Self::Fresh { fields } => {
+                GlobalValueEffect::Changed(ValueImpl::Container(Container::StructR(fields)))
+            }
             Self::Cached { fields, status } => match &*status.borrow() {
                 GlobalDataStatus::Dirty => {
-                    Some(Some(ValueImpl::Container(Container::StructR(fields))))
+                    GlobalValueEffect::Changed(ValueImpl::Container(Container::StructR(fields)))
                 }
-                GlobalDataStatus::Clean => None,
+                GlobalDataStatus::Clean => GlobalValueEffect::None,
             },
         })
     }
@@ -2311,10 +2321,12 @@ impl GlobalValue {
         self.0.exists()
     }
 
-    pub fn into_effect(self) -> PartialVMResult<Option<Option<Value>>> {
-        self.0
-            .into_effect()
-            .map(|opt| opt.map(|opt| opt.map(Value)))
+    pub fn into_effect(self) -> PartialVMResult<GlobalValueEffect<Value>> {
+        Ok(match self.0.into_effect()? {
+            GlobalValueEffect::None => GlobalValueEffect::None,
+            GlobalValueEffect::Deleted => GlobalValueEffect::Deleted,
+            GlobalValueEffect::Changed(v) => GlobalValueEffect::Changed(Value(v)),
+        })
     }
 }
 
@@ -2606,9 +2618,8 @@ impl Value {
         blob: &[u8],
         kind_info: &MoveKindInfo,
         layout: &MoveTypeLayout,
-    ) -> PartialVMResult<Value> {
-        lcs::from_bytes_seed(SeedWrapper { kind_info, layout }, blob)
-            .map_err(|e| PartialVMError::new(StatusCode::INVALID_DATA).with_message(e.to_string()))
+    ) -> Option<Value> {
+        lcs::from_bytes_seed(SeedWrapper { kind_info, layout }, blob).ok()
     }
 
     pub fn simple_serialize(&self, layout: &MoveTypeLayout) -> Option<Vec<u8>> {
@@ -2626,7 +2637,7 @@ impl Struct {
         is_resource: bool,
         field_kinds: &[MoveKindInfo],
         layout: &MoveStructLayout,
-    ) -> PartialVMResult<Struct> {
+    ) -> Option<Struct> {
         lcs::from_bytes_seed(
             SeedWrapper {
                 kind_info: (MoveKind::from_bool(is_resource), field_kinds),
@@ -2634,7 +2645,7 @@ impl Struct {
             },
             blob,
         )
-        .map_err(|e| PartialVMError::new(StatusCode::INVALID_DATA).with_message(e.to_string()))
+        .ok()
     }
 
     pub fn simple_serialize(&self, layout: &MoveStructLayout) -> Option<Vec<u8>> {
@@ -2957,7 +2968,7 @@ impl Value {
 
     pub fn deserialize_constant(constant: &Constant) -> Option<Value> {
         let (kind_info, layout) = Self::constant_sig_token_to_layout(&constant.type_)?;
-        Value::simple_deserialize(&constant.data, &kind_info, &layout).ok()
+        Value::simple_deserialize(&constant.data, &kind_info, &layout)
     }
 }
 

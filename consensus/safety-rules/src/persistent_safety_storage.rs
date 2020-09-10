@@ -3,24 +3,15 @@
 
 use crate::{
     counters,
-    logging::{self, LogEntry, LogEvent, LogField},
+    logging::{self, LogEntry, LogEvent},
+    Error,
 };
-use anyhow::Result;
-use consensus_types::{
-    common::{Author, Round},
-    vote::Vote,
-};
+use consensus_types::{common::Author, safety_data::SafetyData};
 use libra_crypto::ed25519::{Ed25519PrivateKey, Ed25519PublicKey};
-use libra_global_constants::{
-    CONSENSUS_KEY, EPOCH, EXECUTION_KEY, LAST_VOTE, LAST_VOTED_ROUND, OWNER_ACCOUNT,
-    PREFERRED_ROUND, WAYPOINT,
-};
+use libra_global_constants::{CONSENSUS_KEY, EXECUTION_KEY, OWNER_ACCOUNT, SAFETY_DATA, WAYPOINT};
 use libra_logger::prelude::*;
-use libra_secure_storage::{
-    CachedStorage, CryptoStorage, InMemoryStorage, KVStorage, Storage, Value,
-};
+use libra_secure_storage::{CryptoStorage, InMemoryStorage, KVStorage, Storage};
 use libra_types::waypoint::Waypoint;
-use std::str::FromStr;
 
 /// SafetyRules needs an abstract storage interface to act as a common utility for storing
 /// persistent data to local disk, cloud, secrets managers, or even memory (for tests)
@@ -72,7 +63,7 @@ impl PersistentSafetyStorage {
         consensus_private_key: Ed25519PrivateKey,
         execution_private_key: Ed25519PrivateKey,
         waypoint: Waypoint,
-    ) -> Result<()> {
+    ) -> Result<(), Error> {
         let result = internal_store.import_private_key(CONSENSUS_KEY, consensus_private_key);
         // Attempting to re-initialize existing storage. This can happen in environments like
         // cluster test. Rather than be rigid here, leave it up to the developer to detect
@@ -85,29 +76,10 @@ impl PersistentSafetyStorage {
         }
 
         internal_store.import_private_key(EXECUTION_KEY, execution_private_key)?;
-        internal_store.set(EPOCH, Value::U64(1))?;
-        internal_store.set(LAST_VOTED_ROUND, Value::U64(0))?;
-        internal_store.set(OWNER_ACCOUNT, Value::String(author.to_string()))?;
-        internal_store.set(PREFERRED_ROUND, Value::U64(0))?;
-        internal_store.set(WAYPOINT, Value::String(waypoint.to_string()))?;
-        internal_store.set(
-            LAST_VOTE,
-            Value::Bytes(lcs::to_bytes::<Option<Vote>>(&None)?),
-        )?;
+        internal_store.set(SAFETY_DATA, SafetyData::new(1, 0, 0, None))?;
+        internal_store.set(OWNER_ACCOUNT, author)?;
+        internal_store.set(WAYPOINT, waypoint)?;
         Ok(())
-    }
-
-    pub fn into_cached(self) -> PersistentSafetyStorage {
-        // will be an idempotent operation if the underlying storage is already a CachedStorage
-        if let Storage::CachedStorage(cached_storage) = self.internal_store {
-            PersistentSafetyStorage {
-                internal_store: Storage::CachedStorage(cached_storage),
-            }
-        } else {
-            PersistentSafetyStorage {
-                internal_store: Storage::CachedStorage(CachedStorage::new(self.internal_store)),
-            }
-        }
     }
 
     /// Use this to instantiate a PersistentStorage with an existing data store. This is intended
@@ -116,106 +88,47 @@ impl PersistentSafetyStorage {
         Self { internal_store }
     }
 
-    pub fn author(&self) -> Result<Author> {
-        let res = self.internal_store.get(OWNER_ACCOUNT)?;
-        let res = res.value.string()?;
-        std::str::FromStr::from_str(&res)
+    pub fn author(&self) -> Result<Author, Error> {
+        Ok(self.internal_store.get(OWNER_ACCOUNT).map(|v| v.value)?)
     }
 
     pub fn consensus_key_for_version(
         &self,
         version: Ed25519PublicKey,
-    ) -> Result<Ed25519PrivateKey> {
-        self.internal_store
-            .export_private_key_for_version(CONSENSUS_KEY, version)
-            .map_err(|e| e.into())
+    ) -> Result<Ed25519PrivateKey, Error> {
+        Ok(self
+            .internal_store
+            .export_private_key_for_version(CONSENSUS_KEY, version)?)
     }
 
-    pub fn execution_public_key(&self) -> Result<Ed25519PublicKey> {
+    pub fn execution_public_key(&self) -> Result<Ed25519PublicKey, Error> {
         Ok(self
             .internal_store
             .get_public_key(EXECUTION_KEY)
             .map(|r| r.public_key)?)
     }
 
-    pub fn epoch(&self) -> Result<u64> {
-        Ok(self.internal_store.get(EPOCH).and_then(|r| r.value.u64())?)
+    pub fn safety_data(&self) -> Result<SafetyData, Error> {
+        Ok(self.internal_store.get(SAFETY_DATA).map(|v| v.value)?)
     }
 
-    pub fn set_epoch(&mut self, epoch: u64) -> Result<()> {
-        self.internal_store.set(EPOCH, Value::U64(epoch))?;
-        counters::set_state("epoch", epoch as i64);
-        send_struct_log!(logging::safety_log(LogEntry::Epoch, LogEvent::Update)
-            .data(LogField::Message.as_str(), epoch));
+    pub fn set_safety_data(&mut self, data: SafetyData) -> Result<(), Error> {
+        counters::set_state("epoch", data.epoch as i64);
+        counters::set_state("last_voted_round", data.last_voted_round as i64);
+        counters::set_state("preferred_round", data.preferred_round as i64);
+        self.internal_store.set(SAFETY_DATA, data)?;
         Ok(())
     }
 
-    pub fn last_vote(&self) -> Result<Option<Vote>> {
-        let result = lcs::from_bytes(
-            &self
-                .internal_store
-                .get(LAST_VOTE)
-                .and_then(|r| r.value.bytes())?,
-        )?;
-        Ok(result)
+    pub fn waypoint(&self) -> Result<Waypoint, Error> {
+        Ok(self.internal_store.get(WAYPOINT).map(|v| v.value)?)
     }
 
-    pub fn set_last_vote(&mut self, vote: Option<Vote>) -> Result<()> {
-        self.internal_store
-            .set(LAST_VOTE, Value::Bytes(lcs::to_bytes(&vote)?))?;
-        Ok(())
-    }
-
-    pub fn last_voted_round(&self) -> Result<Round> {
-        Ok(self
-            .internal_store
-            .get(LAST_VOTED_ROUND)
-            .and_then(|r| r.value.u64())?)
-    }
-
-    pub fn set_last_voted_round(&mut self, last_voted_round: Round) -> Result<()> {
-        self.internal_store
-            .set(LAST_VOTED_ROUND, Value::U64(last_voted_round))?;
-        counters::set_state("last_voted_round", last_voted_round as i64);
-        send_struct_log!(
-            logging::safety_log(LogEntry::LastVotedRound, LogEvent::Update)
-                .data(LogField::Message.as_str(), last_voted_round)
+    pub fn set_waypoint(&mut self, waypoint: &Waypoint) -> Result<(), Error> {
+        self.internal_store.set(WAYPOINT, waypoint)?;
+        info!(
+            logging::SafetyLogSchema::new(LogEntry::Waypoint, LogEvent::Update).waypoint(*waypoint)
         );
-        Ok(())
-    }
-
-    pub fn preferred_round(&self) -> Result<Round> {
-        Ok(self
-            .internal_store
-            .get(PREFERRED_ROUND)
-            .and_then(|r| r.value.u64())?)
-    }
-
-    pub fn set_preferred_round(&mut self, preferred_round: Round) -> Result<()> {
-        self.internal_store
-            .set(PREFERRED_ROUND, Value::U64(preferred_round))?;
-        counters::set_state("preferred_round", preferred_round as i64);
-        send_struct_log!(
-            logging::safety_log(LogEntry::PreferredRound, LogEvent::Update)
-                .data(LogField::Message.as_str(), preferred_round)
-        );
-        Ok(())
-    }
-
-    pub fn waypoint(&self) -> Result<Waypoint> {
-        let waypoint = self
-            .internal_store
-            .get(WAYPOINT)
-            .and_then(|r| r.value.string())?;
-        Waypoint::from_str(&waypoint)
-            .map_err(|e| anyhow::anyhow!("Unable to parse waypoint: {}", e))
-    }
-
-    pub fn set_waypoint(&mut self, waypoint: &Waypoint) -> Result<()> {
-        self.internal_store
-            .set(WAYPOINT, Value::String(waypoint.to_string()))?;
-        send_struct_log!(logging::safety_log(LogEntry::Waypoint, LogEvent::Update)
-            .data(LogField::Message.as_str(), waypoint));
         Ok(())
     }
 
@@ -238,14 +151,16 @@ mod tests {
             private_key,
             Ed25519PrivateKey::generate_for_testing(),
         );
-        assert_eq!(storage.epoch().unwrap(), 1);
-        assert_eq!(storage.last_voted_round().unwrap(), 0);
-        assert_eq!(storage.preferred_round().unwrap(), 0);
-        storage.set_epoch(9).unwrap();
-        storage.set_last_voted_round(8).unwrap();
-        storage.set_preferred_round(1).unwrap();
-        assert_eq!(storage.epoch().unwrap(), 9);
-        assert_eq!(storage.last_voted_round().unwrap(), 8);
-        assert_eq!(storage.preferred_round().unwrap(), 1);
+        let safety_data = storage.safety_data().unwrap();
+        assert_eq!(safety_data.epoch, 1);
+        assert_eq!(safety_data.last_voted_round, 0);
+        assert_eq!(safety_data.preferred_round, 0);
+        storage
+            .set_safety_data(SafetyData::new(9, 8, 1, None))
+            .unwrap();
+        let safety_data = storage.safety_data().unwrap();
+        assert_eq!(safety_data.epoch, 9);
+        assert_eq!(safety_data.last_voted_round, 8);
+        assert_eq!(safety_data.preferred_round, 1);
     }
 }

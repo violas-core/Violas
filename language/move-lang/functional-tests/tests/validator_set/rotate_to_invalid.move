@@ -5,7 +5,7 @@
 //! sender: libraroot
 //! args: 0, {{alice}}, {{alice::auth_key}}, b"alice"
 stdlib_script::create_validator_operator_account
-// check: EXECUTED
+// check: "Keep(EXECUTED)"
 
 //! new-transaction
 //! sender: bob
@@ -16,8 +16,7 @@ script {
         ValidatorConfig::set_operator(account, {{alice}});
     }
 }
-
-// check: EXECUTED
+// check: "Keep(EXECUTED)"
 
 //! new-transaction
 //! sender: alice
@@ -27,12 +26,10 @@ script {
         // bob rotates his public key to invalid key
         ValidatorConfig::set_config(account, {{bob}},
                                     x"0000000000000000000000000000000000000000000000000000000000000000",
-                                    x"", x"", x"", x"");
+                                    x"", x"");
     }
 }
-
-// check: ABORTED
-// check: 3
+// check: "Keep(ABORTED { code: 519,"
 
 //! new-transaction
 //! sender: alice
@@ -42,8 +39,7 @@ script {
         // bob rotates his public key to a valid key
         ValidatorConfig::set_config(account, {{bob}},
                                     x"3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
-                                    x"", x"", x"", x"");
+                                    x"", x"");
     }
 }
-
-// check: EXECUTED
+// check: "Keep(EXECUTED)"

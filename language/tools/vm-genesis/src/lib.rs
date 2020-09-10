@@ -11,13 +11,10 @@ use compiled_stdlib::{stdlib_modules, transaction_scripts::StdlibScript, StdLibO
 use libra_config::config::{NodeConfig, HANDSHAKE_VERSION};
 use libra_crypto::{
     ed25519::{Ed25519PrivateKey, Ed25519PublicKey},
-    PrivateKey, Uniform, ValidCryptoMaterial,
+    PrivateKey, Uniform,
 };
-use libra_network_address::{
-    encrypted::{
-        RawEncNetworkAddress, TEST_SHARED_VAL_NETADDR_KEY, TEST_SHARED_VAL_NETADDR_KEY_VERSION,
-    },
-    RawNetworkAddress,
+use libra_network_address::encrypted::{
+    TEST_SHARED_VAL_NETADDR_KEY, TEST_SHARED_VAL_NETADDR_KEY_VERSION,
 };
 use libra_types::{
     account_address, account_config,
@@ -43,7 +40,7 @@ use move_vm_types::{
 };
 use once_cell::sync::Lazy;
 use rand::prelude::*;
-use std::{collections::btree_map::BTreeMap, convert::TryFrom};
+use std::collections::btree_map::BTreeMap;
 use transaction_builder::encode_create_designated_dealer_script;
 use vm::{file_format::SignatureToken, CompiledModule};
 
@@ -61,11 +58,13 @@ pub static GENESIS_KEYPAIR: Lazy<(Ed25519PrivateKey, Ed25519PublicKey)> = Lazy::
 
 pub static ZERO_COST_SCHEDULE: Lazy<CostTable> = Lazy::new(zero_cost_schedule);
 
-pub type OperatorAssignment = (Ed25519PublicKey, Script); // Assigns an operator to each owner
-pub type OperatorRegistration = (Ed25519PublicKey, Script); // Registers a validator config
+pub type Name = Vec<u8>;
+pub type OperatorAssignment = (Ed25519PublicKey, Name, Script); // Assigns an operator to each owner
+pub type OperatorRegistration = (Ed25519PublicKey, Name, Script); // Registers a validator config
 
 pub fn encode_genesis_transaction(
-    public_key: Ed25519PublicKey,
+    libra_root_key: Ed25519PublicKey,
+    treasury_compliance_key: Ed25519PublicKey,
     operator_assignments: &[OperatorAssignment],
     operator_registrations: &[OperatorRegistration],
     vm_publishing_option: Option<VMPublishingOption>,
@@ -73,7 +72,8 @@ pub fn encode_genesis_transaction(
 ) -> Transaction {
     Transaction::GenesisTransaction(WriteSetPayload::Direct(
         encode_genesis_change_set(
-            &public_key,
+            &libra_root_key,
+            &treasury_compliance_key,
             operator_assignments,
             operator_registrations,
             stdlib_modules(StdLibOptions::Compiled), // Must use compiled stdlib,
@@ -96,7 +96,8 @@ fn merge_txn_effects(
 }
 
 pub fn encode_genesis_change_set(
-    public_key: &Ed25519PublicKey,
+    libra_root_key: &Ed25519PublicKey,
+    treasury_compliance_key: &Ed25519PublicKey,
     operator_assignments: &[OperatorAssignment],
     operator_registrations: &[OperatorRegistration],
     stdlib_modules: &[CompiledModule],
@@ -123,7 +124,8 @@ pub fn encode_genesis_change_set(
 
     create_and_initialize_main_accounts(
         &mut session,
-        &public_key,
+        &libra_root_key,
+        &treasury_compliance_key,
         vm_publishing_option,
         &lbr_ty,
         chain_id,
@@ -137,7 +139,7 @@ pub fn encode_genesis_change_set(
     reconfigure(&mut session);
 
     // XXX/TODO: for testnet only
-    create_and_initialize_testnet_minting(&mut session, &public_key);
+    create_and_initialize_testnet_minting(&mut session, &treasury_compliance_key);
 
     let effects_1 = session.finish().unwrap();
 
@@ -220,12 +222,14 @@ fn exec_script(session: &mut Session<StateViewCache>, sender: AccountAddress, sc
 /// Create and initialize Association and Core Code accounts.
 fn create_and_initialize_main_accounts(
     session: &mut Session<StateViewCache>,
-    public_key: &Ed25519PublicKey,
+    libra_root_key: &Ed25519PublicKey,
+    treasury_compliance_key: &Ed25519PublicKey,
     publishing_option: VMPublishingOption,
     lbr_ty: &TypeTag,
     chain_id: ChainId,
 ) {
-    let genesis_auth_key = AuthenticationKey::ed25519(public_key);
+    let libra_root_auth_key = AuthenticationKey::ed25519(libra_root_key);
+    let treasury_compliance_auth_key = AuthenticationKey::ed25519(treasury_compliance_key);
 
     let root_libra_root_address = account_config::libra_root_address();
     let tc_account_address = account_config::treasury_compliance_account_address();
@@ -248,8 +252,9 @@ fn create_and_initialize_main_accounts(
         vec![
             Value::transaction_argument_signer_reference(root_libra_root_address),
             Value::transaction_argument_signer_reference(tc_account_address),
+            Value::vector_u8(libra_root_auth_key.to_vec()),
             Value::address(tc_account_address),
-            Value::vector_u8(genesis_auth_key.to_vec()),
+            Value::vector_u8(treasury_compliance_auth_key.to_vec()),
             initial_allow_list,
             Value::bool(publishing_option.is_open_module),
             Value::vector_u8(INITIAL_GAS_SCHEDULE.0.clone()),
@@ -391,20 +396,20 @@ fn create_and_initialize_owners_operators(
     let libra_root_address = account_config::libra_root_address();
 
     // Create accounts for each validator owner
-    for (owner_key, _) in operator_assignments {
+    for (owner_key, owner_name, _) in operator_assignments {
         let owner_auth_key = AuthenticationKey::ed25519(&owner_key);
         let owner_account = account_address::from_public_key(owner_key);
         let create_owner_script = transaction_builder::encode_create_validator_account_script(
             0,
             owner_account,
             owner_auth_key.prefix().to_vec(),
-            vec![],
+            owner_name.clone(),
         );
         exec_script(session, libra_root_address, &create_owner_script);
     }
 
     // Create accounts for each validator operator
-    for (operator_key, _) in operator_registrations {
+    for (operator_key, operator_name, _) in operator_registrations {
         let operator_auth_key = AuthenticationKey::ed25519(&operator_key);
         let operator_account = account_address::from_public_key(operator_key);
         let create_operator_script =
@@ -412,25 +417,25 @@ fn create_and_initialize_owners_operators(
                 0,
                 operator_account,
                 operator_auth_key.prefix().to_vec(),
-                vec![],
+                operator_name.clone(),
             );
         exec_script(session, libra_root_address, &create_operator_script);
     }
 
     // Set the validator operator for each validator owner
-    for (owner_key, assignment) in operator_assignments {
+    for (owner_key, _, assignment) in operator_assignments {
         let owner_account = account_address::from_public_key(owner_key);
         exec_script(session, owner_account, assignment);
     }
 
     // Set the validator config for each validator
-    for (operator_key, registration) in operator_registrations {
+    for (operator_key, _, registration) in operator_registrations {
         let operator_account = account_address::from_public_key(operator_key);
         exec_script(session, operator_account, registration);
     }
 
     // Add each validator to the validator set
-    for (owner_key, _) in operator_assignments {
+    for (owner_key, _, _) in operator_assignments {
         let owner_account = account_address::from_public_key(owner_key);
         exec_function(
             session,
@@ -522,6 +527,7 @@ pub fn generate_genesis_change_set_for_testing(stdlib_options: StdLibOptions) ->
 
     encode_genesis_change_set(
         &GENESIS_KEYPAIR.1,
+        &GENESIS_KEYPAIR.1,
         &operator_assignments(&swarm.nodes),
         &operator_registrations(&swarm.nodes),
         stdlib_modules,
@@ -537,6 +543,7 @@ pub fn generate_genesis_type_mapping() -> BTreeMap<Vec<u8>, StructTag> {
     let swarm = libra_config::generator::validator_swarm_for_testing(10);
 
     encode_genesis_change_set(
+        &GENESIS_KEYPAIR.1,
         &GENESIS_KEYPAIR.1,
         &operator_assignments(&swarm.nodes),
         &operator_registrations(&swarm.nodes),
@@ -560,7 +567,7 @@ pub fn operator_assignments(node_configs: &[NodeConfig]) -> Vec<OperatorRegistra
             let set_operator_script =
                 transaction_builder::encode_set_validator_operator_script(vec![], operator_account);
 
-            (owner_key, set_operator_script)
+            (owner_key, vec![], set_operator_script)
         })
         .collect::<Vec<_>>()
 }
@@ -586,18 +593,16 @@ pub fn operator_registrations(node_configs: &[NodeConfig]) -> Vec<OperatorRegist
                 .discovery_method
                 .advertised_address()
                 .append_prod_protos(identity_key, HANDSHAKE_VERSION);
-            let raw_addr = RawNetworkAddress::try_from(&addr).unwrap();
 
             let seq_num = 0;
             let addr_idx = 0;
-            let enc_addr = raw_addr.clone().encrypt(
+            let enc_addr = addr.clone().encrypt(
                 &TEST_SHARED_VAL_NETADDR_KEY,
                 TEST_SHARED_VAL_NETADDR_KEY_VERSION,
                 &owner_account,
                 seq_num,
                 addr_idx,
             );
-            let raw_enc_addr = RawEncNetworkAddress::try_from(&enc_addr).unwrap();
 
             // TODO(philiphayes): do something with n.full_node_networks instead
             // of ignoring them?
@@ -605,12 +610,10 @@ pub fn operator_registrations(node_configs: &[NodeConfig]) -> Vec<OperatorRegist
             let script = transaction_builder::encode_register_validator_config_script(
                 owner_account,
                 consensus_key.to_bytes().to_vec(),
-                identity_key.to_bytes(),
-                raw_enc_addr.into(),
-                identity_key.to_bytes(),
-                raw_addr.into(),
+                lcs::to_bytes(&vec![enc_addr.unwrap()]).unwrap(),
+                lcs::to_bytes(&vec![addr]).unwrap(),
             );
-            (operator_key, script)
+            (operator_key, vec![], script)
         })
         .collect::<Vec<_>>()
 }

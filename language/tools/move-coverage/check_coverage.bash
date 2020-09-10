@@ -22,8 +22,8 @@ cargo test
 popd || exit 1
 
 echo "Running e2e testsuite..."
-pushd ../../e2e-tests || exit 1
-cargo test -- --skip account_universe
+pushd ../../e2e-testsuite || exit 1
+cargo test -- --skip account_universe --skip fuzz_scripts
 popd || exit 1
 
 echo "Running Move testsuite..."

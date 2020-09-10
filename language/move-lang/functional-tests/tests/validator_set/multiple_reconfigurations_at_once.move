@@ -12,13 +12,13 @@
 //! sender: libraroot
 //! args: 0, {{bob}}, {{bob::auth_key}}, b"bob"
 stdlib_script::create_validator_operator_account
-// check: EXECUTED
+// check: "Keep(EXECUTED)"
 
 //! new-transaction
 //! sender: libraroot
 //! args: 0, {{dave}}, {{dave::auth_key}}, b"dave"
 stdlib_script::create_validator_operator_account
-// check: EXECUTED
+// check: "Keep(EXECUTED)"
 
 //! new-transaction
 //! sender: alice
@@ -30,7 +30,7 @@ script {
     }
 }
 
-// check: EXECUTED
+// check: "Keep(EXECUTED)"
 
 //! new-transaction
 //! sender: viola
@@ -42,7 +42,7 @@ script {
     }
 }
 
-// check: EXECUTED
+// check: "Keep(EXECUTED)"
 
 //! new-transaction
 //! sender: libraroot
@@ -62,13 +62,13 @@ script{
 }
 
 // check: NewEpochEvent
-// check: EXECUTED
+// check: "Keep(EXECUTED)"
 
 //! block-prologue
 //! proposer: alice
 //! block-time: 3
 
-// check: EXECUTED
+// check: "Keep(EXECUTED)"
 
 //! new-transaction
 //! sender: dave
@@ -82,7 +82,7 @@ script{
                ValidatorConfig::get_consensus_pubkey(&ValidatorConfig::get_config({{viola}})), 99);
         ValidatorConfig::set_config(account, {{viola}},
                                     x"d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
-                                    x"", x"", x"", x"");
+                                    x"", x"");
         // the local validator's key is now different from the one in the validator set
         assert(ValidatorConfig::get_consensus_pubkey(&LibraSystem::get_validator_config({{viola}})) !=
                ValidatorConfig::get_consensus_pubkey(&ValidatorConfig::get_config({{viola}})), 99);
@@ -96,7 +96,7 @@ script{
 }
 
 // check: NewEpochEvent
-// check: EXECUTED
+// check: "Keep(EXECUTED)"
 
 //! new-transaction
 //! sender: dave
@@ -106,15 +106,25 @@ script{
     fun main(account: &signer) {
         ValidatorConfig::set_config(account, {{viola}},
                                     x"3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
-                                    x"", x"", x"", x"");
+                                    x"", x"");
         let old_num_validators = LibraSystem::validator_set_size();
         LibraSystem::update_config_and_reconfigure(account, {{viola}});
         assert(old_num_validators == LibraSystem::validator_set_size(), 98);
     }
 }
 
-// check: ABORTED
-// check: 6
+// check: "Keep(ABORTED { code: 1025,"
+
+//! new-transaction
+//! sender: bob
+script{
+    use 0x1::LibraSystem;
+    fun main(account: &signer) {
+        LibraSystem::update_config_and_reconfigure(account, {{viola}});
+    }
+}
+
+// check: "Keep(ABORTED { code: 1031,"
 
 //! new-transaction
 //! sender: blessed
@@ -129,3 +139,4 @@ script {
         assert(LibraSystem::is_validator({{alice}}) == true, 102);
     }
 }
+// check: "Keep(EXECUTED)"

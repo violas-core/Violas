@@ -150,6 +150,7 @@ impl ValidatorConfig {
 
         let genesis = vm_genesis::encode_genesis_transaction(
             libra_root_key.public_key(),
+            libra_root_key.public_key(),
             &operator_assignments,
             &operator_registrations,
             self.template
@@ -178,7 +179,6 @@ impl ValidatorConfig {
                 test_config.waypoint = maybe_waypoint;
             }
 
-            node.base.chain_id = self.chain_id;
             node.base.waypoint = waypoint.clone();
             node.execution.genesis = genesis.clone();
         }

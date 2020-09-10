@@ -3,10 +3,12 @@
 
 use crate::{
     backup_types::epoch_ending::manifest::EpochEndingBackup,
+    metrics::restore::{EPOCH_ENDING_EPOCH, EPOCH_ENDING_VERSION},
     storage::{BackupStorage, FileHandle},
     utils::{read_record_bytes::ReadRecordBytes, storage_ext::BackupStorageExt, GlobalRestoreOpt},
 };
 use anyhow::{anyhow, ensure, Result};
+use libra_logger::prelude::*;
 use libra_types::{
     ledger_info::LedgerInfoWithSignatures, transaction::Version, waypoint::Waypoint,
 };
@@ -43,14 +45,14 @@ impl EpochEndingRestoreController {
     }
 
     pub async fn run(self) -> Result<()> {
-        println!(
+        info!(
             "Epoch ending restore started. Manifest: {}",
             self.manifest_handle
         );
         self.run_impl()
             .await
             .map_err(|e| anyhow!("Epoch ending restore failed: {}", e))?;
-        println!("Epoch ending restore succeeded.");
+        info!("Epoch ending restore succeeded.");
         Ok(())
     }
 }
@@ -100,7 +102,7 @@ impl EpochEndingRestoreController {
                 .iter()
                 .position(|li| li.ledger_info().version() > self.target_version)
             {
-                println!(
+                info!(
                     "Ignoring epoch ending info beyond target_version. Epoch {} ends at {}, target_version: {}.",
                     lis[_end].ledger_info().epoch(),
                     lis[_end].ledger_info().version(),
@@ -112,6 +114,8 @@ impl EpochEndingRestoreController {
             // write to db
             if end != 0 {
                 self.restore_handler.save_ledger_infos(&lis[..end])?;
+                EPOCH_ENDING_EPOCH.set(lis[end - 1].ledger_info().epoch() as i64);
+                EPOCH_ENDING_VERSION.set(lis[end - 1].ledger_info().version() as i64);
             }
 
             // skip remaining chunks if beyond target_version
@@ -119,7 +123,6 @@ impl EpochEndingRestoreController {
                 break;
             }
         }
-        println!("Finished restoring epoch ending info.");
 
         Ok(())
     }

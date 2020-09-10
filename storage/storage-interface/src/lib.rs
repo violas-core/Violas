@@ -16,7 +16,10 @@ use libra_types::{
     ledger_info::LedgerInfoWithSignatures,
     move_resource::MoveStorage,
     proof::{definition::LeafCount, AccumulatorConsistencyProof, SparseMerkleProof},
-    transaction::{TransactionListWithProof, TransactionToCommit, TransactionWithProof, Version},
+    transaction::{
+        TransactionInfo, TransactionListWithProof, TransactionToCommit, TransactionWithProof,
+        Version,
+    },
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -66,7 +69,7 @@ impl StartupInfo {
         let committed_tree_state = TreeState {
             num_transactions: 0,
             ledger_frozen_subtree_hashes: Vec::new(),
-            account_state_root_hash: HashValue::zero(),
+            account_state_root_hash: *SPARSE_MERKLE_PLACEHOLDER_HASH,
         };
         let synced_tree_state = None;
 
@@ -298,11 +301,18 @@ pub trait DbReader: Send + Sync {
 
     /// Get the ledger info of the epoch that `known_version` belongs to.
     fn get_epoch_ending_ledger_info(&self, known_version: u64) -> Result<LedgerInfoWithSignatures>;
+
+    /// Gets the latest transaction info.
+    /// N.B. Unlike get_startup_info(), even if the db is not bootstrapped, this can return `Some`
+    /// -- those from a db-restore run.
+    fn get_latest_transaction_info_option(&self) -> Result<Option<(Version, TransactionInfo)>> {
+        unimplemented!()
+    }
 }
 
 impl MoveStorage for &dyn DbReader {
     fn batch_fetch_resources(&self, access_paths: Vec<AccessPath>) -> Result<Vec<Vec<u8>>> {
-        self.batch_fetch_resources_by_version(access_paths, self.get_latest_version()?)
+        self.batch_fetch_resources_by_version(access_paths, self.fetch_synced_version()?)
     }
 
     fn batch_fetch_resources_by_version(
@@ -319,15 +329,15 @@ impl MoveStorage for &dyn DbReader {
 
         let results = addresses
             .iter()
-            .map(|addr| self.get_account_state_with_proof(*addr, version, version))
+            .map(|addr| self.get_account_state_with_proof_by_version(*addr, version))
             .collect::<Result<Vec<_>>>()?;
 
         // Account address --> AccountState
         let account_states = addresses
             .iter()
             .zip_eq(results)
-            .map(|(addr, result)| {
-                let account_state = AccountState::try_from(&result.blob.ok_or_else(|| {
+            .map(|(addr, (blob, _proof))| {
+                let account_state = AccountState::try_from(&blob.ok_or_else(|| {
                     format_err!("missing blob in account state/account does not exist")
                 })?)?;
                 Ok((addr, account_state))
@@ -345,6 +355,19 @@ impl MoveStorage for &dyn DbReader {
                     .clone())
             })
             .collect()
+    }
+
+    fn fetch_synced_version(&self) -> Result<u64> {
+        let (synced_version, _) = self
+            .get_latest_transaction_info_option()
+            .map_err(|e| {
+                format_err!(
+                    "[MoveStorage] Failed fetching latest transaction info: {}",
+                    e
+                )
+            })?
+            .ok_or_else(|| format_err!("[MoveStorage] Latest transaction info not found."))?;
+        Ok(synced_version)
     }
 }
 

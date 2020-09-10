@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 /// CryptoStorage provides an abstraction for secure generation and handling of cryptographic keys.
 #[enum_dispatch]
-pub trait CryptoStorage: Send + Sync {
+pub trait CryptoStorage {
     /// Securely generates a new named Ed25519 private key. The behavior for calling this interface
     /// multiple times with the same name is implementation specific.
     fn create_key(&mut self, name: &str) -> Result<Ed25519PublicKey, Error>;
@@ -21,9 +21,7 @@ pub trait CryptoStorage: Send + Sync {
     /// not used correctly. As this is purely a testing API, there is no defined behavior for
     /// importing a key for a given name if that name already exists.  It only exists to allow
     /// Libra to be run in test environments where a set of deterministic keys must be generated.
-    fn import_private_key(&mut self, _name: &str, _key: Ed25519PrivateKey) -> Result<(), Error> {
-        unimplemented!();
-    }
+    fn import_private_key(&mut self, name: &str, key: Ed25519PrivateKey) -> Result<(), Error>;
 
     /// Returns the Ed25519 private key stored at 'name' and identified by 'version', which is the
     /// corresponding public key. This may fail even if the 'named' key exists but the version is

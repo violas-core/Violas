@@ -37,6 +37,8 @@ The following languages are currently supported:
 
 * Java 8
 
+* Go >= 1.13
+
 * Rust (NOTE: Code generation of dependency-free Rust is experimental. Consider using the libraries of the Libra repository instead.)
 
 
@@ -58,7 +60,7 @@ target/debug/generate-transaction-builders \
     "language/stdlib/compiled/transaction_scripts/abi"
 ```
 Next, you may copy and execute the [Python demo file](examples/python3/stdlib_demo.py) with:
-```
+```bash
 cp language/transaction-builder/generator/examples/python3/stdlib_demo.py "$DEST"
 PYTHONPATH="$PYTHONPATH:$DEST" python3 "$DEST/stdlib_demo.py"
 ```
@@ -75,7 +77,7 @@ target/debug/generate-transaction-builders \
     "language/stdlib/compiled/transaction_scripts/abi"
 ```
 Next, you may copy and execute the [C++ demo file](examples/cpp/stdlib_demo.cpp) with:
-```
+```bash
 cp language/transaction-builder/generator/examples/cpp/stdlib_demo.cpp "$DEST"
 clang++ --std=c++17 -I "$DEST" "$DEST/libra_stdlib.cpp" "$DEST/stdlib_demo.cpp" -o "$DEST/stdlib_demo"
 "$DEST/stdlib_demo"
@@ -83,7 +85,7 @@ clang++ --std=c++17 -I "$DEST" "$DEST/libra_stdlib.cpp" "$DEST/stdlib_demo.cpp" 
 
 ### Java
 
-To install Java source packages `com.facebook.serde`, `com.facebook.lcs`, `org.libra.types`, and `org.libra.stdlib` into a target directory `$DEST`, run:
+To install Java source packages `com.novi.serde`, `com.novi.lcs`, `org.libra.types`, and `org.libra.stdlib` into a target directory `$DEST`, run:
 ```bash
 target/debug/generate-transaction-builders \
     --language java \
@@ -93,10 +95,30 @@ target/debug/generate-transaction-builders \
     "language/stdlib/compiled/transaction_scripts/abi"
 ```
 Next, you may copy and execute the [Java demo file](examples/java/StdlibDemo.java) with:
-```
+```bash
 cp language/transaction-builder/generator/examples/java/StdlibDemo.java "$DEST"
 (find "$DEST" -name "*.java" | xargs javac -cp "$DEST")
 java -enableassertions -cp "$DEST" StdlibDemo
+```
+
+### Go
+
+To generate the Go "packages" `testing/libratypes`, and `testing/librastdlib` into a target directory `$DEST`, run:
+
+```bash
+target/debug/generate-transaction-builders \
+    --language go \
+    --module-name librastdlib \
+    --libra-package-name testing \
+    --with-libra-types "testsuite/generate-format/tests/staged/libra.yaml" \
+    --target-source-dir "$DEST" \
+    "language/stdlib/compiled/transaction_scripts/abi"
+```
+Next, you may copy and execute the [Go demo file](examples/golang/stdlib_demo.go) as follows:
+(Note that `$DEST` must be an absolute path)
+```bash
+cp language/transaction-builder/generator/examples/golang/stdlib_demo.go "$DEST"
+(cd "$DEST" && go mod init testing && go mod edit -replace testing="$DEST" && go run stdlib_demo.go)
 ```
 
 ### Rust (experimental)
@@ -124,7 +146,7 @@ Supporting transaction builders in an additional programming language boils down
 3. Code generation for transaction builders (Rust tool).
 
 
-Items (1) and (2) are provided by the Rust library `serde-generate` which is developed in a separate [github repository](https://github.com/facebookincubator/serde-reflection).
+Items (1) and (2) are provided by the Rust library `serde-generate` which is developed in a separate [github repository](https://github.com/novifinancial/serde-reflection).
 
 Item (3) --- this tool --- is currently developed in the Libra repository.
 

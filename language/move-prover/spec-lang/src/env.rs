@@ -18,7 +18,9 @@ use itertools::Itertools;
 use num::{BigUint, Num, ToPrimitive};
 
 use bytecode_source_map::source_map::SourceMap;
-use move_core_types::{account_address::AccountAddress, language_storage, value::MoveValue};
+use move_core_types::{
+    account_address::AccountAddress, identifier::Identifier, language_storage, value::MoveValue,
+};
 use serde::{Deserialize, Serialize};
 use vm::{
     access::ModuleAccess,
@@ -108,8 +110,12 @@ pub const CONDITION_EXPORT_PROP: &str = "export";
 /// Property which can be attached to a module invariant to make it global.
 pub const CONDITION_GLOBAL_PROP: &str = "global";
 
-/// Property which can be attached to a module invariant to mark it to be checked on update only.
-pub const CONDITION_ON_UPDATE_PROP: &str = "on_update";
+/// Property which can be attached to a global invariant to mark it as not to be used as
+/// an assumption in other verification steps. This can be used for invariants which are
+/// nonoperational constraints on system behavior, i.e. the systems "works" whether the
+/// invariant holds or not. Invariant marked as such are not assumed when
+/// memory is accessed, but only in the pre-state of a memory update.
+pub const CONDITION_ISOLATED: &str = "isolated";
 
 /// Abstract property which can be used together with an opaque specification. An abstract
 /// property is not verified against the implementation, but will be used for the
@@ -134,6 +140,10 @@ pub const CONDITION_ABORT_ASSERT_PROP: &str = "assert";
 /// Pragma which indicates that the functions aborts and ensure conditions shall be exported
 /// to the verification context even if the implementation of the function is inlined.
 pub const EXPORT_ENSURES_PRAGMA: &str = "export_ensures";
+
+/// A property which can be attached to any condition to exclude it from verification. The
+/// condition will still be type checked.
+pub const CONDITION_DEACTIVATED: &str = "deactivated";
 
 // =================================================================================================
 /// # Locations
@@ -898,6 +908,19 @@ impl GlobalEnv {
             .find(|m| m.get_name().name() == simple_name)
     }
 
+    /// Gets a StructEnv in this module by its `StructTag`
+    pub fn find_struct_by_tag(
+        &self,
+        tag: &language_storage::StructTag,
+    ) -> Option<QualifiedId<StructId>> {
+        self.find_module(&self.to_module_name(&tag.module_id()))
+            .map(|menv| {
+                menv.find_struct_by_identifier(tag.name.clone())
+                    .map(|sid| menv.get_id().qualified(sid))
+            })
+            .flatten()
+    }
+
     /// Return the module enclosing this location.
     pub fn get_enclosing_module(&self, loc: Loc) -> Option<ModuleEnv<'_>> {
         for data in &self.module_data {
@@ -936,6 +959,11 @@ impl GlobalEnv {
 
     fn enclosing_span(outer: Span, inner: Span) -> bool {
         inner.start() >= outer.start() && inner.end() <= outer.end()
+    }
+
+    /// Return the `FunctionEnv` for `fun`
+    pub fn get_function(&self, fun: QualifiedId<FunId>) -> FunctionEnv<'_> {
+        self.get_module(fun.module_id).into_function(fun.id)
     }
 
     // Gets the number of modules in this environment.
@@ -1047,6 +1075,30 @@ impl GlobalEnv {
         }
         None
     }
+
+    /// Attempt to compute a struct tag for (`mid`, `sid`, `ts`). Returns `Some` if all types in
+    /// `ts` are closed, `None` otherwise
+    pub fn get_struct_tag(
+        &self,
+        mid: ModuleId,
+        sid: StructId,
+        ts: &[Type],
+    ) -> Option<language_storage::StructTag> {
+        if ts.iter().any(|t| t.is_open()) {
+            None
+        } else {
+            let menv = self.get_module(mid);
+            Some(language_storage::StructTag {
+                address: *menv.self_address(),
+                module: menv.get_identifier(),
+                name: menv.get_struct(sid).get_identifier(),
+                type_params: ts
+                    .iter()
+                    .map(|t| t.clone().into_type_tag(self).unwrap())
+                    .collect(),
+            })
+        }
+    }
 }
 
 impl Default for GlobalEnv {
@@ -1137,6 +1189,11 @@ impl<'env> ModuleEnv<'env> {
         &self.data.name
     }
 
+    /// Returns the VM identifier for this module
+    pub fn get_identifier(&'env self) -> Identifier {
+        self.data.module.name().to_owned()
+    }
+
     /// Returns true if this is a module representing a script.
     pub fn is_script_module(&self) -> bool {
         self.symbol_pool().string(self.data.name.name()).as_str() == SCRIPT_MODULE_NAME
@@ -1152,6 +1209,16 @@ impl<'env> ModuleEnv<'env> {
     pub fn get_source_path(&self) -> &OsStr {
         let file_id = self.data.loc.file_id;
         self.env.source_files.name(file_id)
+    }
+
+    /// Return the set of ModuleId's that this module depends on (including itself)
+    pub fn get_dependencies(&self) -> Vec<language_storage::ModuleId> {
+        let compiled_module = &self.data.module;
+        compiled_module
+            .module_handles()
+            .iter()
+            .map(|h| compiled_module.module_id_for_handle(h))
+            .collect()
     }
 
     /// Returns documentation associated with this module.
@@ -1289,6 +1356,20 @@ impl<'env> ModuleEnv<'env> {
             module_env: self.clone(),
             data,
         })
+    }
+
+    /// Gets a StructEnv in this module by identifier
+    pub fn find_struct_by_identifier(&self, identifier: Identifier) -> Option<StructId> {
+        for data in self.data.struct_data.values() {
+            let senv = StructEnv {
+                module_env: self.clone(),
+                data,
+            };
+            if senv.get_identifier() == identifier {
+                return Some(senv.get_id());
+            }
+        }
+        None
     }
 
     /// Gets the struct id from a definition index which must be valid for this environment.
@@ -1431,6 +1512,11 @@ impl<'env> ModuleEnv<'env> {
     /// cannonical representation as defined in `move_core_types::values`
     pub fn get_constant_value(&self, constant: &VMConstant) -> MoveValue {
         VMConstant::deserialize_constant(constant).unwrap()
+    }
+
+    /// Return the `AccountAdress` of this module
+    pub fn self_address(&self) -> &AccountAddress {
+        self.data.module.address()
     }
 
     /// Retrieve an address identifier from the pool
@@ -1578,6 +1664,20 @@ impl<'env> StructEnv<'env> {
     /// Returns the name of this struct.
     pub fn get_name(&self) -> Symbol {
         self.data.name
+    }
+
+    /// Returns the VM identifier for this struct
+    pub fn get_identifier(&self) -> Identifier {
+        let handle = self
+            .module_env
+            .data
+            .module
+            .struct_handle_at(self.data.handle_idx);
+        self.module_env
+            .data
+            .module
+            .identifier_at(handle.name)
+            .to_owned()
     }
 
     /// Shortcut for accessing the symbol pool.
@@ -1944,6 +2044,13 @@ impl<'env> FunctionEnv<'env> {
     /// Returns the name of this function.
     pub fn get_name(&self) -> Symbol {
         self.data.name
+    }
+
+    /// Returns the VM identifier for this function
+    pub fn get_identifier(&'env self) -> Identifier {
+        let m = &self.module_env.data.module;
+        m.identifier_at(m.function_handle_at(self.data.handle_idx).name)
+            .to_owned()
     }
 
     /// Gets the id of this function.

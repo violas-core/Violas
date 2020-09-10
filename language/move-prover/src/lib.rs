@@ -32,7 +32,7 @@ use stackless_bytecode_generator::{
     reaching_def_analysis::ReachingDefProcessor,
     stackless_bytecode::{Bytecode, Operation},
     test_instrumenter::TestInstrumenter,
-    usage_analysis::{TransitiveUsage, UsageProcessor},
+    usage_analysis::{self, UsageProcessor},
     writeback_analysis::WritebackAnalysisProcessor,
 };
 use std::{
@@ -92,11 +92,15 @@ pub fn run_move_prover<W: WriteColor>(
         env.report_errors(error_writer);
         return Err(anyhow!("exiting with transformation errors"));
     }
+    if options.run_packed_types_gen {
+        return run_packed_types_gen(&env, &targets, now);
+    }
     check_modifies(&env, &targets);
     if env.has_errors() {
         env.report_errors(error_writer);
         return Err(anyhow!("exiting with modifies checking errors"));
     }
+
     let writer = CodeWriter::new(env.internal_loc());
     add_prelude(&options, &writer)?;
     let mut translator = BoogieTranslator::new(&env, &options, &targets, &writer);
@@ -206,6 +210,30 @@ fn run_errmapgen(env: &GlobalEnv, options: &Options, now: Instant) -> anyhow::Re
     Ok(())
 }
 
+fn run_packed_types_gen(
+    env: &GlobalEnv,
+    targets: &FunctionTargetsHolder,
+    now: Instant,
+) -> anyhow::Result<()> {
+    let checking_elapsed = now.elapsed();
+    info!("generating packed_types");
+    let packed_types = usage_analysis::get_packed_types(&env, &targets);
+    info!("found {:?} packed types", packed_types.len());
+    let mut access_path_type_map = BTreeMap::new();
+    for ty in packed_types {
+        access_path_type_map.insert(ty.access_vector(), ty);
+    }
+    // TODO: save to disk, resource-viewer and an LCS schema extractor should look at this
+
+    let generating_elapsed = now.elapsed();
+    info!(
+        "{:.3}s checking, {:.3}s generating",
+        checking_elapsed.as_secs_f64(),
+        (generating_elapsed - checking_elapsed).as_secs_f64()
+    );
+    Ok(())
+}
+
 /// Adds the prelude to the generated output.
 fn add_prelude(options: &Options, writer: &CodeWriter) -> anyhow::Result<()> {
     emit!(writer, "\n// ** prelude from {}\n\n", &options.prelude_path);
@@ -233,7 +261,6 @@ fn check_modifies(env: &GlobalEnv, targets: &FunctionTargetsHolder) {
     use Bytecode::*;
     use Operation::*;
 
-    let usage = TransitiveUsage::default();
     for module_env in env.get_modules() {
         for func_env in module_env.get_functions() {
             let caller_func_target = targets.get_target(&func_env);
@@ -241,14 +268,10 @@ fn check_modifies(env: &GlobalEnv, targets: &FunctionTargetsHolder) {
                 if let Call(_, _, oper, _) = code {
                     if let Function(mid, fid, _) = oper {
                         let callee = mid.qualified(*fid);
-                        let callee_func_env =
-                            env.get_module(callee.module_id).into_function(callee.id);
+                        let callee_func_env = env.get_function(callee);
                         let callee_func_target = targets.get_target(&callee_func_env);
-                        let callee_modified_memory = usage.get_modified_memory(
-                            env,
-                            targets,
-                            callee_func_env.get_qualified_id(),
-                        );
+                        let callee_modified_memory =
+                            usage_analysis::get_modified_memory(&callee_func_target);
                         caller_func_target.get_modify_targets().keys().for_each(|target| {
                                 if callee_modified_memory.contains(target) && callee_func_target.get_modify_targets_for_type(target).is_none() {
                                     let loc = caller_func_target.get_bytecode_loc(code.get_attr_id());

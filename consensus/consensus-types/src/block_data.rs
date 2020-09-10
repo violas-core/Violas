@@ -49,17 +49,16 @@ pub struct BlockData {
     /// * Clients determining if they are relatively up-to-date with respect to the block chain.
     ///
     /// It makes the following guarantees:
-    /// 1. Time Monotonicity: Time is monotonically increasing in the block
-    ///    chain. (i.e. If H1 < H2, H1.Time < H2.Time).
-    /// 2. If a block of transactions B is agreed on with timestamp T, then at least f+1
-    ///    honest replicas think that T is in the past.  An honest replica will only vote
-    ///    on a block when its own clock >= timestamp T.
-    /// 3. If a block of transactions B is agreed on with timestamp T, then at least f+1 honest
-    ///    replicas saw the contents of B no later than T + delta for some delta.
-    ///    If T = 3:00 PM and delta is 10 minutes, then an honest replica would not have
-    ///    voted for B unless its clock was between 3:00 PM to 3:10 PM at the time the
-    ///    proposal was received.  After 3:10 PM, an honest replica would no longer vote
-    ///    on B, noting it was too far in the past.
+    ///   1. Time Monotonicity: Time is monotonically increasing in the block chain.
+    ///      (i.e. If H1 < H2, H1.Time < H2.Time).
+    ///   2. If a block of transactions B is agreed on with timestamp T, then at least
+    ///      f+1 honest validators think that T is in the past. An honest validator will
+    ///      only vote on a block when its own clock >= timestamp T.
+    ///   3. If a block of transactions B has a QC with timestamp T, an honest validator
+    ///      will not serve such a block to other validators until its own clock >= timestamp T.
+    ///   4. Current: an honest validator is not issuing blocks with a timestamp in the
+    ///       future. Currently we consider a block is malicious if it was issued more
+    ///       that 5 minutes in the future.
     timestamp_usecs: u64,
     /// Contains the quorum certified ancestor and whether the quorum certified ancestor was
     /// voted on successfully
@@ -140,6 +139,24 @@ impl BlockData {
         );
 
         BlockData::new_genesis(ledger_info.timestamp_usecs(), genesis_quorum_cert)
+    }
+
+    #[cfg(any(test, feature = "fuzzing"))]
+    // This method should only used by tests and fuzzers to produce arbitrary BlockData types.
+    pub fn new_for_testing(
+        epoch: u64,
+        round: Round,
+        timestamp_usecs: u64,
+        quorum_cert: QuorumCert,
+        block_type: BlockType,
+    ) -> Self {
+        Self {
+            epoch,
+            round,
+            timestamp_usecs,
+            quorum_cert,
+            block_type,
+        }
     }
 
     pub fn new_genesis(timestamp_usecs: u64, quorum_cert: QuorumCert) -> Self {

@@ -18,14 +18,17 @@ use libra_key_manager::{
 use libra_management::storage::to_x25519;
 use libra_operational_tool::test_helper::OperationalTool;
 use libra_secure_json_rpc::VMStatusView;
-use libra_secure_storage::{CryptoStorage, KVStorage, Storage, Value};
+use libra_secure_storage::{CryptoStorage, KVStorage, Storage};
 use libra_swarm::swarm::{LibraNode, LibraSwarm};
 use libra_temppath::TempPath;
 use libra_trace::trace::trace_node;
-use libra_transaction_replay::{libra_client::LibraJsonRpcDebugger, LibraDebugger};
+use libra_transaction_replay::LibraDebugger;
 use libra_types::{
     account_address::AccountAddress,
-    account_config::{libra_root_address, testnet_dd_account_address, COIN1_NAME},
+    account_config::{
+        libra_root_address, testnet_dd_account_address, treasury_compliance_account_address,
+        COIN1_NAME,
+    },
     chain_id::ChainId,
     ledger_info::LedgerInfo,
     transaction::{authenticator::AuthenticationKey, Transaction, WriteSetPayload},
@@ -131,6 +134,7 @@ impl TestEnvironment {
         ClientProxy::new(
             ChainId::test(),
             &format!("http://localhost:{}/v1", port),
+            &self.libra_root_key.1,
             &self.libra_root_key.1,
             &self.libra_root_key.1,
             false,
@@ -923,9 +927,8 @@ fn test_full_node_basic_flow() {
     let mut full_node_client_2 = env.get_public_fn_client(0, None);
 
     // ensure the client has up-to-date sequence number after test_smoke_script(3 minting)
-    //let sender_account = treasury_compliance_account_address();
     let sender_account = testnet_dd_account_address();
-    let creation_account = libra_root_address();
+    let creation_account = treasury_compliance_account_address();
     full_node_client
         .wait_for_transaction(sender_account, 3)
         .unwrap();
@@ -1071,6 +1074,9 @@ fn test_e2e_reconfiguration() {
     client_proxy_1
         .mint_coins(&["mintb", "0", "10", "Coin1"], true)
         .unwrap();
+    client_proxy_1
+        .wait_for_transaction(treasury_compliance_account_address(), 1)
+        .unwrap();
     assert!(compare_balances(
         vec![(10.0, "Coin1".to_string())],
         client_proxy_1.get_balances(&["b", "0"]).unwrap(),
@@ -1088,7 +1094,7 @@ fn test_e2e_reconfiguration() {
     let libra_root = load_libra_root_storage(node_configs.first().unwrap());
     let context = op_tool.remove_validator(peer_id, &libra_root).unwrap();
     client_proxy_1
-        .wait_for_transaction(context.address, context.sequence_number)
+        .wait_for_transaction(context.address, context.sequence_number + 1)
         .unwrap();
     // mint another 10 coins after remove node 0
     client_proxy_1
@@ -1206,15 +1212,23 @@ fn test_client_waypoints() {
     );
 
     // Start next epoch
-    let peer_id = env
-        .get_validator(0)
-        .unwrap()
-        .validator_peer_id()
-        .unwrap()
-        .to_string();
+
+    // This ugly blob is to remove a validator, we can do better...
+    let peer_id = env.get_validator(0).unwrap().validator_peer_id().unwrap();
+    let node_configs: Vec<_> = env
+        .validator_swarm
+        .config
+        .config_files
+        .iter()
+        .map(|config_path| NodeConfig::load(config_path).unwrap())
+        .collect();
+    let op_tool = env.get_op_tool(1);
+    let libra_root = load_libra_root_storage(node_configs.first().unwrap());
+    let context = op_tool.remove_validator(peer_id, &libra_root).unwrap();
     client_proxy
-        .remove_validator(&["remove_validator", &peer_id], true)
+        .wait_for_transaction(context.address, context.sequence_number + 1)
         .unwrap();
+    // end ugly blob
     client_proxy
         .mint_coins(&["mintb", "0", "10", "Coin1"], true)
         .unwrap();
@@ -1262,7 +1276,7 @@ fn test_vfn_failover() {
 
     // some helpers for creation/minting
     let sender_account = testnet_dd_account_address();
-    let creation_account = libra_root_address();
+    let creation_account = treasury_compliance_account_address();
     let sequence_reset = format!("sequence {} true", sender_account);
     let creation_sequence_reset = format!("sequence {} true", creation_account);
     let sequence_reset_command: Vec<_> = sequence_reset.split(' ').collect();
@@ -1291,7 +1305,7 @@ fn test_vfn_failover() {
 
     // wait for VFN 1 to catch up with creation and sender account
     vfn_1_client
-        .wait_for_transaction(creation_account, 3)
+        .wait_for_transaction(creation_account, 1)
         .unwrap();
     vfn_1_client
         .wait_for_transaction(sender_account, 2)
@@ -1317,7 +1331,7 @@ fn test_vfn_failover() {
     }
     // wait for PFN to catch up with creation and sender account
     pfn_0_client
-        .wait_for_transaction(creation_account, 5)
+        .wait_for_transaction(creation_account, 3)
         .unwrap();
     pfn_0_client
         .wait_for_transaction(sender_account, 4)
@@ -1555,13 +1569,13 @@ fn test_consensus_key_rotation() {
     // Verify that the config has been updated correctly with the new consensus key
     let validator_account = node_config.validator_network.as_ref().unwrap().peer_id();
     let config_consensus_key = op_tool
-        .validator_config(validator_account)
+        .validator_config(validator_account, &backend)
         .unwrap()
         .consensus_public_key;
     assert_eq!(new_consensus_key, config_consensus_key);
 
     // Verify that the validator set info contains the new consensus key
-    let info_consensus_key = op_tool.validator_set(validator_account).unwrap()[0]
+    let info_consensus_key = op_tool.validator_set(validator_account, &backend).unwrap()[0]
         .consensus_public_key
         .clone();
     assert_eq!(new_consensus_key, info_consensus_key);
@@ -1616,7 +1630,7 @@ fn test_operator_key_rotation() {
     // Verify that the config has been updated correctly with the new consensus key
     let validator_account = node_config.validator_network.as_ref().unwrap().peer_id();
     let config_consensus_key = op_tool
-        .validator_config(validator_account)
+        .validator_config(validator_account, &backend)
         .unwrap()
         .consensus_public_key;
     assert_eq!(new_consensus_key, config_consensus_key);
@@ -1656,13 +1670,10 @@ fn test_operator_key_rotation_recovery() {
 
     // Verify that the operator key was updated on-chain
     let mut storage: Storage = (&backend).try_into().unwrap();
-    let operator_account_string = storage
-        .get(OPERATOR_ACCOUNT)
+    let operator_account = storage
+        .get::<AccountAddress>(OPERATOR_ACCOUNT)
         .unwrap()
-        .value
-        .string()
-        .unwrap();
-    let operator_account = AccountAddress::from_str(&operator_account_string).unwrap();
+        .value;
     let account_resource = op_tool.account_resource(operator_account).unwrap();
     let on_chain_operator_key = hex::decode(account_resource.authentication_key).unwrap();
     assert_eq!(
@@ -1724,14 +1735,18 @@ fn test_network_key_rotation() {
     // Verify that config has been loaded correctly with new key
     let validator_account = node_config.validator_network.as_ref().unwrap().peer_id();
     let config_network_key = op_tool
-        .validator_config(validator_account)
+        .validator_config(validator_account, &backend)
         .unwrap()
-        .validator_network_key;
+        .validator_network_address
+        .find_noise_proto()
+        .unwrap();
     assert_eq!(new_network_key, config_network_key);
 
     // Verify that the validator set info contains the new network key
-    let info_network_key =
-        op_tool.validator_set(validator_account).unwrap()[0].validator_network_key;
+    let info_network_key = op_tool.validator_set(validator_account, &backend).unwrap()[0]
+        .validator_network_address
+        .find_noise_proto()
+        .unwrap();
     assert_eq!(new_network_key, info_network_key);
 
     // Restart validator
@@ -1775,14 +1790,18 @@ fn test_network_key_rotation_recovery() {
     // Verify that config has been loaded correctly with new key
     let validator_account = node_config.validator_network.as_ref().unwrap().peer_id();
     let config_network_key = op_tool
-        .validator_config(validator_account)
+        .validator_config(validator_account, &backend)
         .unwrap()
-        .validator_network_key;
+        .validator_network_address
+        .find_noise_proto()
+        .unwrap();
     assert_eq!(new_network_key, config_network_key);
 
     // Verify that the validator set info contains the new network key
-    let info_network_key =
-        op_tool.validator_set(validator_account).unwrap()[0].validator_network_key;
+    let info_network_key = op_tool.validator_set(validator_account, &backend).unwrap()[0]
+        .validator_network_address
+        .find_noise_proto()
+        .unwrap();
     assert_eq!(new_network_key, info_network_key);
 
     // Restart validator
@@ -1857,13 +1876,20 @@ fn test_genesis_transaction_flow() {
         sleep(Duration::from_secs(1));
     }
     println!("5. kill all nodes and prepare a genesis txn to remove validator 0");
+    let validator_address = node_config.validator_network.as_ref().unwrap().peer_id();
+    let op_tool = env.get_op_tool(0);
+    let libra_root = load_libra_root_storage(&node_config);
+    let config = op_tool
+        .validator_config(validator_address, &libra_root)
+        .unwrap();
+    let name = config.name.as_bytes().to_vec();
+
     for index in 0..env.validator_swarm.nodes.len() {
         env.validator_swarm.kill_node(index);
     }
-    let validator_address = node_config.validator_network.as_ref().unwrap().peer_id();
     let genesis_transaction = Transaction::GenesisTransaction(WriteSetPayload::Script {
         execute_as: libra_root_address(),
-        script: encode_remove_validator_and_reconfigure_script(0, vec![], validator_address),
+        script: encode_remove_validator_and_reconfigure_script(0, name, validator_address),
     });
     let genesis_path = TempPath::new();
     genesis_path.create_as_file().unwrap();
@@ -1881,17 +1907,12 @@ fn test_genesis_transaction_flow() {
         .output()
         .unwrap();
     let output = std::str::from_utf8(&waypoint_command.stdout).unwrap();
-    println!("{:?}", output);
-    let waypoint_str = &parse_waypoint(output);
-    println!("{}", waypoint_str);
+    let waypoint = parse_waypoint(output);
     let set_waypoint = |node_config: &NodeConfig| {
         let f = |backend: &SecureBackend| {
             let mut storage: Storage = backend.into();
             storage
-                .set(
-                    libra_global_constants::WAYPOINT,
-                    Value::String(waypoint_str.to_string()),
-                )
+                .set(libra_global_constants::WAYPOINT, waypoint)
                 .expect("Unable to write waypoint");
         };
         let backend = &node_config.consensus.safety_rules.backend;
@@ -1923,12 +1944,14 @@ fn test_genesis_transaction_flow() {
         env.validator_swarm.add_node(i, false).unwrap();
     }
     println!("8. verify it's able to mint after the waypoint");
-    let mut client_proxy_1 =
-        env.get_validator_client(1, Some(Waypoint::from_str(waypoint_str).unwrap()));
+    let mut client_proxy_1 = env.get_validator_client(1, Some(waypoint));
     client_proxy_1.set_accounts(client_proxy_0.copy_all_accounts());
     client_proxy_1.create_next_account(false).unwrap();
     client_proxy_1
         .mint_coins(&["mintb", "1", "10", "Coin1"], true)
+        .unwrap();
+    client_proxy_1
+        .wait_for_transaction(treasury_compliance_account_address(), 1)
         .unwrap();
     println!("9. add node 0 back and test if it can sync to the waypoint via state synchronizer");
     let op_tool = env.get_op_tool(1);
@@ -1936,7 +1959,7 @@ fn test_genesis_transaction_flow() {
         .add_validator(validator_address, &load_libra_root_storage(&node_config))
         .unwrap();
     client_proxy_1
-        .wait_for_transaction(context.address, context.sequence_number)
+        .wait_for_transaction(context.address, context.sequence_number + 1)
         .unwrap();
     // setup the waypoint for node 0
     node_config.execution.genesis = None;
@@ -1946,8 +1969,7 @@ fn test_genesis_transaction_flow() {
         .save(&env.validator_swarm.config.config_files[0])
         .unwrap();
     env.validator_swarm.add_node(0, false).unwrap();
-    let mut client_proxy_0 =
-        env.get_validator_client(0, Some(Waypoint::from_str(waypoint_str).unwrap()));
+    let mut client_proxy_0 = env.get_validator_client(0, Some(waypoint));
     client_proxy_0.set_accounts(client_proxy_1.copy_all_accounts());
     client_proxy_0.create_next_account(false).unwrap();
     client_proxy_1
@@ -1960,9 +1982,7 @@ fn test_replay_tooling() {
     let (swarm, mut client_proxy) = setup_swarm_and_client_proxy(1, 0);
     let validator_config = NodeConfig::load(&swarm.validator_swarm.config.config_files[0]).unwrap();
     let swarm_rpc_endpoint = format!("http://localhost:{}", validator_config.rpc.address.port());
-    let json_debugger = LibraDebugger::new(Box::new(
-        LibraJsonRpcDebugger::new(swarm_rpc_endpoint.as_str()).unwrap(),
-    ));
+    let json_debugger = LibraDebugger::json_rpc(swarm_rpc_endpoint.as_str()).unwrap();
 
     client_proxy.create_next_account(false).unwrap();
     client_proxy.create_next_account(false).unwrap();
@@ -1989,6 +2009,28 @@ fn test_replay_tooling() {
         .pop()
         .unwrap();
 
+    let (account, _) = client_proxy
+        .get_account_address_from_parameter("0")
+        .unwrap();
+    let script_path = workspace_builder::workspace_root()
+        .join("language/tools/transaction-replay/examples/account_exists.move");
+
+    let bisect_result = json_debugger
+        .bisect_transactions_by_script(script_path.to_str().unwrap(), account, 0, txn.version)
+        .unwrap()
+        .unwrap();
+
+    let account_creation_txn = client_proxy
+        .get_committed_txn_by_acc_seq(&[
+            "txn_acc_seq",
+            "0000000000000000000000000b1e55ed",
+            "0",
+            "false",
+        ])
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(account_creation_txn.version + 1, bisect_result);
     assert_eq!(replay_result.gas_used(), txn.gas_used);
     assert_eq!(
         JsonVMStatusView::from(&replay_result.status().status().unwrap()),
@@ -1996,11 +2038,10 @@ fn test_replay_tooling() {
     );
 }
 
-fn parse_waypoint(db_bootstrapper_output: &str) -> String {
-    Regex::new(r"Got waypoint: (\d+:\w+)")
+fn parse_waypoint(db_bootstrapper_output: &str) -> Waypoint {
+    let waypoint = Regex::new(r"Got waypoint: (\d+:\w+)")
         .unwrap()
         .captures(db_bootstrapper_output)
-        .ok_or_else(|| anyhow!("Failed to parse db-bootstrapper output."))
-        .unwrap()[1]
-        .into()
+        .ok_or_else(|| anyhow!("Failed to parse db-bootstrapper output."));
+    Waypoint::from_str(waypoint.unwrap()[1].into()).unwrap()
 }

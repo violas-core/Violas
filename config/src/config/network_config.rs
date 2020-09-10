@@ -9,6 +9,7 @@ use crate::{
 };
 use libra_crypto::{x25519, Uniform};
 use libra_network_address::NetworkAddress;
+use libra_network_address_encryption::Encryptor;
 use libra_secure_storage::{CryptoStorage, KVStorage, Storage};
 use libra_types::{transaction::authenticator::AuthenticationKey, PeerId};
 use rand::{
@@ -18,7 +19,7 @@ use rand::{
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
-    convert::{TryFrom, TryInto},
+    convert::TryFrom,
     string::ToString,
 };
 
@@ -46,6 +47,8 @@ pub struct NetworkConfig {
     // Select this to enforce that both peers should authenticate each other, otherwise
     // authentication only occurs for outgoing connections.
     pub mutual_authentication: bool,
+    // Used to store network address encryption keys for validator nodes
+    pub network_address_key_backend: Option<SecureBackend>,
     pub network_id: NetworkId,
     // Addresses of initial peers to connect to. In a mutual_authentication network,
     // we will extract the public keys from these addresses to set our initial
@@ -72,6 +75,7 @@ impl NetworkConfig {
             identity: Identity::None,
             listen_address: "/ip4/0.0.0.0/tcp/6180".parse().unwrap(),
             mutual_authentication: false,
+            network_address_key_backend: None,
             network_id,
             seed_pubkeys: HashMap::default(),
             seed_addrs: HashMap::default(),
@@ -108,6 +112,15 @@ impl NetworkConfig {
         }
     }
 
+    pub fn encryptor(&self) -> Encryptor {
+        if let Some(backend) = self.network_address_key_backend.as_ref() {
+            let storage = backend.into();
+            Encryptor::new(storage)
+        } else {
+            Encryptor::for_testing()
+        }
+    }
+
     pub fn load(&mut self, role: RoleType) -> Result<(), Error> {
         if self.listen_address.to_string().is_empty() {
             self.listen_address = utils::get_local_ip()
@@ -132,12 +145,10 @@ impl NetworkConfig {
             Identity::FromStorage(config) => {
                 let storage: Storage = (&config.backend).into();
                 let peer_id = storage
-                    .get(&config.peer_id_name)
+                    .get::<PeerId>(&config.peer_id_name)
                     .expect("Unable to read peer id")
-                    .value
-                    .string()
-                    .expect("Expected string for peer id");
-                Some(peer_id.try_into().expect("Unable to parse peer id"))
+                    .value;
+                Some(peer_id)
             }
             Identity::None => None,
         }
@@ -150,17 +161,11 @@ impl NetworkConfig {
             Identity::None => {
                 let mut rng = StdRng::from_seed(OsRng.gen());
                 let key = x25519::PrivateKey::generate(&mut rng);
-                let peer_id = AuthenticationKey::try_from(key.public_key().as_slice())
-                    .unwrap()
-                    .derived_address();
+                let peer_id = PeerId::from_identity_public_key(key.public_key());
                 self.identity = Identity::from_config(key, peer_id);
             }
             Identity::FromConfig(config) => {
-                let pubkey = config.key.public_key();
-                let peer_id = AuthenticationKey::try_from(pubkey.as_slice())
-                    .unwrap()
-                    .derived_address();
-
+                let peer_id = PeerId::from_identity_public_key(config.key.public_key());
                 if config.peer_id == PeerId::ZERO {
                     config.peer_id = peer_id;
                 }

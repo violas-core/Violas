@@ -1,7 +1,7 @@
 // Copyright (c) The Libra Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::common::type_not_allowed;
+use crate::common;
 use libra_types::transaction::{ArgumentABI, ScriptABI, TypeArgumentABI};
 use move_core_types::language_storage::TypeTag;
 use serde_generate::indent::{IndentConfig, IndentedWriter};
@@ -72,7 +72,7 @@ pub fn output_library_body(
 struct CppEmitter<'a, T> {
     /// Writer.
     out: IndentedWriter<T>,
-    /// Name of the package owning the generated definitions (e.g. "com.facebook.my_package")
+    /// Name of the package owning the generated definitions (e.g. "com.my_org.my_package")
     namespace: Option<&'a str>,
     /// Whether function definitions should be prefixed with "inlined"
     inlined_definitions: bool,
@@ -85,8 +85,7 @@ where
     fn output_preamble(&mut self) -> Result<()> {
         writeln!(
             self.out,
-            r#"
-#pragma once
+            r#"#pragma once
 
 #include "libra_types.hpp"
 "#
@@ -170,7 +169,7 @@ using namespace libra_types;
 
     fn quote_doc(doc: &str) -> String {
         let doc = crate::common::prepare_doc_string(doc);
-        textwrap::indent(&doc, "/// ")
+        textwrap::indent(&doc, "/// ").replace("\n\n", "\n///\n")
     }
 
     fn quote_type_parameters(ty_args: &[TypeArgumentABI]) -> Vec<String> {
@@ -221,9 +220,9 @@ using namespace libra_types;
             Address => "AccountAddress".into(),
             Vector(type_tag) => match type_tag.as_ref() {
                 U8 => "std::vector<uint8_t>".into(),
-                _ => type_not_allowed(type_tag),
+                _ => common::type_not_allowed(type_tag),
             },
-            Struct(_) | Signer => type_not_allowed(type_tag),
+            Struct(_) | Signer => common::type_not_allowed(type_tag),
         }
     }
 
@@ -238,10 +237,10 @@ using namespace libra_types;
             Address => format!("{{TransactionArgument::Address {{std::move({})}}}}", name),
             Vector(type_tag) => match type_tag.as_ref() {
                 U8 => format!("{{TransactionArgument::U8Vector {{std::move({})}}}}", name),
-                _ => type_not_allowed(type_tag),
+                _ => common::type_not_allowed(type_tag),
             },
 
-            Struct(_) | Signer => type_not_allowed(type_tag),
+            Struct(_) | Signer => common::type_not_allowed(type_tag),
         }
     }
 }

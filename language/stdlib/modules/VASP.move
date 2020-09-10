@@ -56,9 +56,9 @@ module VASP {
     /// Create a new `ParentVASP` resource under `vasp`
     /// Aborts if `lr_account` is not the libra root account,
     /// or if there is already a VASP (child or parent) at this account.
-    public fun publish_parent_vasp_credential(vasp: &signer, lr_account: &signer) {
+    public fun publish_parent_vasp_credential(vasp: &signer, tc_account: &signer) {
         LibraTimestamp::assert_operating();
-        Roles::assert_libra_root(lr_account);
+        Roles::assert_treasury_compliance(tc_account);
         Roles::assert_parent_vasp_role(vasp);
         let vasp_addr = Signer::address_of(vasp);
         assert(!is_vasp(vasp_addr), Errors::already_published(EPARENT_OR_CHILD_VASP));
@@ -66,7 +66,7 @@ module VASP {
     }
     spec fun publish_parent_vasp_credential {
         include LibraTimestamp::AbortsIfNotOperating;
-        include Roles::AbortsIfNotLibraRoot{account: lr_account};
+        include Roles::AbortsIfNotTreasuryCompliance{account: tc_account};
         include Roles::AbortsIfNotParentVasp{account: vasp};
         let vasp_addr = Signer::spec_address_of(vasp);
         aborts_if is_vasp(vasp_addr) with Errors::ALREADY_PUBLISHED;
@@ -97,6 +97,8 @@ module VASP {
         move_to(child, ChildVASP { parent_vasp_addr });
     }
     spec fun publish_child_vasp_credential {
+        /// TODO: this times out some times, some times not. To avoid flakes, turn this off until it
+        ///   reliably terminates.
         pragma verify_duration_estimate = 100;
         include Roles::AbortsIfNotParentVasp{account: parent};
         let parent_addr = Signer::spec_address_of(parent);
@@ -228,7 +230,7 @@ module VASP {
 
     spec module {
         /// `VASPOperationsResource` is published under the LibraRoot address after genesis.
-        invariant [global]
+        invariant [global, isolated]
             LibraTimestamp::is_operating() ==>
                 exists<VASPOperationsResource>(CoreAddresses::LIBRA_ROOT_ADDRESS());
     }
@@ -287,7 +289,7 @@ module VASP {
     /// ## Parent does not change
 
     spec module {
-        invariant update [global, on_update]
+        invariant update [global]
             forall a: address where is_child(a): spec_parent_address(a) == old(spec_parent_address(a));
     }
 

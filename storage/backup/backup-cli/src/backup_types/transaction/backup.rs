@@ -11,6 +11,7 @@ use crate::{
     },
 };
 use anyhow::{anyhow, Result};
+use libra_logger::prelude::*;
 use libra_types::transaction::Version;
 use once_cell::sync::Lazy;
 use std::{convert::TryInto, str::FromStr, sync::Arc};
@@ -51,7 +52,7 @@ impl TransactionBackupController {
     }
 
     pub async fn run(self) -> Result<FileHandle> {
-        println!(
+        info!(
             "Transaction backup started, starting from version {}, for {} transactions in total.",
             self.start_version, self.num_transactions,
         );
@@ -59,7 +60,7 @@ impl TransactionBackupController {
             .run_impl()
             .await
             .map_err(|e| anyhow!("Transaction backup failed: {}", e))?;
-        println!("Transaction backup succeeded. Manifest: {}", ret);
+        info!("Transaction backup succeeded. Manifest: {}", ret);
         Ok(ret)
     }
 }
@@ -162,12 +163,14 @@ impl TransactionBackupController {
             &mut proof_file,
         )
         .await?;
+        proof_file.shutdown().await?;
 
         let (chunk_handle, mut chunk_file) = self
             .storage
             .create_for_write(backup_handle, &Self::chunk_name(first_version))
             .await?;
         chunk_file.write_all(&chunk_bytes).await?;
+        chunk_file.shutdown().await?;
 
         Ok(TransactionChunk {
             first_version,
@@ -196,6 +199,7 @@ impl TransactionBackupController {
         manifest_file
             .write_all(&serde_json::to_vec(&manifest)?)
             .await?;
+        manifest_file.shutdown().await?;
 
         let metadata =
             Metadata::new_transaction_backup(first_version, last_version, manifest_handle.clone());

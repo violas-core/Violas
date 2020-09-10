@@ -3,12 +3,14 @@
 
 use crate::{
     backup_types::transaction::manifest::{TransactionBackup, TransactionChunk},
+    metrics::restore::{TRANSACTION_REPLAY_VERSION, TRANSACTION_SAVE_VERSION},
     storage::{BackupStorage, FileHandle},
     utils::{read_record_bytes::ReadRecordBytes, storage_ext::BackupStorageExt, GlobalRestoreOpt},
 };
 use anyhow::{anyhow, ensure, Result};
 use executor::Executor;
 use executor_types::TransactionReplayer;
+use libra_logger::prelude::*;
 use libra_types::{
     ledger_info::LedgerInfoWithSignatures,
     proof::{TransactionAccumulatorRangeProof, TransactionListProof},
@@ -132,14 +134,14 @@ impl TransactionRestoreController {
     }
 
     pub async fn run(self) -> Result<()> {
-        println!(
+        info!(
             "Transaction restore started. Manifest: {}",
             self.manifest_handle
         );
         self.run_impl()
             .await
             .map_err(|e| anyhow!("Transaction restore failed: {}", e))?;
-        println!("Transaction restore succeeded.");
+        info!("Transaction restore succeeded.");
         Ok(())
     }
 }
@@ -150,7 +152,7 @@ impl TransactionRestoreController {
             self.storage.load_json_file(&self.manifest_handle).await?;
         manifest.verify()?;
         if self.target_version < manifest.first_version {
-            println!(
+            warn!(
                 "Manifest {} skipped since its entirety is newer than target version {}.",
                 self.manifest_handle, self.target_version,
             );
@@ -179,28 +181,41 @@ impl TransactionRestoreController {
                 )?;
                 chunk.txns.drain(0..num_txns_to_save);
                 chunk.txn_infos.drain(0..num_txns_to_save);
+                TRANSACTION_SAVE_VERSION.set(last_to_save as i64);
             }
             // Those to replay:
             if first_to_replay <= last {
+                // ditch those beyond the target version
                 let num_to_replay = (last - first_to_replay + 1) as usize;
                 chunk.txns.truncate(num_to_replay);
                 chunk.txn_infos.truncate(num_to_replay);
-                self.transaction_replayer(first_to_replay)?.replay_chunk(
-                    first_to_replay,
-                    chunk.txns,
-                    chunk.txn_infos,
-                )?;
-            }
 
-            // Last chunk
-            if chunk.manifest.last_version == manifest.last_version {
-                self.restore_handler
-                    .save_ledger_info_if_newer(chunk.ledger_info)?;
+                // replay in batches
+                info!("Replaying transactions {} to {}.", first_to_replay, last);
+                #[cfg(not(test))]
+                const BATCH_SIZE: usize = 10000;
+                #[cfg(test)]
+                const BATCH_SIZE: usize = 2;
+
+                let mut current_version = first_to_replay;
+                while !chunk.txns.is_empty() {
+                    let this_batch_size = min(BATCH_SIZE, chunk.txns.len());
+                    self.transaction_replayer(current_version)?.replay_chunk(
+                        current_version,
+                        chunk.txns.drain(0..this_batch_size).collect::<Vec<_>>(),
+                        chunk
+                            .txn_infos
+                            .drain(0..this_batch_size)
+                            .collect::<Vec<_>>(),
+                    )?;
+                    current_version += this_batch_size as u64;
+                    TRANSACTION_REPLAY_VERSION.set(current_version as i64 - 1);
+                }
             }
         }
 
         if self.target_version < manifest.last_version {
-            println!(
+            warn!(
                 "Transactions newer than target version {} ignored.",
                 self.target_version,
             )

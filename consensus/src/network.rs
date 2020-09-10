@@ -15,7 +15,6 @@ use consensus_types::{
     vote_msg::VoteMsg,
 };
 use futures::{channel::oneshot, stream::select, SinkExt, Stream, StreamExt, TryStreamExt};
-use inject_error::inject_error;
 use libra_logger::prelude::*;
 use libra_metrics::monitor;
 use libra_types::{
@@ -77,7 +76,6 @@ impl NetworkSender {
 
     /// Tries to retrieve num of blocks backwards starting from id from the given peer: the function
     /// returns a future that is fulfilled with BlockRetrievalResponse.
-    #[inject_error(probability = 0.05)]
     pub async fn request_block(
         &mut self,
         retrieval_request: BlockRetrievalRequest,
@@ -101,9 +99,12 @@ impl NetworkSender {
                 &self.validators,
             )
             .map_err(|e| {
-                send_struct_log!(security_log(security_events::INVALID_RETRIEVED_BLOCK)
-                    .data("request_block_reponse", &response)
-                    .data_display("error", &e));
+                error!(
+                    SecurityEvent::InvalidRetrievedBlock,
+                    StructuredLogEntry::default()
+                        .data("request_block_reponse", &response)
+                        .data_display("error", &e)
+                );
                 e
             })?;
 

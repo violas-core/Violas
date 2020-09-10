@@ -15,7 +15,6 @@ use crate::{
     pending_votes::VoteReceptionResult,
     persistent_liveness_storage::{PersistentLivenessStorage, RecoveryData},
     state_replication::{StateComputer, TxnManager},
-    util::time_service::duration_since_epoch,
 };
 use anyhow::{bail, ensure, Context, Result};
 use consensus_types::{
@@ -29,8 +28,9 @@ use consensus_types::{
     vote::Vote,
     vote_msg::VoteMsg,
 };
-use inject_error::inject_error;
+use fail::fail_point;
 use libra_logger::prelude::*;
+use libra_time::duration_since_epoch;
 use libra_trace::prelude::*;
 use libra_types::{epoch_state::EpochState, validator_verifier::ValidatorVerifier};
 #[cfg(test)]
@@ -281,7 +281,6 @@ impl RoundManager {
     /// Process the proposal message:
     /// 1. ensure after processing sync info, we're at the same round as the proposal
     /// 2. execute and decide whether to vode for the proposal
-    #[inject_error(probability = 0.05)]
     pub async fn process_proposal_msg(&mut self, proposal_msg: ProposalMsg) -> anyhow::Result<()> {
         trace_event!("round_manager::pre_process_proposal", {"block", proposal_msg.proposal().id()});
         if self
@@ -335,9 +334,12 @@ impl RoundManager {
             sync_info
                 .verify(&self.epoch_state().verifier)
                 .map_err(|e| {
-                    send_struct_log!(security_log(security_events::INVALID_SYNC_INFO_MSG)
-                        .data("sync_info", &sync_info)
-                        .data_display("error", &e));
+                    error!(
+                        SecurityEvent::InvalidSyncInfoMsg,
+                        StructuredLogEntry::default()
+                            .data("sync_info", &sync_info)
+                            .data_display("error", &e)
+                    );
                     e
                 })?;
             let result = self
@@ -379,7 +381,6 @@ impl RoundManager {
     }
 
     /// Process the SyncInfo sent by peers to catch up to latest state.
-    #[inject_error(probability = 0.05)]
     pub async fn process_sync_info_msg(
         &mut self,
         sync_info: SyncInfo,
@@ -466,6 +467,9 @@ impl RoundManager {
     /// 4. In case a validator chooses to vote, send the vote to the representatives at the next
     /// round.
     async fn process_proposal(&mut self, proposal: Block) -> Result<()> {
+        fail_point!("process_proposal", |_| {
+            Err(anyhow::anyhow!("Injected error in process_proposal"))
+        });
         ensure!(
             self.proposer_election.is_valid_proposal(&proposal),
             "[RoundManager] Proposer {} for block {} is not a valid proposer for this round",
@@ -569,7 +573,6 @@ impl RoundManager {
     /// potential attacks).
     /// 2. Add the vote to the pending votes and check whether it finishes a QC.
     /// 3. Once the QC/TC successfully formed, notify the RoundState.
-    #[inject_error(probability = 0.05)]
     pub async fn process_vote_msg(&mut self, vote_msg: VoteMsg) -> anyhow::Result<()> {
         trace_code_block!("round_manager::process_vote", {"block", vote_msg.proposed_block_id()});
         // Check whether this validator is a valid recipient of the vote.
@@ -667,7 +670,6 @@ impl RoundManager {
     ///
     /// The current version of the function is not really async, but keeping it this way for
     /// future possible changes.
-    #[inject_error(probability = 0.05)]
     pub async fn process_block_retrieval(
         &self,
         request: IncomingBlockRetrievalRequest,

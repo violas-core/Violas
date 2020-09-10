@@ -273,22 +273,10 @@ impl PeerManagerBuilder {
 
         let protos = transport_context.supported_protocols();
         let chain_id = transport_context.chain_id;
-        let network_id = self.network_context.network_id().clone();
-        let peer_id = self.network_context.peer_id();
 
-        let (key, maybe_trusted_peers, peer_id) = match transport_context.authentication_mode {
-            // validator-operated full node
-            AuthenticationMode::ServerOnly(key) if peer_id == PeerId::ZERO => {
-                let public_key = key.public_key();
-                let peer_id = PeerId::from_identity_public_key(public_key);
-                (key, None, peer_id)
-            }
-            // full node
-            AuthenticationMode::ServerOnly(key) => (key, None, peer_id),
-            // validator
-            AuthenticationMode::Mutual(key) => {
-                (key, Some(transport_context.trusted_peers), peer_id)
-            }
+        let (key, maybe_trusted_peers) = match transport_context.authentication_mode {
+            AuthenticationMode::ServerOnly(key) => (key, None),
+            AuthenticationMode::Mutual(key) => (key, Some(transport_context.trusted_peers)),
         };
 
         match self.listen_address.as_slice() {
@@ -296,12 +284,11 @@ impl PeerManagerBuilder {
                 self.tcp_peer_manager = Some(self.build_with_transport(
                     LibraNetTransport::new(
                         LIBRA_TCP_TRANSPORT.clone(),
-                        peer_id,
+                        self.network_context.clone(),
                         key,
                         maybe_trusted_peers,
                         HANDSHAKE_VERSION,
                         chain_id,
-                        network_id,
                         protos,
                     ),
                     executor,
@@ -312,12 +299,11 @@ impl PeerManagerBuilder {
                 self.memory_peer_manager = Some(self.build_with_transport(
                     LibraNetTransport::new(
                         MemoryTransport,
-                        peer_id,
+                        self.network_context.clone(),
                         key,
                         maybe_trusted_peers,
                         HANDSHAKE_VERSION,
                         chain_id,
-                        network_id,
                         protos,
                     ),
                     executor,

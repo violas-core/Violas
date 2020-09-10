@@ -1,7 +1,7 @@
 // Copyright (c) The Libra Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::common::{mangle_type, type_not_allowed};
+use crate::common;
 use heck::{CamelCase, ShoutySnakeCase};
 use libra_types::transaction::{ArgumentABI, ScriptABI, TypeArgumentABI};
 use move_core_types::language_storage::TypeTag;
@@ -11,21 +11,17 @@ use serde_generate::{
 };
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     io::{Result, Write},
     path::PathBuf,
 };
 
 /// Output transaction builders in Python for the given ABIs.
-pub fn output(out: &mut dyn Write, abis: &[ScriptABI]) -> Result<()> {
-    output_with_optional_packages(out, abis, None, None)
-}
-
-fn output_with_optional_packages(
+pub fn output(
     out: &mut dyn Write,
-    abis: &[ScriptABI],
     serde_package_name: Option<String>,
     libra_package_name: Option<String>,
+    abis: &[ScriptABI],
 ) -> Result<()> {
     let mut emitter = PythonEmitter {
         out: IndentedWriter::new(out, IndentConfig::Space(4)),
@@ -33,7 +29,7 @@ fn output_with_optional_packages(
         libra_package_name,
     };
     emitter.output_script_call_enum_with_imports(abis)?;
-    emitter.output_preamble()?;
+    emitter.output_additional_imports()?;
 
     emitter.output_encode_method()?;
     emitter.output_decode_method()?;
@@ -70,7 +66,7 @@ impl<T> PythonEmitter<T>
 where
     T: Write,
 {
-    fn output_preamble(&mut self) -> Result<()> {
+    fn output_additional_imports(&mut self) -> Result<()> {
         writeln!(
             self.out,
             r#"
@@ -131,7 +127,7 @@ def decode_script(script: Script) -> ScriptCall:
                         "ScriptCall".to_string(),
                         abi.name().to_camel_case(),
                     ],
-                    Self::quote_doc(abi.doc()),
+                    Self::prepare_doc_string(abi.doc()),
                 )
             })
             .collect();
@@ -139,7 +135,6 @@ def decode_script(script: Script) -> ScriptCall:
             vec!["".to_string(), "ScriptCall".to_string()],
             "Structured representation of a call into a known Move script.".into(),
         );
-        // Deactivate serialization for local types to force `Bytes = Vec<u8>`.
         let config = CodeGeneratorConfig::new("".to_string())
             .with_comments(comments)
             .with_external_definitions(external_definitions)
@@ -164,7 +159,11 @@ def decode_script(script: Script) -> ScriptCall:
             .join(", ")
         )?;
         self.out.indent();
-        writeln!(self.out, "\"\"\"{}\n\"\"\"", Self::quote_doc(abi.doc()))?;
+        writeln!(
+            self.out,
+            "\"\"\"{}\n\"\"\"",
+            Self::prepare_doc_string(abi.doc())
+        )?;
         writeln!(
             self.out,
             r#"return Script(
@@ -208,7 +207,7 @@ def decode_script(script: Script) -> ScriptCall:
                 self.out,
                 "{}=decode_{}_argument(script.args[{}]),",
                 arg.name(),
-                mangle_type(arg.type_tag()),
+                common::mangle_type(arg.type_tag()),
                 index,
             )?;
         }
@@ -216,6 +215,19 @@ def decode_script(script: Script) -> ScriptCall:
         writeln!(self.out, ")\n")?;
         self.out.unindent();
         Ok(())
+    }
+
+    fn output_code_constant(&mut self, abi: &ScriptABI) -> Result<()> {
+        writeln!(
+            self.out,
+            "\n{}_CODE = b\"{}\"",
+            abi.name().to_shouty_snake_case(),
+            abi.code()
+                .iter()
+                .map(|x| format!("\\x{:02x}", x))
+                .collect::<Vec<_>>()
+                .join(""),
+        )
     }
 
     fn output_encoder_map(&mut self, abis: &[ScriptABI]) -> Result<()> {
@@ -257,21 +269,7 @@ SCRIPT_ENCODER_MAP: typing.Dict[typing.Type[ScriptCall], typing.Callable[[Script
     }
 
     fn output_decoding_helpers(&mut self, abis: &[ScriptABI]) -> Result<()> {
-        let mut required_types = BTreeSet::new();
-        for abi in abis {
-            for arg in abi.args() {
-                let mut type_tag = arg.type_tag();
-                required_types.insert(type_tag);
-                while let TypeTag::Vector(inner_type_tag) = type_tag {
-                    if **inner_type_tag == TypeTag::U8 {
-                        // decode_u8vector does not call decode_u8.
-                        break;
-                    }
-                    type_tag = inner_type_tag;
-                    required_types.insert(type_tag);
-                }
-            }
-        }
+        let required_types = common::get_required_decoding_helper_types(abis);
         for required_type in required_types {
             self.output_decoding_helper(required_type)?;
         }
@@ -292,11 +290,11 @@ SCRIPT_ENCODER_MAP: typing.Dict[typing.Type[ScriptCall], typing.Callable[[Script
                     "Vector",
                     format!(
                         "[decode_{}_argument(x) for x in arg.value]",
-                        mangle_type(inner_type_tag)
+                        common::mangle_type(inner_type_tag)
                     ),
                 ),
             },
-            Struct(_) | Signer => type_not_allowed(type_tag),
+            Struct(_) | Signer => common::type_not_allowed(type_tag),
         };
         writeln!(
             self.out,
@@ -306,7 +304,7 @@ def decode_{}_argument(arg: TransactionArgument) -> {}:
         raise ValueError("Was expecting a {} argument")
     return {}
 "#,
-            mangle_type(type_tag),
+            common::mangle_type(type_tag),
             Self::quote_type(type_tag),
             constructor,
             constructor,
@@ -314,20 +312,7 @@ def decode_{}_argument(arg: TransactionArgument) -> {}:
         )
     }
 
-    fn output_code_constant(&mut self, abi: &ScriptABI) -> Result<()> {
-        writeln!(
-            self.out,
-            "\n{}_CODE = b\"{}\"",
-            abi.name().to_shouty_snake_case(),
-            abi.code()
-                .iter()
-                .map(|x| format!("\\x{:02x}", x))
-                .collect::<Vec<_>>()
-                .join(""),
-        )
-    }
-
-    fn quote_doc(doc: &str) -> String {
+    fn prepare_doc_string(doc: &str) -> String {
         let doc = crate::common::prepare_doc_string(doc);
         let s: Vec<_> = doc.splitn(2, |c| c == '.').collect();
         if s.len() <= 1 || s[1].is_empty() {
@@ -375,10 +360,10 @@ def decode_{}_argument(arg: TransactionArgument) -> {}:
             Address => "AccountAddress".into(),
             Vector(type_tag) => match type_tag.as_ref() {
                 U8 => "bytes".into(),
-                _ => type_not_allowed(type_tag),
+                _ => common::type_not_allowed(type_tag),
             },
 
-            Struct(_) | Signer => type_not_allowed(type_tag),
+            Struct(_) | Signer => common::type_not_allowed(type_tag),
         }
     }
 
@@ -392,10 +377,10 @@ def decode_{}_argument(arg: TransactionArgument) -> {}:
             Address => format!("TransactionArgument__Address(value={})", name),
             Vector(type_tag) => match type_tag.as_ref() {
                 U8 => format!("TransactionArgument__U8Vector(value={})", name),
-                _ => type_not_allowed(type_tag),
+                _ => common::type_not_allowed(type_tag),
             },
 
-            Struct(_) | Signer => type_not_allowed(type_tag),
+            Struct(_) | Signer => common::type_not_allowed(type_tag),
         }
     }
 }
@@ -435,11 +420,11 @@ impl crate::SourceInstaller for Installer {
         abis: &[ScriptABI],
     ) -> std::result::Result<(), Self::Error> {
         let mut file = self.open_module_init_file(name)?;
-        output_with_optional_packages(
+        output(
             &mut file,
-            abis,
             self.serde_package_name.clone(),
             self.libra_package_name.clone(),
+            abis,
         )?;
         Ok(())
     }

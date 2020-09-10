@@ -27,10 +27,10 @@ fn main() {
         .channel_size(config.logger.chan_size)
         .is_async(config.logger.is_async)
         .level(config.logger.level)
+        .read_env()
         .init();
-    libra_logger::init_struct_log_from_env().expect("Failed to initialize structured logging");
 
-    MetricsPusher.start();
+    let _mp = MetricsPusher::start();
 
     let mut service = Process::new(config);
     service.start();

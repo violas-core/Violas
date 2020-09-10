@@ -21,7 +21,7 @@ fun main(account: &signer) {
 }
 
 // check: MintEvent
-// check: EXECUTED
+// check: "Keep(EXECUTED)"
 
 //! new-transaction
 // Minting from a non-privileged account should not work
@@ -34,8 +34,5 @@ fun main(account: &signer) {
 }
 }
 
-// will fail with MISSING_DATA because sender doesn't have the mint capability
-// TODO(status_migration) can't match MISSING_DATA if EXECUTION_FAILURE is removed
-// check: EXECUTION_FAILURE
-// check: MISSING_DATA
-// check: Keep
+// will abort because sender doesn't have the mint capability
+// check: "Keep(ABORTED { code: 2564,"

@@ -693,13 +693,15 @@ impl DbReader for LibraDB {
             version,
             ledger_version
         );
-        let latest_version = self.get_latest_version()?;
-        ensure!(
-            ledger_version <= latest_version,
-            "The ledger version {} is greater than the latest version currently in ledger: {}",
-            ledger_version,
-            latest_version
-        );
+        {
+            let latest_version = self.get_latest_version()?;
+            ensure!(
+                ledger_version <= latest_version,
+                "ledger_version specified {} is greater than committed version {}.",
+                ledger_version,
+                latest_version
+            );
+        }
 
         let txn_info_with_proof = self
             .ledger_store
@@ -774,6 +776,10 @@ impl DbReader for LibraDB {
             None => 0,
         };
         Ok(ts)
+    }
+
+    fn get_latest_transaction_info_option(&self) -> Result<Option<(Version, TransactionInfo)>> {
+        self.ledger_store.get_latest_transaction_info_option()
     }
 }
 

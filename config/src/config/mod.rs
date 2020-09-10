@@ -4,7 +4,7 @@
 use rand::{rngs::StdRng, SeedableRng};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fmt, fs,
     fs::File,
     io::{Read, Write},
@@ -46,10 +46,7 @@ pub use upstream_config::*;
 mod test_config;
 use crate::network_id::NetworkId;
 use libra_secure_storage::{KVStorage, Storage};
-use libra_types::{
-    chain_id::{self, ChainId},
-    waypoint::Waypoint,
-};
+use libra_types::waypoint::Waypoint;
 pub use test_config::*;
 
 /// Config pulls in configuration information from the config file.
@@ -87,14 +84,14 @@ pub struct NodeConfig {
     pub upstream: UpstreamConfig,
     #[serde(default)]
     pub validator_network: Option<NetworkConfig>,
+    #[serde(default)]
+    pub failpoints: Option<HashMap<String, String>>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct BaseConfig {
     data_dir: PathBuf,
-    #[serde(deserialize_with = "chain_id::deserialize_config_chain_id")]
-    pub chain_id: ChainId,
     pub role: RoleType,
     pub waypoint: WaypointConfig,
 }
@@ -103,7 +100,6 @@ impl Default for BaseConfig {
     fn default() -> BaseConfig {
         BaseConfig {
             data_dir: PathBuf::from("/opt/libra/data"),
-            chain_id: ChainId::test(),
             role: RoleType::Validator,
             waypoint: WaypointConfig::None,
         }
@@ -142,12 +138,10 @@ impl WaypointConfig {
             WaypointConfig::FromStorage(backend) => {
                 let storage: Storage = backend.into();
                 let waypoint = storage
-                    .get(libra_global_constants::WAYPOINT)
+                    .get::<Waypoint>(libra_global_constants::WAYPOINT)
                     .expect("Unable to read waypoint")
-                    .value
-                    .string()
-                    .expect("Expected string for waypoint");
-                Some(Waypoint::from_str(&waypoint).expect("Unable to parse waypoint"))
+                    .value;
+                Some(waypoint)
             }
             WaypointConfig::None => None,
         };

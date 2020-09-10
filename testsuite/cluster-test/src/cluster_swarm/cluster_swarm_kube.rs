@@ -24,23 +24,19 @@ use crate::instance::{
     ApplicationConfig::{Fullnode, Validator, Vault, LSR},
     InstanceConfig,
 };
-use itertools::Itertools;
 use k8s_openapi::api::batch::v1::Job;
 use kube::api::ListParams;
-use libra_config::config::{
-    NodeConfig, PersistableConfig, SafetyRulesConfig, DEFAULT_JSON_RPC_PORT,
-};
+use libra_config::config::DEFAULT_JSON_RPC_PORT;
 use reqwest::Client as HttpClient;
 use rusoto_core::Region;
 use rusoto_s3::{PutObjectRequest, S3Client, S3};
 use rusoto_sts::WebIdentityProvider;
-use std::{collections::HashSet, convert::TryFrom, process::Command};
+use std::{collections::HashSet, convert::TryFrom, process::Command, time::Duration};
 use tokio::sync::Semaphore;
 
 const DEFAULT_NAMESPACE: &str = "default";
 
 pub const CFG_SEED: &str = "1337133713371337133713371337133713371337133713371337133713371337";
-const CFG_FULLNODE_SEED: &str = "2674267426742674267426742674267426742674267426742674267426742674";
 
 const ERROR_NOT_FOUND: u16 = 404;
 
@@ -61,7 +57,7 @@ impl ClusterSwarmKube {
         Command::new("/usr/local/bin/kubectl")
             .arg("proxy")
             .spawn()?;
-        libra_retrier::retry_async(libra_retrier::fixed_retry_strategy(2000, 60), || {
+        libra_retrier::retry_async(k8s_retry_strategy(), || {
             Box::pin(async move {
                 debug!("Running local kube pod healthcheck on http://127.0.0.1:8001");
                 reqwest::get("http://127.0.0.1:8001").await?.text().await?;
@@ -100,22 +96,12 @@ impl ClusterSwarmKube {
             .unwrap()
     }
 
-    fn lsr_spec(
-        &self,
-        validator_index: u32,
-        num_validators: u32,
-        node_name: &str,
-        image_tag: &str,
-        lsr_backend: &str,
-    ) -> Result<(Pod, Service)> {
+    fn lsr_spec(&self, pod_name: &str, node_name: &str, image_tag: &str) -> Result<(Pod, Service)> {
         let pod_yaml = format!(
             include_str!("lsr_spec_template.yaml"),
-            validator_index = validator_index,
-            num_validators = num_validators,
+            pod_name = pod_name,
             image_tag = image_tag,
             node_name = node_name,
-            lsr_backend = lsr_backend,
-            cfg_seed = CFG_SEED,
         );
         let pod_spec: serde_yaml::Value = serde_yaml::from_str(&pod_yaml)?;
         let pod_spec = serde_json::value::to_value(pod_spec)?;
@@ -123,7 +109,7 @@ impl ClusterSwarmKube {
             .map_err(|e| format_err!("serde_json::from_value failed: {}", e))?;
         let service_yaml = format!(
             include_str!("lsr_service_template.yaml"),
-            validator_index = validator_index,
+            pod_name = pod_name,
         );
         let service_spec: serde_yaml::Value = serde_yaml::from_str(&service_yaml).unwrap();
         let service_spec = serde_json::value::to_value(service_spec).unwrap();
@@ -153,70 +139,19 @@ impl ClusterSwarmKube {
         Ok((pod_spec, service_spec))
     }
 
-    fn validator_spec(
+    fn libra_node_spec(
         &self,
-        index: u32,
+        pod_app: &str,
         pod_name: &str,
-        num_validators: u32,
-        num_fullnodes: u32,
-        enable_lsr: bool,
-        enable_mgmt_tool: bool,
         node_name: &str,
         image_tag: &str,
-        seed_peer_ip: &str,
-        safety_rules_addr: &str,
-        cfg_overrides: &str,
     ) -> Result<Pod> {
-        let cfg_fullnode_seed = if num_fullnodes > 0 {
-            CFG_FULLNODE_SEED
-        } else {
-            ""
-        };
         let pod_yaml = format!(
-            include_str!("validator_spec_template.yaml"),
-            index = index,
+            include_str!("libra_node_spec_template.yaml"),
+            pod_app = pod_app,
             pod_name = pod_name,
-            num_validators = num_validators,
-            num_fullnodes = num_fullnodes,
-            enable_lsr = enable_lsr,
             image_tag = image_tag,
             node_name = node_name,
-            cfg_overrides = cfg_overrides,
-            cfg_seed = CFG_SEED,
-            cfg_seed_peer_ip = seed_peer_ip,
-            cfg_safety_rules_addr = safety_rules_addr,
-            cfg_fullnode_seed = cfg_fullnode_seed,
-            cfg_enable_mgmt_tool = enable_mgmt_tool,
-        );
-        let pod_spec: serde_yaml::Value = serde_yaml::from_str(&pod_yaml)?;
-        let pod_spec = serde_json::value::to_value(pod_spec)?;
-        serde_json::from_value(pod_spec)
-            .map_err(|e| format_err!("serde_json::from_value failed: {}", e))
-    }
-
-    fn fullnode_spec(
-        &self,
-        fullnode_index: u32,
-        num_fullnodes: u32,
-        validator_index: u32,
-        num_validators: u32,
-        node_name: &str,
-        image_tag: &str,
-        seed_peer_ip: &str,
-        cfg_overrides: &str,
-    ) -> Result<Pod> {
-        let pod_yaml = format!(
-            include_str!("fullnode_spec_template.yaml"),
-            fullnode_index = fullnode_index,
-            num_fullnodes = num_fullnodes,
-            validator_index = validator_index,
-            num_validators = num_validators,
-            node_name = node_name,
-            image_tag = image_tag,
-            cfg_overrides = cfg_overrides,
-            cfg_seed = CFG_SEED,
-            cfg_seed_peer_ip = seed_peer_ip,
-            cfg_fullnode_seed = CFG_FULLNODE_SEED,
         );
         let pod_spec: serde_yaml::Value = serde_yaml::from_str(&pod_yaml)?;
         let pod_spec = serde_json::value::to_value(pod_spec)?;
@@ -260,7 +195,7 @@ impl ClusterSwarmKube {
         back_off_limit: u32,
         killed: bool,
     ) -> Result<bool> {
-        libra_retrier::retry_async(libra_retrier::fixed_retry_strategy(5000, 20), || {
+        libra_retrier::retry_async(k8s_retry_strategy(), || {
             let job_api: Api<Job> = Api::namespaced(self.client.clone(), DEFAULT_NAMESPACE);
             let job_name = job_name.to_string();
             Box::pin(async move {
@@ -301,15 +236,15 @@ impl ClusterSwarmKube {
         job_api
             .delete(job_full_name, &dp)
             .await?
-            .map_left(|o| println!("Deleting Job: {:?}", o.status))
-            .map_right(|s| println!("Deleted Job: {:?}", s));
+            .map_left(|o| debug!("Deleting Job: {:?}", o.status))
+            .map_right(|s| debug!("Deleted Job: {:?}", s));
         let back_off_limit = 0;
         // the job night have been deleted already, so we do not handle error
         match self
             .wait_job_completion(job_full_name, back_off_limit, true)
             .await
         {
-            Ok(_) => info!("Killing job {} returned job_status.success", job_full_name),
+            Ok(_) => debug!("Killing job {} returned job_status.success", job_full_name),
             Err(error) => info!(
                 "Killing job {} returned job_status.failed: {}",
                 job_full_name, error
@@ -369,7 +304,7 @@ impl ClusterSwarmKube {
     {
         debug!("Deleting {} {}", T::KIND, name);
         let resource_api: Api<T> = Api::namespaced(self.client.clone(), DEFAULT_NAMESPACE);
-        libra_retrier::retry_async(libra_retrier::fixed_retry_strategy(5000, 60), || {
+        libra_retrier::retry_async(k8s_retry_strategy(), || {
             let resource_api = resource_api.clone();
             let name = name.to_string();
             Box::pin(async move {
@@ -494,7 +429,7 @@ impl ClusterSwarmKube {
     }
 
     pub async fn allocate_node(&self, pod_name: &str) -> Result<KubeNode> {
-        libra_retrier::retry_async(libra_retrier::fixed_retry_strategy(5000, 15), || {
+        libra_retrier::retry_async(k8s_retry_strategy(), || {
             Box::pin(async move { self.allocate_node_impl(pod_name).await })
         })
         .await
@@ -535,77 +470,43 @@ impl ClusterSwarmKube {
             "Configuring fluent-bit, genesis and config for pod {} on {}",
             pod_name, node.name
         );
-        match &instance_config.application_config {
-            Validator(validator_config) => {
-                self.config_fluentbit("validator-events", &pod_name, &node.name)
-                    .await?;
-                if validator_config.enable_mgmt_tool {
-                    self.put_genesis_file(&pod_name, &node.name).await?;
-                    self.generate_config(&instance_config, &pod_name, &node.name)
-                        .await?;
-                }
-            }
-            Fullnode(fullnode_config) => {
-                self.config_fluentbit("validator-events", &pod_name, &node.name)
-                    .await?;
-                if fullnode_config.enable_mgmt_tool {
-                    self.put_genesis_file(&pod_name, &node.name).await?;
-                    self.generate_config(&instance_config, &pod_name, &node.name)
-                        .await?;
-                }
-            }
-            LSR(_) => {
-                self.config_fluentbit("safety-rules-events", &pod_name, &node.name)
-                    .await?;
-                self.generate_config(&instance_config, &pod_name, &node.name)
-                    .await?;
-            }
-            _ => {}
+        if instance_config.application_config.needs_fluentbit() {
+            self.config_fluentbit("events", &pod_name, &node.name)
+                .await?;
+        }
+        if instance_config.application_config.needs_genesis() {
+            self.put_genesis_file(&pod_name, &node.name).await?;
+        }
+        if instance_config.application_config.needs_config() {
+            self.generate_config(&instance_config, &pod_name, &node.name)
+                .await?;
         }
         debug!("Creating pod {} on {:?}", pod_name, node);
         let (p, s): (Pod, Service) = match &instance_config.application_config {
             Validator(validator_config) => (
-                self.validator_spec(
-                    instance_config.validator_group.index,
+                self.libra_node_spec(
+                    "libra-validator",
                     pod_name.as_str(),
-                    validator_config.num_validators,
-                    validator_config.num_fullnodes,
-                    validator_config.enable_lsr,
-                    validator_config.enable_mgmt_tool,
                     &node.name,
                     &validator_config.image_tag,
-                    &validator_config.seed_peer_ip,
-                    validator_config
-                        .safety_rules_addr
-                        .as_ref()
-                        .unwrap_or(&"".to_string()),
-                    &validator_config.config_overrides.iter().join(","),
                 )?,
                 self.service_spec(pod_name.clone()),
             ),
             Fullnode(fullnode_config) => (
-                self.fullnode_spec(
-                    fullnode_config.fullnode_index,
-                    fullnode_config.num_fullnodes_per_validator,
-                    instance_config.validator_group.index_only(),
-                    fullnode_config.num_validators,
+                self.libra_node_spec(
+                    "libra-fullnode",
+                    pod_name.as_str(),
                     &node.name,
                     &fullnode_config.image_tag,
-                    &fullnode_config.seed_peer_ip,
-                    &fullnode_config.config_overrides.iter().join(","),
                 )?,
                 self.service_spec(pod_name.clone()),
             ),
             Vault(_vault_config) => {
                 self.vault_spec(instance_config.validator_group.index_only(), &node.name)?
             }
-            LSR(lsr_config) => self.lsr_spec(
-                instance_config.validator_group.index_only(),
-                lsr_config.num_validators,
-                &node.name,
-                &lsr_config.image_tag,
-                &lsr_config.lsr_backend,
-            )?,
+            LSR(lsr_config) => {
+                self.lsr_spec(pod_name.as_str(), &node.name, &lsr_config.image_tag)?
+            }
         };
         match pod_api.create(&PostParams::default(), &p).await {
             Ok(o) => {
@@ -661,7 +562,7 @@ impl ClusterSwarmKube {
     }
 
     async fn remove_all_network_effects(&self) -> Result<()> {
-        libra_retrier::retry_async(libra_retrier::fixed_retry_strategy(5000, 3), || {
+        libra_retrier::retry_async(k8s_retry_strategy(), || {
             Box::pin(async move { self.remove_all_network_effects_helper().await })
         })
         .await
@@ -771,14 +672,14 @@ impl ClusterSwarmKube {
             node,
             pod_name,
             format!("{}parser.conf", dir).as_str(),
-            parsers_config.into_bytes(),
+            parsers_config.as_bytes(),
         )
         .await?;
         self.put_file(
             node,
             pod_name,
             format!("{}fluent-bit.conf", dir).as_str(),
-            fluentbit_config.into_bytes(),
+            fluentbit_config.as_bytes(),
         )
         .await?;
         Ok(())
@@ -787,8 +688,13 @@ impl ClusterSwarmKube {
     async fn put_genesis_file(&self, pod_name: &str, node: &str) -> Result<()> {
         let genesis = std::fs::read(GENESIS_PATH)
             .map_err(|e| format_err!("Failed to read {} : {}", GENESIS_PATH, e))?;
-        self.put_file(node, pod_name, "/opt/libra/etc/genesis.blob", genesis)
-            .await?;
+        self.put_file(
+            node,
+            pod_name,
+            "/opt/libra/etc/genesis.blob",
+            genesis.as_slice(),
+        )
+        .await?;
         Ok(())
     }
 
@@ -799,64 +705,52 @@ impl ClusterSwarmKube {
         node: &str,
     ) -> Result<()> {
         let node_config = match &instance_config.application_config {
-            Validator(validator_config) => {
-                let config = format!(
-                    include_str!("configs/validator.yaml"),
-                    vault_addr = validator_config
-                        .vault_addr
-                        .as_ref()
-                        .unwrap_or(&"".to_string()),
-                    vault_ns = validator_config
-                        .vault_namespace
-                        .as_ref()
-                        .unwrap_or(&"".to_string()),
-                    safety_rules_addr = validator_config
-                        .safety_rules_addr
-                        .as_ref()
-                        .unwrap_or(&"".to_string()),
-                );
-                Some(serde_yaml::to_vec(&NodeConfig::parse(&config).map_err(
-                    |e| format_err!("Failed to parse config template : {}", e),
-                )?)?)
-            }
-            Fullnode(fullnode_config) => {
-                let config = format!(
-                    include_str!("configs/fullnode.yaml"),
-                    vault_addr = fullnode_config
-                        .vault_addr
-                        .as_ref()
-                        .unwrap_or(&"".to_string()),
-                    vault_ns = fullnode_config
-                        .vault_namespace
-                        .as_ref()
-                        .unwrap_or(&"".to_string()),
-                    seed_peer_ip = fullnode_config.seed_peer_ip,
-                );
-                Some(serde_yaml::to_vec::<NodeConfig>(
-                    &NodeConfig::parse(&config)
-                        .map_err(|e| format_err!("Failed to parse config template : {}", e))?,
-                )?)
-            }
-            LSR(lsr_config) => {
-                let config = format!(
-                    include_str!("configs/safetyrules.yaml"),
-                    vault_addr = lsr_config.vault_addr.as_ref().unwrap_or(&"".to_string()),
-                    vault_ns = lsr_config
-                        .vault_namespace
-                        .as_ref()
-                        .unwrap_or(&"".to_string()),
-                );
-                Some(serde_yaml::to_vec::<SafetyRulesConfig>(
-                    &SafetyRulesConfig::parse(&config)
-                        .map_err(|e| format_err!("Failed to parse config template : {}", e))?,
-                )?)
-            }
+            Validator(validator_config) => Some(format!(
+                include_str!("configs/validator.yaml"),
+                vault_addr = validator_config
+                    .vault_addr
+                    .as_ref()
+                    .unwrap_or(&"".to_string()),
+                vault_ns = validator_config
+                    .vault_namespace
+                    .as_ref()
+                    .unwrap_or(&"".to_string()),
+                safety_rules_addr = validator_config
+                    .safety_rules_addr
+                    .as_ref()
+                    .unwrap_or(&"".to_string()),
+            )),
+            Fullnode(fullnode_config) => Some(format!(
+                include_str!("configs/fullnode.yaml"),
+                vault_addr = fullnode_config
+                    .vault_addr
+                    .as_ref()
+                    .unwrap_or(&"".to_string()),
+                vault_ns = fullnode_config
+                    .vault_namespace
+                    .as_ref()
+                    .unwrap_or(&"".to_string()),
+                seed_peer_ip = fullnode_config.seed_peer_ip,
+            )),
+            LSR(lsr_config) => Some(format!(
+                include_str!("configs/safetyrules.yaml"),
+                vault_addr = lsr_config.vault_addr.as_ref().unwrap_or(&"".to_string()),
+                vault_ns = lsr_config
+                    .vault_namespace
+                    .as_ref()
+                    .unwrap_or(&"".to_string()),
+            )),
             _ => None,
         };
 
         if let Some(node_config) = node_config {
-            self.put_file(node, pod_name, "/opt/libra/etc/node.yaml", node_config)
-                .await?;
+            self.put_file(
+                node,
+                pod_name,
+                "/opt/libra/etc/node.yaml",
+                node_config.as_bytes(),
+            )
+            .await?;
         }
 
         Ok(())
@@ -887,18 +781,12 @@ impl ClusterSwarm for ClusterSwarmKube {
         ))
     }
 
-    async fn put_file(
-        &self,
-        node: &str,
-        pod_name: &str,
-        path: &str,
-        content: Vec<u8>,
-    ) -> Result<()> {
+    async fn put_file(&self, node: &str, pod_name: &str, path: &str, content: &[u8]) -> Result<()> {
         let bucket = "toro-cluster-test-flamegraphs";
         let run_id = env::var("RUN_ID").expect("RUN_ID is not set.");
-        libra_retrier::retry_async(libra_retrier::fixed_retry_strategy(5000, 15), || {
+        libra_retrier::retry_async(k8s_retry_strategy(), || {
             let run_id = &run_id;
-            let content = content.clone();
+            let content = content.to_vec();
             Box::pin(async move {
                 self.s3_client
                     .put_object(PutObjectRequest {
@@ -982,4 +870,8 @@ async fn try_join_all_limit<O, E, F: Future<Output = std::result::Result<O, E>>>
 async fn acquire_and_execute<F: TryFuture>(semaphore: &Semaphore, f: F) -> F::Output {
     let _permit = semaphore.acquire().await;
     f.await
+}
+
+fn k8s_retry_strategy() -> impl Iterator<Item = Duration> {
+    libra_retrier::exp_retry_strategy(1000, 5000, 30)
 }

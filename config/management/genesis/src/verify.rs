@@ -3,13 +3,14 @@
 
 use executor::db_bootstrapper;
 use libra_global_constants::{
-    CONSENSUS_KEY, EPOCH, FULLNODE_NETWORK_KEY, LAST_VOTED_ROUND, OPERATOR_ACCOUNT, OPERATOR_KEY,
-    OWNER_ACCOUNT, OWNER_KEY, PREFERRED_ROUND, VALIDATOR_NETWORK_KEY, WAYPOINT,
+    CONSENSUS_KEY, FULLNODE_NETWORK_KEY, OPERATOR_ACCOUNT, OPERATOR_KEY, OWNER_ACCOUNT, OWNER_KEY,
+    SAFETY_DATA, VALIDATOR_NETWORK_KEY, WAYPOINT,
 };
 use libra_management::{
     config::ConfigPath, error::Error, secure_backend::ValidatorBackend,
     storage::StorageWrapper as Storage,
 };
+use libra_network_address::NetworkAddress;
 use libra_temppath::TempPath;
 use libra_types::{
     account_address::AccountAddress, account_config, account_state::AccountState,
@@ -69,15 +70,13 @@ impl Verify {
 
         write_string(&validator_storage, &mut buffer, OPERATOR_ACCOUNT);
         write_string(&validator_storage, &mut buffer, OWNER_ACCOUNT);
-        write_u64(&validator_storage, &mut buffer, EPOCH);
-        write_u64(&validator_storage, &mut buffer, LAST_VOTED_ROUND);
-        write_u64(&validator_storage, &mut buffer, PREFERRED_ROUND);
+        write_safety_data(&validator_storage, &mut buffer, SAFETY_DATA);
         write_waypoint(&validator_storage, &mut buffer, WAYPOINT);
 
         write_break(&mut buffer);
 
         if let Some(genesis_path) = self.genesis_path.as_ref() {
-            compare_genesis(&validator_storage, &mut buffer, genesis_path)?;
+            compare_genesis(validator_storage, &mut buffer, genesis_path)?;
         }
 
         Ok(buffer)
@@ -118,9 +117,9 @@ fn write_string(storage: &Storage, buffer: &mut String, key: &'static str) {
     writeln!(buffer, "{} - {}", key, value).unwrap();
 }
 
-fn write_u64(storage: &Storage, buffer: &mut String, key: &'static str) {
+fn write_safety_data(storage: &Storage, buffer: &mut String, key: &'static str) {
     let value = storage
-        .u64(key)
+        .value::<consensus_types::safety_data::SafetyData>(key)
         .map(|v| v.to_string())
         .unwrap_or_else(|e| e.to_string());
     writeln!(buffer, "{} - {}", key, value).unwrap();
@@ -144,7 +143,7 @@ fn write_waypoint(storage: &Storage, buffer: &mut String, key: &'static str) {
 }
 
 fn compare_genesis(
-    storage: &Storage,
+    storage: Storage,
     buffer: &mut String,
     genesis_path: &PathBuf,
 ) -> Result<(), Error> {
@@ -160,27 +159,41 @@ fn compare_genesis(
     let validator_config = validator_config(validator_account, db_rw.reader.clone())?;
 
     let actual_consensus_key = storage.ed25519_public_from_private(CONSENSUS_KEY)?;
-    let expected_consensus_key = validator_config.consensus_public_key;
+    let expected_consensus_key = &validator_config.consensus_public_key;
     write_assert(
         buffer,
         CONSENSUS_KEY,
-        actual_consensus_key == expected_consensus_key,
+        &actual_consensus_key == expected_consensus_key,
     );
 
     let actual_validator_key = storage.x25519_public_from_private(VALIDATOR_NETWORK_KEY)?;
-    let expected_validator_key = validator_config.validator_network_identity_public_key;
+    let actual_fullnode_key = storage.x25519_public_from_private(FULLNODE_NETWORK_KEY)?;
+    let encryptor = storage.encryptor();
+
+    let expected_validator_key = encryptor
+        .decrypt(
+            &validator_config.validator_network_addresses,
+            validator_account,
+        )
+        .ok()
+        .and_then(|addrs| {
+            addrs
+                .get(0)
+                .and_then(|addr: &NetworkAddress| addr.find_noise_proto())
+        });
     write_assert(
         buffer,
         VALIDATOR_NETWORK_KEY,
-        actual_validator_key == expected_validator_key,
+        Some(actual_validator_key) == expected_validator_key,
     );
 
-    let actual_fullnode_key = storage.x25519_public_from_private(FULLNODE_NETWORK_KEY)?;
-    let expected_fullnode_key = validator_config.full_node_network_identity_public_key;
+    let expected_fullnode_key = validator_config.fullnode_network_addresses().ok().and_then(
+        |addrs: Vec<NetworkAddress>| addrs.get(0).and_then(|addr| addr.find_noise_proto()),
+    );
     write_assert(
         buffer,
         FULLNODE_NETWORK_KEY,
-        actual_fullnode_key == expected_fullnode_key,
+        Some(actual_fullnode_key) == expected_fullnode_key,
     );
 
     Ok(())

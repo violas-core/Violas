@@ -4,16 +4,15 @@
 // FIXME: (gnazario) storage helper doesn't belong in the genesis tool, but it's attached to it right now
 
 use crate::command::Command;
+use consensus_types::safety_data::SafetyData;
 use libra_crypto::ed25519::Ed25519PublicKey;
 use libra_global_constants::{
-    CONSENSUS_KEY, EPOCH, EXECUTION_KEY, FULLNODE_NETWORK_KEY, LAST_VOTED_ROUND, LIBRA_ROOT_KEY,
-    OPERATOR_KEY, OWNER_KEY, PREFERRED_ROUND, VALIDATOR_NETWORK_KEY, WAYPOINT,
+    CONSENSUS_KEY, EXECUTION_KEY, FULLNODE_NETWORK_KEY, LIBRA_ROOT_KEY, OPERATOR_KEY, OWNER_KEY,
+    SAFETY_DATA, TREASURY_COMPLIANCE_KEY, VALIDATOR_NETWORK_KEY, WAYPOINT,
 };
 use libra_management::{error::Error, secure_backend::DISK};
 use libra_network_address::NetworkAddress;
-use libra_secure_storage::{
-    CryptoStorage, KVStorage, NamespacedStorage, OnDiskStorage, Storage, Value,
-};
+use libra_secure_storage::{CryptoStorage, KVStorage, NamespacedStorage, OnDiskStorage, Storage};
 use libra_types::{chain_id::ChainId, transaction::Transaction, waypoint::Waypoint};
 use std::{fs::File, path::Path};
 use structopt::StructOpt;
@@ -32,7 +31,7 @@ impl StorageHelper {
 
     pub fn storage(&self, namespace: String) -> Storage {
         let storage = OnDiskStorage::new(self.temppath.path().to_path_buf());
-        Storage::from(NamespacedStorage::new(Box::new(storage), namespace))
+        Storage::from(NamespacedStorage::new(Storage::from(storage), namespace))
     }
 
     pub fn path(&self) -> &Path {
@@ -48,6 +47,11 @@ impl StorageHelper {
 
         // Initialize all keys in storage
         storage.create_key(LIBRA_ROOT_KEY).unwrap();
+        // TODO(davidiw) use distinct keys in tests for treasury and libra root keys
+        let libra_root_key = storage.export_private_key(LIBRA_ROOT_KEY).unwrap();
+        storage
+            .import_private_key(TREASURY_COMPLIANCE_KEY, libra_root_key)
+            .unwrap();
         storage.create_key(CONSENSUS_KEY).unwrap();
         storage.create_key(EXECUTION_KEY).unwrap();
         storage.create_key(FULLNODE_NETWORK_KEY).unwrap();
@@ -56,10 +60,18 @@ impl StorageHelper {
         storage.create_key(VALIDATOR_NETWORK_KEY).unwrap();
 
         // Initialize all other data in storage
-        storage.set(EPOCH, Value::U64(0)).unwrap();
-        storage.set(LAST_VOTED_ROUND, Value::U64(0)).unwrap();
-        storage.set(PREFERRED_ROUND, Value::U64(0)).unwrap();
-        storage.set(WAYPOINT, Value::String("".into())).unwrap();
+        storage
+            .set(SAFETY_DATA, SafetyData::new(0, 0, 0, None))
+            .unwrap();
+        storage.set(WAYPOINT, Waypoint::default()).unwrap();
+        let mut encryptor = libra_network_address_encryption::Encryptor::new(storage);
+        encryptor.initialize().unwrap();
+        encryptor
+            .add_key(
+                libra_network_address::encrypted::TEST_SHARED_VAL_NETADDR_KEY_VERSION,
+                libra_network_address::encrypted::TEST_SHARED_VAL_NETADDR_KEY,
+            )
+            .unwrap();
     }
 
     pub fn create_and_insert_waypoint(
@@ -225,6 +237,32 @@ impl StorageHelper {
 
         let command = Command::from_iter(args.split_whitespace());
         command.set_operator()
+    }
+
+    pub fn treasury_compliance_key(
+        &self,
+        validator_ns: &str,
+        shared_ns: &str,
+    ) -> Result<Ed25519PublicKey, Error> {
+        let args = format!(
+            "
+                libra-genesis-tool
+                treasury-compliance-key
+                --validator-backend backend={backend};\
+                    path={path};\
+                    namespace={validator_ns}
+                --shared-backend backend={backend};\
+                    path={path};\
+                    namespace={shared_ns}
+            ",
+            backend = DISK,
+            path = self.path_string(),
+            validator_ns = validator_ns,
+            shared_ns = shared_ns,
+        );
+
+        let command = Command::from_iter(args.split_whitespace());
+        command.treasury_compliance_key()
     }
 
     pub fn validator_config(

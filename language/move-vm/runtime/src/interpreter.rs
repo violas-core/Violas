@@ -155,6 +155,12 @@ impl Interpreter {
                         )
                         .map_err(|e| set_err_info!(current_frame, e))?;
                     let func = resolver.function_from_handle(fh_idx);
+                    cost_strategy
+                        .charge_instr_with_size(
+                            Opcodes::CALL,
+                            AbstractMemorySize::new(func.arg_count() as GasCarrier),
+                        )
+                        .map_err(|e| set_err_info!(current_frame, e))?;
                     if func.is_native() {
                         self.call_native(&resolver, data_store, cost_strategy, func, vec![])?;
                         continue;
@@ -183,6 +189,12 @@ impl Interpreter {
                         .instantiate_generic_function(idx, current_frame.ty_args())
                         .map_err(|e| set_err_info!(current_frame, e))?;
                     let func = resolver.function_from_instantiation(idx);
+                    cost_strategy
+                        .charge_instr_with_size(
+                            Opcodes::CALL_GENERIC,
+                            AbstractMemorySize::new(func.arg_count() as GasCarrier),
+                        )
+                        .map_err(|e| set_err_info!(current_frame, e))?;
                     if func.is_native() {
                         self.call_native(&resolver, data_store, cost_strategy, func, ty_args)?;
                         continue;
@@ -319,11 +331,11 @@ impl Interpreter {
         match data_store.load_resource(addr, ty) {
             Ok(gv) => Ok(gv),
             Err(e) => {
-                crit!(
+                error!(
                     "[VM] error loading resource at ({}, {:?}): {:?} from data store",
-                    addr,
-                    ty,
-                    e
+                    account = addr,
+                    type = ty,
+                    error = e
                 );
                 Err(e)
             }
@@ -391,7 +403,7 @@ impl Interpreter {
     fn maybe_core_dump(&self, mut err: VMError, current_frame: &Frame) -> VMError {
         // a verification error cannot happen at runtime so change it into an invariant violation.
         if err.status_type() == StatusType::Verification {
-            crit!("Verification error during runtime: {:?}", err);
+            error!("Verification error during runtime: {:?}", error = err);
             let new_err = PartialVMError::new(StatusCode::VERIFICATION_ERROR);
             let new_err = match err.message() {
                 None => new_err,
@@ -401,10 +413,10 @@ impl Interpreter {
         }
         if err.status_type() == StatusType::InvariantViolation {
             let state = self.get_internal_state(current_frame);
-            crit!(
+            error!(
                 "Error: {:?}\nCORE DUMP: >>>>>>>>>>>>\n{}\n<<<<<<<<<<<<\n",
-                err,
-                state,
+                error = err,
+                state = state,
             );
         }
         err
@@ -685,7 +697,14 @@ impl Frame {
         let code = self.function.code();
         loop {
             for instruction in &code[self.pc as usize..] {
-                trace!(self.function.pretty_string(), self.pc, instruction);
+                trace!(
+                    &self.function,
+                    &self.locals,
+                    self.pc,
+                    instruction,
+                    &resolver,
+                    &interpreter
+                );
                 self.pc += 1;
 
                 match instruction {
@@ -1071,6 +1090,7 @@ impl Frame {
                         cost_strategy.charge_instr_with_size(Opcodes::MOVE_TO_GENERIC, size)?;
                     }
                     Bytecode::FreezeRef => {
+                        cost_strategy.charge_instr(Opcodes::FREEZE_REF)?;
                         // FreezeRef should just be a null op as we don't distinguish between mut
                         // and immut ref at runtime.
                     }

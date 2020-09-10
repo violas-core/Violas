@@ -95,7 +95,7 @@ impl SynchronizerEnv {
     }
 
     fn new(num_peers: usize) -> Self {
-        ::libra_logger::Logger::new().environment_only(true).init();
+        ::libra_logger::Logger::init_for_testing();
         let runtime = Runtime::new().unwrap();
         let (signers, public_keys, network_keys) = SynchronizerEnvHelper::initial_setup(num_peers);
         let peer_ids = signers.iter().map(|s| s.author()).collect::<Vec<PeerId>>();
@@ -154,7 +154,12 @@ impl SynchronizerEnv {
             .iter()
             .map(|public_keys| {
                 let peer_id = *public_keys.account_address();
-                let pubkey = public_keys.network_identity_public_key();
+                let peer_idx = self
+                    .peer_ids
+                    .iter()
+                    .position(|pid| pid == &peer_id)
+                    .unwrap();
+                let pubkey = self.network_keys[peer_idx].public_key();
                 let pubkey_set: HashSet<_> = [pubkey].iter().copied().collect();
                 (peer_id, pubkey_set)
             })
@@ -796,6 +801,7 @@ fn test_sync_pending_ledger_infos() {
 }
 
 #[test]
+#[ignore] // TODO: https://github.com/libra/libra/issues/5771
 fn test_fn_failover() {
     let mut env = SynchronizerEnv::new(5);
     env.start_next_synchronizer(

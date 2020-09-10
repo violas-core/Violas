@@ -9,7 +9,7 @@
 //! sender: libraroot
 //! args: 0, {{alice}}, {{alice::auth_key}}, b"alice"
 stdlib_script::create_validator_operator_account
-// check: EXECUTED
+// check: "Keep(EXECUTED)"
 
 //! new-transaction
 //! sender: bob
@@ -26,13 +26,13 @@ script {
     }
 }
 
-// check: EXECUTED
+// check: "Keep(EXECUTED)"
 
 //! block-prologue
 //! proposer: bob
 //! block-time: 2
 
-// check: EXECUTED
+// check: "Keep(EXECUTED)"
 
 //! new-transaction
 //! sender: alice
@@ -52,7 +52,7 @@ script {
         // alice rotates bob's public key
         ValidatorConfig::set_config(account, {{bob}},
                                     x"3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
-                                    x"", x"", x"", x"");
+                                    x"", x"");
         LibraSystem::update_config_and_reconfigure(account, {{bob}});
         // check bob's public key
         let validator_config = LibraSystem::get_validator_config({{bob}});
@@ -62,4 +62,4 @@ script {
 }
 
 // check: NewEpochEvent
-// check: EXECUTED
+// check: "Keep(EXECUTED)"
