@@ -9,6 +9,7 @@ A Libra account.
 
 | Name                              | Type                           | Description                                                                                 |
 |-----------------------------------|--------------------------------|---------------------------------------------------------------------------------------------|
+| address                           | string                         | the account address                                                                         |
 | sequence_number                   | unsigned int64                 | The next sequence number for the current account                                            |
 | authentication_key                | string                         | Hex-encoded authentication key for the account                                              |
 | delegated_key_rotation_capability | boolean                        | If true, another account has the ability to rotate the authentication key for this account. |
@@ -34,7 +35,7 @@ A Libra account.
 | type                               | string                         | "designated_dealer"                                               |
 | human_name                         | string                         | human-readable name of this designated dealer                     |
 | base_url                           | string                         | base URL for this designated dealer                               |
-| expiration_time                    | unsigned int64                 | expiration time for this designated dealer                        |
+| expiration_time                    | unsigned int64(microseconds)   | expiration time for this designated dealer                        |
 | compliance_key                     | string                         | compliance key for this designated dealer                         |
 | preburn balances                   | List<[Amount](type_amount.md)> | Preburn balances of this designated dealer                        |
 | received_mint_events_key           | string                         | key of received mint events for this designated dealer            |
@@ -48,16 +49,16 @@ A Libra account.
 
 ### Attributes
 
-| Name                               | Type           | Description                                                       |
-|------------------------------------|----------------|-------------------------------------------------------------------|
-| type                               | string         | "parent_vasp"                                                     |
-| human_name                         | string         | human-readable name of this parent VASP                           |
-| base_url                           | string         | base URL for this parent VASP                                     |
-| expiration_time                    | unsigned int64 | expiration time for this parent VASP                              |
-| compliance_key                     | string         | compliance key for this parent VASP                               |
-| num_children                       | unsigned int64 | number of children of this parent VASP                            |
-| compliance_key_rotation_events_key | string         | key of compliance key rotation events for this parent VASP        |
-| base_url_rotation_events_key       | string         | key of base url key rotation events for this parent VASP          |
+| Name                               | Type                         | Description                                                       |
+|------------------------------------|------------------------------|-------------------------------------------------------------------|
+| type                               | string                       | "parent_vasp"                                                     |
+| human_name                         | string                       | human-readable name of this parent VASP                           |
+| base_url                           | string                       | base URL for this parent VASP                                     |
+| expiration_time                    | unsigned int64(microseconds) | expiration time for this parent VASP                              |
+| compliance_key                     | string                       | compliance key for this parent VASP                               |
+| num_children                       | unsigned int64               | number of children of this parent VASP                            |
+| compliance_key_rotation_events_key | string                       | key of compliance key rotation events for this parent VASP        |
+| base_url_rotation_events_key       | string                       | key of base url key rotation events for this parent VASP          |
 
 
 
