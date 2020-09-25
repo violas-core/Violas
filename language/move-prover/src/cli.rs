@@ -125,11 +125,17 @@ pub struct ProverOptions {
     /// is accessed, instead of on function entry. This is currently known to be slower
     /// if one than off, so off by default.
     pub assume_invariant_on_access: bool,
+    /// Whether pack/unpack should recurse over the structure.
+    pub deep_pack_unpack: bool,
     /// Whether to automatically debug trace values of specification expression leafs.
     pub debug_trace: bool,
     /// Report warnings. This is not on by default. We may turn it on if the warnings
     /// are better filtered, e.g. do not contain unused schemas intended for other modules.
     pub report_warnings: bool,
+    /// Whether to dump the transformed stackless bytecode to a file
+    pub dump_bytecode: bool,
+    /// Number of Boogie instances to be run concurrently.
+    pub num_instances: usize,
 }
 
 impl Default for ProverOptions {
@@ -143,9 +149,12 @@ impl Default for ProverOptions {
             verify_scope: VerificationScope::Public,
             resource_wellformed_axiom: false,
             assume_wellformed_on_access: false,
+            deep_pack_unpack: false,
             debug_trace: false,
             report_warnings: false,
             assume_invariant_on_access: false,
+            dump_bytecode: false,
+            num_instances: 1,
         }
     }
 }
@@ -425,6 +434,19 @@ impl Options {
                     .validator(is_number)
                     .help("sets the lazy threshold for quantifier instantiation (default 100)")
             )
+            .arg(
+                Arg::with_name("dump-bytecode")
+                    .long("dump-bytecode")
+                    .help("whether to dump the transformed bytecode to a file")
+            )
+            .arg(
+                Arg::with_name("num-instances")
+                    .long("num-instances")
+                    .takes_value(true)
+                    .value_name("NUMBER")
+                    .validator(is_number)
+                    .help("sets the number of Boogie instances to run concurrently (default 1)")
+            )
             .after_help("More options available via `--config file` or `--config-str str`. \
             Use `--print-config` to see format and current values. \
             See `move-prover/src/cli.rs::Option` for documentation.");
@@ -504,6 +526,16 @@ impl Options {
         }
         if matches.is_present("trace") {
             options.prover.debug_trace = true;
+        }
+        if matches.is_present("dump-bytecode") {
+            options.prover.dump_bytecode = true;
+        }
+        if matches.is_present("num-instances") {
+            let num_instances = matches
+                .value_of("num-instances")
+                .unwrap()
+                .parse::<usize>()?;
+            options.prover.num_instances = std::cmp::max(num_instances, 1); // at least one instance
         }
         if matches.is_present("keep") {
             options.backend.keep_artifacts = true;

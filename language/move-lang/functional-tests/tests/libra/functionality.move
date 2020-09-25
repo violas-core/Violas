@@ -100,18 +100,6 @@ script {
 // check: "Keep(EXECUTED)"
 
 //! new-transaction
-//! sender: libraroot
-script {
-    use 0x1::Libra;
-    use 0x1::LibraTimestamp;
-    fun main(account: &signer)  {
-        LibraTimestamp::reset_time_has_started_for_test();
-        Libra::initialize(account);
-    }
-}
-// check: "ABORTED { code: 262"
-
-//! new-transaction
 //! sender: blessed
 script {
     use 0x1::Libra;
@@ -145,7 +133,7 @@ fun main(account: &signer) {
     let (mint_cap, burn_cap) = Libra::register_currency<u64>(
         account, FixedPoint32::create_from_rational(1, 1), true, 10, 10, b"wat"
     );
-    Libra::publish_burn_capability(account, burn_cap, account);
+    Libra::publish_burn_capability(account, burn_cap);
     Holder::hold(account, mint_cap);
 }
 }

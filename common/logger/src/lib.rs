@@ -78,11 +78,14 @@ pub mod prelude {
 pub mod json_log;
 
 mod event;
+mod filter;
 mod kv;
 mod libra_logger;
 mod logger;
 mod macros;
 mod metadata;
+pub mod sample;
+
 mod security;
 mod struct_log;
 
@@ -90,6 +93,7 @@ pub use crate::libra_logger::{
     LibraLogger, LibraLogger as Logger, LibraLoggerBuilder, Writer, CHANNEL_SIZE,
 };
 pub use event::Event;
+pub use filter::{Filter, LevelFilter};
 pub use metadata::{Level, Metadata};
 
 pub use struct_log::{LoggingField, StructuredLogEntry};
@@ -98,4 +102,4 @@ pub use kv::{Key, KeyValue, Schema, Value, Visitor};
 pub use libra_log_derive::Schema;
 pub use security::SecurityEvent;
 
-pub mod counters;
+mod counters;

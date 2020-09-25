@@ -12,11 +12,10 @@ use stackless_bytecode_generator::{
     eliminate_imm_refs::EliminateImmRefsProcessor,
     eliminate_mut_refs::EliminateMutRefsProcessor,
     function_target_pipeline::{FunctionTargetPipeline, FunctionTargetsHolder},
-    lifetime_analysis::LifetimeAnalysisProcessor,
     livevar_analysis::LiveVarAnalysisProcessor,
-    packref_analysis::PackrefAnalysisProcessor,
+    memory_instrumentation::MemoryInstrumentationProcessor,
+    print_targets_for_test,
     reaching_def_analysis::ReachingDefProcessor,
-    writeback_analysis::WritebackAnalysisProcessor,
 };
 use test_utils::{baseline_test::verify_or_update_baseline, extract_test_directives};
 
@@ -30,54 +29,47 @@ fn get_tested_transformation_pipeline(
             pipeline.add_processor(Box::new(EliminateImmRefsProcessor {}));
             Ok(Some(pipeline))
         }
+        "eliminate_mut_refs" => {
+            let mut pipeline = FunctionTargetPipeline::default();
+            pipeline.add_processor(Box::new(EliminateImmRefsProcessor {}));
+            pipeline.add_processor(Box::new(EliminateMutRefsProcessor {}));
+            Ok(Some(pipeline))
+        }
+        "reaching_def" => {
+            let mut pipeline = FunctionTargetPipeline::default();
+            pipeline.add_processor(Box::new(EliminateImmRefsProcessor {}));
+            pipeline.add_processor(Box::new(EliminateMutRefsProcessor {}));
+            pipeline.add_processor(Box::new(ReachingDefProcessor {}));
+            Ok(Some(pipeline))
+        }
         "livevar" => {
             let mut pipeline = FunctionTargetPipeline::default();
+            pipeline.add_processor(Box::new(EliminateImmRefsProcessor {}));
+            pipeline.add_processor(Box::new(EliminateMutRefsProcessor {}));
+            pipeline.add_processor(Box::new(ReachingDefProcessor {}));
             pipeline.add_processor(Box::new(LiveVarAnalysisProcessor {}));
             Ok(Some(pipeline))
         }
         "borrow" => {
             let mut pipeline = FunctionTargetPipeline::default();
             pipeline.add_processor(Box::new(EliminateImmRefsProcessor {}));
-            pipeline.add_processor(Box::new(LiveVarAnalysisProcessor {}));
-            pipeline.add_processor(Box::new(BorrowAnalysisProcessor {}));
-            Ok(Some(pipeline))
-        }
-        "writeback" => {
-            let mut pipeline = FunctionTargetPipeline::default();
-            pipeline.add_processor(Box::new(EliminateImmRefsProcessor {}));
-            pipeline.add_processor(Box::new(LiveVarAnalysisProcessor {}));
-            pipeline.add_processor(Box::new(BorrowAnalysisProcessor {}));
-            pipeline.add_processor(Box::new(WritebackAnalysisProcessor {}));
-            Ok(Some(pipeline))
-        }
-        "packref" => {
-            let mut pipeline = FunctionTargetPipeline::default();
-            pipeline.add_processor(Box::new(EliminateImmRefsProcessor {}));
-            pipeline.add_processor(Box::new(LiveVarAnalysisProcessor {}));
-            pipeline.add_processor(Box::new(BorrowAnalysisProcessor {}));
-            pipeline.add_processor(Box::new(PackrefAnalysisProcessor {}));
-            Ok(Some(pipeline))
-        }
-        "eliminate_mut_refs" => {
-            let mut pipeline = FunctionTargetPipeline::default();
-            pipeline.add_processor(Box::new(EliminateImmRefsProcessor {}));
-            pipeline.add_processor(Box::new(LiveVarAnalysisProcessor {}));
-            pipeline.add_processor(Box::new(BorrowAnalysisProcessor {}));
-            pipeline.add_processor(Box::new(WritebackAnalysisProcessor {}));
-            pipeline.add_processor(Box::new(PackrefAnalysisProcessor {}));
             pipeline.add_processor(Box::new(EliminateMutRefsProcessor {}));
+            pipeline.add_processor(Box::new(ReachingDefProcessor {}));
+            pipeline.add_processor(Box::new(LiveVarAnalysisProcessor {}));
+            pipeline.add_processor(Box::new(BorrowAnalysisProcessor {}));
             Ok(Some(pipeline))
         }
-        "lifetime" => {
+        "memory_instr" => {
             let mut pipeline = FunctionTargetPipeline::default();
-            pipeline.add_processor(Box::new(LifetimeAnalysisProcessor {}));
+            pipeline.add_processor(Box::new(EliminateImmRefsProcessor {}));
+            pipeline.add_processor(Box::new(EliminateMutRefsProcessor {}));
+            pipeline.add_processor(Box::new(ReachingDefProcessor {}));
+            pipeline.add_processor(Box::new(LiveVarAnalysisProcessor {}));
+            pipeline.add_processor(Box::new(BorrowAnalysisProcessor {}));
+            pipeline.add_processor(Box::new(MemoryInstrumentationProcessor {}));
             Ok(Some(pipeline))
         }
-        "reaching_def" => {
-            let mut pipeline = FunctionTargetPipeline::default();
-            pipeline.add_processor(Box::new(ReachingDefProcessor()));
-            Ok(Some(pipeline))
-        }
+
         _ => Err(anyhow!(
             "the sub-directory `{}` has no associated pipeline to test",
             dir_name
@@ -109,12 +101,13 @@ fn test_runner(path: &Path) -> datatest_stable::Result<()> {
                 targets.add_target(&func_env);
             }
         }
-        text += &print_targets(&env, "initial translation from Move", &targets);
+        text += &print_targets_for_test(&env, "initial translation from Move", &targets);
 
         // Run pipeline if any
         if let Some(pipeline) = pipeline_opt {
-            pipeline.run(&env, &mut targets);
-            text += &print_targets(&env, &format!("after pipeline `{}`", dir_name), &targets);
+            pipeline.run(&env, &mut targets, None);
+            text +=
+                &print_targets_for_test(&env, &format!("after pipeline `{}`", dir_name), &targets);
         }
 
         text
@@ -122,19 +115,6 @@ fn test_runner(path: &Path) -> datatest_stable::Result<()> {
     let baseline_path = path.with_extension("exp");
     verify_or_update_baseline(baseline_path.as_path(), &out)?;
     Ok(())
-}
-
-fn print_targets(env: &GlobalEnv, header: &str, targets: &FunctionTargetsHolder) -> String {
-    let mut text = String::new();
-    text.push_str(&format!("============ {} ================\n", header));
-    for module_env in env.get_modules() {
-        for func_env in module_env.get_functions() {
-            let target = targets.get_target(&func_env);
-            target.register_annotation_formatters_for_test();
-            text += &format!("\n{}\n", target);
-        }
-    }
-    text
 }
 
 datatest_stable::harness!(test_runner, "tests", r".*\.move");

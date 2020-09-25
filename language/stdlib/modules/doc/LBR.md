@@ -738,8 +738,11 @@ type&lt;CoinType&gt;() == type&lt;<a href="#0x1_LBR">LBR</a>&gt;()
 
 
 
+> TODO: this times out sometimes so bump the duration estimate
 
-<pre><code><b>include</b> <a href="#0x1_LBR_UnpackAbortsIf">UnpackAbortsIf</a>;
+
+<pre><code>pragma verify_duration_estimate = 100;
+<b>include</b> <a href="#0x1_LBR_UnpackAbortsIf">UnpackAbortsIf</a>;
 <b>ensures</b> <a href="Libra.md#0x1_Libra_spec_market_cap">Libra::spec_market_cap</a>&lt;<a href="#0x1_LBR">LBR</a>&gt;() == <b>old</b>(<a href="Libra.md#0x1_Libra_spec_market_cap">Libra::spec_market_cap</a>&lt;<a href="#0x1_LBR">LBR</a>&gt;()) - coin.value;
 <b>ensures</b> result_1.value == <a href="#0x1_LBR_spec_unpack_coin1">spec_unpack_coin1</a>(coin);
 <b>ensures</b> result_2.value == <a href="#0x1_LBR_spec_unpack_coin2">spec_unpack_coin2</a>(coin);
@@ -764,6 +767,7 @@ type&lt;CoinType&gt;() == type&lt;<a href="#0x1_LBR">LBR</a>&gt;()
 > TODO(wrwg): It appears the next couple of aborts inclusions are redundant, i.e. they can be
 > removed but still no abort is reported. It is unclear why this is the case. For example,
 > the coin value could be so larged that multiply overflows, or the reserve could not have backing.
+> Need to investigate why this is the case. Notice that keeping them also does not produce an error,
 > indicating the the solver determines their conditions can never become true.
 
 

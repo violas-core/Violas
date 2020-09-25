@@ -28,10 +28,6 @@ use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, convert::TryFrom};
 use transaction_builder::get_transaction_name;
 
-pub const JSONRPC_LIBRA_CHAIN_ID: &str = "libra_chain_id";
-pub const JSONRPC_LIBRA_LEDGER_VERSION: &str = "libra_ledger_version";
-pub const JSONRPC_LIBRA_LEDGER_TIMESTAMPUSECS: &str = "libra_ledger_timestampusec";
-
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
 pub struct AmountView {
     pub amount: u64,
@@ -413,12 +409,8 @@ pub enum VMStatusView {
         function_index: u16,
         code_offset: u16,
     },
-    #[serde(rename = "verification_error")]
-    VerificationError,
-    #[serde(rename = "deserialization_error")]
-    DeserializationError,
-    #[serde(rename = "publishing_failure")]
-    PublishingFailure,
+    #[serde(rename = "miscellaneous_error")]
+    MiscellaneousError,
 }
 
 impl From<&KeptVMStatus> for VMStatusView {
@@ -439,8 +431,7 @@ impl From<&KeptVMStatus> for VMStatusView {
                 function_index: *function,
                 code_offset: *code_offset,
             },
-            KeptVMStatus::VerificationError => VMStatusView::VerificationError,
-            KeptVMStatus::DeserializationError => VMStatusView::DeserializationError,
+            KeptVMStatus::MiscellaneousError => VMStatusView::MiscellaneousError,
         }
     }
 }

@@ -160,11 +160,10 @@ pub fn encode_genesis_change_set(
     let type_mapping = effects
         .resources
         .iter()
-        .flat_map(|(_adddr, resources)| {
-            resources.iter().map(|(ty_tag, _)| match ty_tag {
-                TypeTag::Struct(struct_tag) => (struct_tag.access_vector(), struct_tag.clone()),
-                _ => panic!("not a struct"),
-            })
+        .flat_map(|(_addr, resources)| {
+            resources
+                .iter()
+                .map(|(struct_tag, _)| (struct_tag.access_vector(), struct_tag.clone()))
         })
         .collect();
     let (write_set, events) = txn_effects_to_writeset_and_events(effects).unwrap();
@@ -276,7 +275,7 @@ fn create_and_initialize_main_accounts(
         session,
         root_libra_root_address,
         "LibraAccount",
-        "success_epilogue",
+        "epilogue",
         vec![lbr_ty.clone()],
         vec![
             Value::transaction_argument_signer_reference(root_libra_root_address),
@@ -503,7 +502,7 @@ fn reconfigure(session: &mut Session<StateViewCache>) {
         session,
         account_config::libra_root_address(),
         "LibraConfig",
-        "emit_reconfiguration_event",
+        "emit_genesis_reconfiguration_event",
         vec![],
         vec![],
     );

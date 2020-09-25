@@ -3,7 +3,7 @@
 
 use crate::{
     access_path_cache::AccessPathCache,
-    data_cache::RemoteStorage,
+    data_cache::{RemoteStorage, StateViewCache},
     errors::{
         convert_normal_prologue_error, convert_normal_success_epilogue_error,
         convert_write_set_prologue_error, expect_only_successful_execution,
@@ -15,7 +15,7 @@ use crate::{
 use libra_logger::prelude::*;
 use libra_state_view::StateView;
 use libra_types::{
-    account_config,
+    account_config::{self, CurrencyInfoResource},
     contract_event::ContractEvent,
     event::EventKey,
     on_chain_config::{ConfigStorage, LibraVersion, OnChainConfig, VMConfig, VMPublishingOption},
@@ -26,7 +26,6 @@ use libra_types::{
 use move_core_types::{
     gas_schedule::{CostTable, GasAlgebra, GasUnits},
     identifier::IdentStr,
-    language_storage::TypeTag,
 };
 
 use move_vm_runtime::{
@@ -276,7 +275,7 @@ impl LibraVMImpl {
         let gas_remaining = cost_strategy.remaining_gas().get();
         session.execute_function(
             &account_config::ACCOUNT_MODULE,
-            &SUCCESS_EPILOGUE_NAME,
+            &USER_EPILOGUE_NAME,
             vec![gas_currency_ty],
             vec![
                 Value::transaction_argument_signer_reference(txn_data.sender),
@@ -291,7 +290,7 @@ impl LibraVMImpl {
         )
     }
 
-    /// Run the failure epilogue of a transaction by calling into `FAILURE_EPILOGUE_NAME` function
+    /// Run the failure epilogue of a transaction by calling into `USER_EPILOGUE_NAME` function
     /// stored in the `ACCOUNT_MODULE` on chain.
     pub(crate) fn run_failure_epilogue<R: RemoteCache>(
         &self,
@@ -308,7 +307,7 @@ impl LibraVMImpl {
         let gas_remaining = cost_strategy.remaining_gas().get();
         session.execute_function(
             &account_config::ACCOUNT_MODULE,
-            &FAILURE_EPILOGUE_NAME,
+            &USER_EPILOGUE_NAME,
             vec![gas_currency_ty],
             vec![
                 Value::transaction_argument_signer_reference(txn_data.sender),
@@ -319,7 +318,7 @@ impl LibraVMImpl {
             ],
             txn_data.sender,
             cost_strategy,
-            expect_only_successful_execution(FAILURE_EPILOGUE_NAME.as_str()),
+            expect_only_successful_execution(USER_EPILOGUE_NAME.as_str()),
         )
     }
 
@@ -428,11 +427,7 @@ pub fn txn_effects_to_writeset_and_events_cached<C: AccessPathCache>(
     let mut ops = vec![];
 
     for (addr, vals) in effects.resources {
-        for (ty_tag, val_opt) in vals {
-            let struct_tag = match ty_tag {
-                TypeTag::Struct(struct_tag) => struct_tag,
-                _ => return Err(VMStatus::Error(StatusCode::VALUE_SERIALIZATION_ERROR)),
-            };
+        for (struct_tag, val_opt) in vals {
             let ap = ap_cache.get_resource_path(addr, struct_tag);
             let op = match val_opt {
                 None => WriteOp::Deletion,
@@ -520,6 +515,20 @@ pub fn txn_effects_to_writeset_and_events(
     effects: TransactionEffects,
 ) -> Result<(WriteSet, Vec<ContractEvent>), VMStatus> {
     txn_effects_to_writeset_and_events_cached(&mut (), effects)
+}
+
+pub(crate) fn get_currency_info(
+    currency_code: &IdentStr,
+    remote_cache: &StateViewCache,
+) -> Result<CurrencyInfoResource, VMStatus> {
+    let currency_info_path = CurrencyInfoResource::resource_path_for(currency_code.to_owned());
+    if let Ok(Some(blob)) = remote_cache.get(&currency_info_path) {
+        let x = lcs::from_bytes::<CurrencyInfoResource>(&blob)
+            .map_err(|_| VMStatus::Error(StatusCode::CURRENCY_INFO_DOES_NOT_EXIST))?;
+        Ok(x)
+    } else {
+        Err(VMStatus::Error(StatusCode::CURRENCY_INFO_DOES_NOT_EXIST))
+    }
 }
 
 #[test]

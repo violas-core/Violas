@@ -87,28 +87,7 @@ fun main() {
     assert(VASP::parent_address({{bob}}) == {{parent}}, 2016);
 }
 }
-// check: "Keep(ABORTED { code: 775,"
-
-//! new-transaction
-//! sender: libraroot
-script {
-use 0x1::VASP;
-fun main(account: &signer) {
-    VASP::initialize(account)
-}
-}
-// check: "Keep(ABORTED { code: 1,"
-
-//! new-transaction
-script {
-use 0x1::VASP;
-use 0x1::LibraTimestamp;
-fun main(account: &signer) {
-    LibraTimestamp::reset_time_has_started_for_test();
-    VASP::initialize(account);
-}
-}
-// check: "Keep(ABORTED { code: 2,"
+// check: "Keep(ABORTED { code: 519,"
 
 //! new-transaction
 //! sender: blessed
@@ -159,7 +138,7 @@ fun main(account: &signer) {
     VASP::publish_child_vasp_credential(account, account);
 }
 }
-// check: "Keep(ABORTED { code: 262,"
+// check: "Keep(ABORTED { code: 6,"
 
 //! new-transaction
 //! sender: parent

@@ -770,7 +770,7 @@ that amount that can be minted according to the bounds for the
     <b>include</b> <a href="Libra.md#0x1_Libra_AbortsIfNoCurrency">Libra::AbortsIfNoCurrency</a>&lt;CoinType&gt;;
     <b>aborts_if</b> <a href="Libra.md#0x1_Libra_is_synthetic_currency">Libra::is_synthetic_currency</a>&lt;CoinType&gt;() with Errors::INVALID_ARGUMENT;
     <b>aborts_if</b> exists&lt;<a href="Libra.md#0x1_Libra_Preburn">Libra::Preburn</a>&lt;CoinType&gt;&gt;(dd_addr) with Errors::ALREADY_PUBLISHED;
-    <b>include</b> <a href="LibraTimestamp.md#0x1_LibraTimestamp_AbortsIfNoTime">LibraTimestamp::AbortsIfNoTime</a>;
+    <b>include</b> <a href="LibraTimestamp.md#0x1_LibraTimestamp_AbortsIfNotOperating">LibraTimestamp::AbortsIfNotOperating</a>;
 }
 </code></pre>
 
@@ -852,6 +852,8 @@ that amount that can be minted according to the bounds for the
 
 <pre><code>pragma opaque;
 <b>include</b> <a href="#0x1_DesignatedDealer_TieredMintAbortsIf">TieredMintAbortsIf</a>&lt;CoinType&gt;;
+<b>modifies</b> <b>global</b>&lt;<a href="Libra.md#0x1_Libra_CurrencyInfo">Libra::CurrencyInfo</a>&lt;CoinType&gt;&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_CURRENCY_INFO_ADDRESS">CoreAddresses::CURRENCY_INFO_ADDRESS</a>());
+<b>ensures</b> exists&lt;<a href="Libra.md#0x1_Libra_CurrencyInfo">Libra::CurrencyInfo</a>&lt;CoinType&gt;&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_CURRENCY_INFO_ADDRESS">CoreAddresses::CURRENCY_INFO_ADDRESS</a>());
 <b>modifies</b> <b>global</b>&lt;<a href="#0x1_DesignatedDealer_TierInfo">TierInfo</a>&lt;CoinType&gt;&gt;(dd_addr);
 <b>ensures</b> exists&lt;<a href="#0x1_DesignatedDealer_TierInfo">TierInfo</a>&lt;CoinType&gt;&gt;(dd_addr);
 <b>ensures</b> <b>global</b>&lt;<a href="#0x1_DesignatedDealer_TierInfo">TierInfo</a>&lt;CoinType&gt;&gt;(dd_addr).tiers == <b>old</b>(<b>global</b>&lt;<a href="#0x1_DesignatedDealer_TierInfo">TierInfo</a>&lt;CoinType&gt;&gt;(dd_addr).tiers);
@@ -859,6 +861,8 @@ that amount that can be minted according to the bounds for the
 <b>let</b> dealer = <b>global</b>&lt;<a href="#0x1_DesignatedDealer_TierInfo">TierInfo</a>&lt;CoinType&gt;&gt;(dd_addr);
 <a name="0x1_DesignatedDealer_current_time$16"></a>
 <b>let</b> current_time = <a href="LibraTimestamp.md#0x1_LibraTimestamp_spec_now_microseconds">LibraTimestamp::spec_now_microseconds</a>();
+<a name="0x1_DesignatedDealer_currency_info$17"></a>
+<b>let</b> currency_info = <b>global</b>&lt;<a href="Libra.md#0x1_Libra_CurrencyInfo">Libra::CurrencyInfo</a>&lt;CoinType&gt;&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_CURRENCY_INFO_ADDRESS">CoreAddresses::CURRENCY_INFO_ADDRESS</a>());
 <b>ensures</b> <b>old</b>(dealer.window_start) &lt;= dealer.window_start;
 <b>ensures</b>
     dealer.window_start == current_time && dealer.window_inflow == amount ||
@@ -866,6 +870,8 @@ that amount that can be minted according to the bounds for the
         dealer.window_inflow == <b>old</b>(dealer.window_inflow) + amount);
 <b>ensures</b> tier_index &lt; len(<b>old</b>(dealer).tiers);
 <b>ensures</b> dealer.window_inflow &lt;= <b>old</b>(dealer).tiers[tier_index];
+<b>ensures</b> result.value == amount;
+<b>ensures</b> currency_info == update_field(<b>old</b>(currency_info), total_value, <b>old</b>(currency_info.total_value) + amount);
 </code></pre>
 
 
@@ -889,7 +895,7 @@ that amount that can be minted according to the bounds for the
     <a name="0x1_DesignatedDealer_new_amount$9"></a>
     <b>let</b> new_amount = <b>if</b> (<a href="LibraTimestamp.md#0x1_LibraTimestamp_spec_now_microseconds">LibraTimestamp::spec_now_microseconds</a>() &lt;= tier_info.window_start + ONE_DAY) { tier_info.window_inflow + amount } <b>else</b> { amount };
     <b>aborts_if</b> new_amount &gt; tier_info.tiers[tier_index] with Errors::INVALID_ARGUMENT;
-    <b>include</b> <a href="LibraTimestamp.md#0x1_LibraTimestamp_AbortsIfNoTime">LibraTimestamp::AbortsIfNoTime</a>;
+    <b>include</b> <a href="LibraTimestamp.md#0x1_LibraTimestamp_AbortsIfNotOperating">LibraTimestamp::AbortsIfNotOperating</a>;
     <b>aborts_if</b> !exists&lt;<a href="Libra.md#0x1_Libra_MintCapability">Libra::MintCapability</a>&lt;CoinType&gt;&gt;(<a href="Signer.md#0x1_Signer_spec_address_of">Signer::spec_address_of</a>(tc_account)) with Errors::REQUIRES_CAPABILITY;
     <b>include</b> <a href="Libra.md#0x1_Libra_MintAbortsIf">Libra::MintAbortsIf</a>&lt;CoinType&gt;{value: amount};
 }

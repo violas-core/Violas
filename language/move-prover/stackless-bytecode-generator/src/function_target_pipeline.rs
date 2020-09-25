@@ -3,10 +3,12 @@
 
 use crate::{
     function_target::{FunctionTarget, FunctionTargetData},
+    print_targets_for_test,
     stackless_bytecode_generator::StacklessBytecodeGenerator,
 };
+use log::debug;
 use spec_lang::env::{FunId, FunctionEnv, GlobalEnv, QualifiedId};
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, fs};
 
 /// A data structure which holds data for multiple function targets, and allows to
 /// manipulate them as part of a transformation pipeline.
@@ -28,6 +30,9 @@ pub trait FunctionTargetProcessor {
         func_env: &FunctionEnv<'_>,
         data: FunctionTargetData,
     ) -> FunctionTargetData;
+
+    /// Returns a name for this processor. This should be suitable as a file suffix.
+    fn name(&self) -> String;
 }
 
 /// A processing pipeline for function targets.
@@ -74,12 +79,18 @@ impl FunctionTargetPipeline {
     /// in programs without recursion or mutual recursion. Processors are run on an individual
     /// function in breadth-first fashion; i.e. a processor can expect that processors preceding it
     /// in the pipeline have been executed for all functions before it is called.
-    pub fn run(&self, env: &GlobalEnv, targets: &mut FunctionTargetsHolder) {
+    pub fn run(
+        &self,
+        env: &GlobalEnv,
+        targets: &mut FunctionTargetsHolder,
+        dump_to_file: Option<String>,
+    ) {
         let mut worklist = vec![];
         for (key, data) in &targets.targets {
             worklist.push((*key, data.get_callees()))
         }
         let mut to_remove = vec![];
+        let mut topological_order = vec![];
         // analyze bottom-up from the leaves of the call graph
         loop {
             let last = worklist.last();
@@ -114,10 +125,26 @@ impl FunctionTargetPipeline {
                 // code
                 unimplemented!("Recursion or mutual recursion detected in {:?}. Make sure that all analyses in  self.processors are prepared to handle recursion", func_env.get_identifier());
             }
-            // run each analysis processor on the selected function
-            for processor in &self.processors {
-                targets.process(&func_env, processor.as_ref());
+            topological_order.push(func_env);
+        }
+
+        // Now that we determined the topological order, run each processor on it, breadth-first.
+        let dump_to_file = |step_count: usize, name: &str, targets: &FunctionTargetsHolder| {
+            // Dump result to file if requested
+            if let Some(base_name) = &dump_to_file {
+                let dump =
+                    print_targets_for_test(env, &format!("after processor `{}`", name), targets);
+                let file_name = format!("{}_{}_{}.bytecode", base_name, step_count, name);
+                debug!("dumping bytecode to `{}`", file_name);
+                fs::write(&file_name, &dump).expect("dumping bytecode");
             }
+        };
+        dump_to_file(0, "stackless", targets);
+        for (step_count, processor) in self.processors.iter().enumerate() {
+            for func_env in &topological_order {
+                targets.process(func_env, processor.as_ref());
+            }
+            dump_to_file(step_count + 1, &processor.name(), targets);
         }
     }
 }

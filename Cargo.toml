@@ -1,6 +1,7 @@
 [workspace]
 
 members = [
+    "client/faucet",
     "client/json-rpc",
     "client/libra-dev",
     "client/swiss-knife",
@@ -8,6 +9,7 @@ members = [
     "common/bitvec",
     "common/bounded-executor",
     "common/channel",
+    "common/channel/many-keys-stress-test",
     "common/crash-handler",
     "common/datatest-stable",
     "common/debug-interface",
@@ -89,6 +91,7 @@ members = [
     "language/testing-infra/test-generation",
     "language/tools/disassembler",
     "language/tools/genesis-viewer",
+    "language/tools/move-cli",
     "language/tools/move-coverage",
     "language/tools/move-explain",
     "language/tools/transaction-replay",
@@ -127,7 +130,6 @@ members = [
     "storage/storage-client",
     "storage/storage-interface",
     "storage/storage-service",
-    "testsuite",
     "testsuite/cli",
     "testsuite/cli/libra-wallet",
     "testsuite/cluster-test",
@@ -135,6 +137,7 @@ members = [
     "testsuite/libra-fuzzer",
     "testsuite/libra-fuzzer/fuzz",
     "testsuite/libra-swarm",
+    "testsuite/smoke-test",
     "types",
     "vm-validator",
 ]
@@ -152,6 +155,7 @@ default-members = [
     "config/management/operational",
     "config/seed-peer-generator",
     "consensus/safety-rules",
+    "client/faucet",
     "client/libra-dev",
     "client/swiss-knife",
     "execution/db-bootstrapper",
@@ -164,6 +168,7 @@ default-members = [
     "language/move-lang",
     "language/tools/disassembler",
     "language/tools/genesis-viewer",
+    "language/tools/move-cli",
     "language/tools/move-coverage",
     "language/tools/transaction-replay",
     "language/tools/move-explain",

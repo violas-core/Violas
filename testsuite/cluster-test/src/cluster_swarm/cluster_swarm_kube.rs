@@ -31,16 +31,87 @@ use reqwest::Client as HttpClient;
 use rusoto_core::Region;
 use rusoto_s3::{PutObjectRequest, S3Client, S3};
 use rusoto_sts::WebIdentityProvider;
+use serde::de::DeserializeOwned;
 use std::{collections::HashSet, convert::TryFrom, process::Command, time::Duration};
 use tokio::sync::Semaphore;
 
-const DEFAULT_NAMESPACE: &str = "default";
-
 pub const CFG_SEED: &str = "1337133713371337133713371337133713371337133713371337133713371337";
-
+const DEFAULT_NAMESPACE: &str = "default";
 const ERROR_NOT_FOUND: u16 = 404;
-
 const GENESIS_PATH: &str = "/tmp/genesis.blob";
+const HEALTH_CHECK_URL: &str = "http://127.0.0.1:8001";
+const KUBECTL_BIN: &str = "/usr/local/bin/kubectl";
+
+// We use the macros below to get around the current limitations of the
+// "include_str!" macro (which loads the file content at compile time, rather
+// than at runtime).
+// TODO(joshlind): Remove me once we support runtime file loading.
+
+// Config file names.
+macro_rules! FULLNODE_CONFIG {
+    () => {
+        "configs/fullnode.yaml"
+    };
+}
+macro_rules! SAFETY_RULES_CONFIG {
+    () => {
+        "configs/safetyrules.yaml"
+    };
+}
+macro_rules! VALIDATOR_CONFIG {
+    () => {
+        "configs/validator.yaml"
+    };
+}
+
+// Fluent bit file names.
+macro_rules! FLUENT_BIT_CONF {
+    () => {
+        "fluent-bit/fluent-bit.conf"
+    };
+}
+macro_rules! FLUENT_BIT_PARSERS_CONF {
+    () => {
+        "fluent-bit/parsers.conf"
+    };
+}
+
+// Template file names.
+macro_rules! JOB_TEMPLATE {
+    () => {
+        "templates/job_template.yaml"
+    };
+}
+macro_rules! LIBRA_NODE_SERVICE_TEMPLATE {
+    () => {
+        "templates/libra_node_service_template.yaml"
+    };
+}
+macro_rules! LIBRA_NODE_SPEC_TEMPLATE {
+    () => {
+        "templates/libra_node_spec_template.yaml"
+    };
+}
+macro_rules! LSR_SERVICE_TEMPLATE {
+    () => {
+        "templates/lsr_service_template.yaml"
+    };
+}
+macro_rules! LSR_SPEC_TEMPLATE {
+    () => {
+        "templates/lsr_spec_template.yaml"
+    };
+}
+macro_rules! VAULT_SERVICE_TEMPLATE {
+    () => {
+        "templates/vault_service_template.yaml"
+    };
+}
+macro_rules! VAULT_SPEC_TEMPLATE {
+    () => {
+        "templates/vault_spec_template.yaml"
+    };
+}
 
 #[derive(Clone)]
 pub struct ClusterSwarmKube {
@@ -54,21 +125,18 @@ impl ClusterSwarmKube {
     pub async fn new() -> Result<Self> {
         let http_client = HttpClient::new();
         // This uses kubectl proxy locally to forward connections to kubernetes api server
-        Command::new("/usr/local/bin/kubectl")
-            .arg("proxy")
-            .spawn()?;
+        Command::new(KUBECTL_BIN).arg("proxy").spawn()?;
         libra_retrier::retry_async(k8s_retry_strategy(), || {
             Box::pin(async move {
-                debug!("Running local kube pod healthcheck on http://127.0.0.1:8001");
-                reqwest::get("http://127.0.0.1:8001").await?.text().await?;
+                debug!("Running local kube pod healthcheck on {}", HEALTH_CHECK_URL);
+                reqwest::get(HEALTH_CHECK_URL).await?.text().await?;
                 info!("Local kube pod healthcheck passed");
                 Ok::<(), reqwest::Error>(())
             })
         })
         .await?;
         let config = Config::new(
-            reqwest::Url::parse("http://127.0.0.1:8001")
-                .expect("Failed to parse kubernetes endpoint url"),
+            reqwest::Url::parse(HEALTH_CHECK_URL).expect("Failed to parse kubernetes endpoint url"),
         );
         let client = Client::new(config);
         let credentials_provider = WebIdentityProvider::from_k8s_env();
@@ -84,58 +152,43 @@ impl ClusterSwarmKube {
         })
     }
 
-    fn service_spec(&self, peer_id: String) -> Service {
+    fn service_spec(&self, peer_id: String) -> Result<Service> {
         let service_yaml = format!(
-            include_str!("libra_node_service_template.yaml"),
+            include_str!(LIBRA_NODE_SERVICE_TEMPLATE!()),
             peer_id = &peer_id
         );
-        let service_spec: serde_yaml::Value = serde_yaml::from_str(&service_yaml).unwrap();
-        let service_spec = serde_json::value::to_value(service_spec).unwrap();
-        serde_json::from_value(service_spec)
-            .map_err(|e| format_err!("serde_json::from_value failed: {}", e))
-            .unwrap()
+        get_spec_instance_from_template(service_yaml)
     }
 
     fn lsr_spec(&self, pod_name: &str, node_name: &str, image_tag: &str) -> Result<(Pod, Service)> {
         let pod_yaml = format!(
-            include_str!("lsr_spec_template.yaml"),
+            include_str!(LSR_SPEC_TEMPLATE!()),
             pod_name = pod_name,
             image_tag = image_tag,
             node_name = node_name,
         );
-        let pod_spec: serde_yaml::Value = serde_yaml::from_str(&pod_yaml)?;
-        let pod_spec = serde_json::value::to_value(pod_spec)?;
-        let pod_spec = serde_json::from_value(pod_spec)
-            .map_err(|e| format_err!("serde_json::from_value failed: {}", e))?;
-        let service_yaml = format!(
-            include_str!("lsr_service_template.yaml"),
-            pod_name = pod_name,
-        );
-        let service_spec: serde_yaml::Value = serde_yaml::from_str(&service_yaml).unwrap();
-        let service_spec = serde_json::value::to_value(service_spec).unwrap();
-        let service_spec = serde_json::from_value(service_spec)
-            .map_err(|e| format_err!("serde_json::from_value failed: {}", e))?;
+        let pod_spec = get_spec_instance_from_template(pod_yaml)?;
+
+        let service_yaml = format!(include_str!(LSR_SERVICE_TEMPLATE!()), pod_name = pod_name,);
+        let service_spec = get_spec_instance_from_template(service_yaml)?;
+
         Ok((pod_spec, service_spec))
     }
 
     fn vault_spec(&self, validator_index: u32, node_name: &str) -> Result<(Pod, Service)> {
         let pod_yaml = format!(
-            include_str!("vault_spec_template.yaml"),
+            include_str!(VAULT_SPEC_TEMPLATE!()),
             validator_index = validator_index,
             node_name = node_name,
         );
-        let pod_spec: serde_yaml::Value = serde_yaml::from_str(&pod_yaml)?;
-        let pod_spec = serde_json::value::to_value(pod_spec)?;
-        let pod_spec = serde_json::from_value(pod_spec)
-            .map_err(|e| format_err!("serde_json::from_value failed: {}", e))?;
+        let pod_spec = get_spec_instance_from_template(pod_yaml)?;
+
         let service_yaml = format!(
-            include_str!("vault_service_template.yaml"),
+            include_str!(VAULT_SERVICE_TEMPLATE!()),
             validator_index = validator_index,
         );
-        let service_spec: serde_yaml::Value = serde_yaml::from_str(&service_yaml).unwrap();
-        let service_spec = serde_json::value::to_value(service_spec).unwrap();
-        let service_spec = serde_json::from_value(service_spec)
-            .map_err(|e| format_err!("serde_json::from_value failed: {}", e))?;
+        let service_spec = get_spec_instance_from_template(service_yaml)?;
+
         Ok((pod_spec, service_spec))
     }
 
@@ -147,16 +200,13 @@ impl ClusterSwarmKube {
         image_tag: &str,
     ) -> Result<Pod> {
         let pod_yaml = format!(
-            include_str!("libra_node_spec_template.yaml"),
+            include_str!(LIBRA_NODE_SPEC_TEMPLATE!()),
             pod_app = pod_app,
             pod_name = pod_name,
             image_tag = image_tag,
             node_name = node_name,
         );
-        let pod_spec: serde_yaml::Value = serde_yaml::from_str(&pod_yaml)?;
-        let pod_spec = serde_json::value::to_value(pod_spec)?;
-        serde_json::from_value(pod_spec)
-            .map_err(|e| format_err!("serde_json::from_value failed: {}", e))
+        get_spec_instance_from_template(pod_yaml)
     }
 
     fn job_spec(
@@ -173,8 +223,9 @@ impl ClusterSwarmKube {
             .collect::<String>()
             .to_ascii_lowercase();
         let job_full_name = format!("{}-{}", job_name, suffix);
+
         let job_yaml = format!(
-            include_str!("job_template.yaml"),
+            include_str!(JOB_TEMPLATE!()),
             name = &job_full_name,
             label = job_name,
             image = docker_image,
@@ -182,10 +233,7 @@ impl ClusterSwarmKube {
             command = command,
             back_off_limit = back_off_limit,
         );
-        let job_spec: serde_yaml::Value = serde_yaml::from_str(&job_yaml)?;
-        let job_spec = serde_json::value::to_value(job_spec)?;
-        let job_spec = serde_json::from_value(job_spec)
-            .map_err(|e| format_err!("serde_json::from_value failed: {}", e))?;
+        let job_spec = get_spec_instance_from_template(job_yaml)?;
         Ok((job_spec, job_full_name))
     }
 
@@ -368,7 +416,7 @@ impl ClusterSwarmKube {
                     .to_ascii_lowercase();
                 let job_name = format!("remove-network-effects-{}", suffix);
                 let job_yaml = format!(
-                    include_str!("job_template.yaml"),
+                    include_str!(JOB_TEMPLATE!()),
                     name = &job_name,
                     label = "remove-network-effects",
                     image = "853397791086.dkr.ecr.us-west-2.amazonaws.com/cluster-test-util:latest",
@@ -377,10 +425,7 @@ impl ClusterSwarmKube {
                     back_off_limit = back_off_limit,
                 );
                 debug!("Removing network effects from node {}", node.name);
-                let job_spec: serde_yaml::Value = serde_yaml::from_str(&job_yaml)?;
-                let job_spec = serde_json::value::to_value(job_spec)?;
-                serde_json::from_value(job_spec)
-                    .map_err(|e| format_err!("serde_json::from_value failed: {}", e))
+                get_spec_instance_from_template(job_yaml)
             })
             .collect::<Result<_, _>>()?;
         self.run_jobs(jobs, back_off_limit).await
@@ -490,7 +535,7 @@ impl ClusterSwarmKube {
                     &node.name,
                     &validator_config.image_tag,
                 )?,
-                self.service_spec(pod_name.clone()),
+                self.service_spec(pod_name.clone())?,
             ),
             Fullnode(fullnode_config) => (
                 self.libra_node_spec(
@@ -499,7 +544,7 @@ impl ClusterSwarmKube {
                     &node.name,
                     &fullnode_config.image_tag,
                 )?,
-                self.service_spec(pod_name.clone()),
+                self.service_spec(pod_name.clone())?,
             ),
             Vault(_vault_config) => {
                 self.vault_spec(instance_config.validator_group.index_only(), &node.name)?
@@ -661,9 +706,9 @@ impl ClusterSwarmKube {
     }
 
     async fn config_fluentbit(&self, input_tag: &str, pod_name: &str, node: &str) -> Result<()> {
-        let parsers_config = include_str!("fluent-bit/parsers.conf").to_string();
+        let parsers_config = include_str!(FLUENT_BIT_PARSERS_CONF!()).to_string();
         let fluentbit_config = format!(
-            include_str!("fluent-bit/fluent-bit.conf"),
+            include_str!(FLUENT_BIT_CONF!()),
             input_tag = input_tag,
             pod_name = pod_name
         );
@@ -706,7 +751,7 @@ impl ClusterSwarmKube {
     ) -> Result<()> {
         let node_config = match &instance_config.application_config {
             Validator(validator_config) => Some(format!(
-                include_str!("configs/validator.yaml"),
+                include_str!(VALIDATOR_CONFIG!()),
                 vault_addr = validator_config
                     .vault_addr
                     .as_ref()
@@ -721,7 +766,7 @@ impl ClusterSwarmKube {
                     .unwrap_or(&"".to_string()),
             )),
             Fullnode(fullnode_config) => Some(format!(
-                include_str!("configs/fullnode.yaml"),
+                include_str!(FULLNODE_CONFIG!()),
                 vault_addr = fullnode_config
                     .vault_addr
                     .as_ref()
@@ -733,7 +778,7 @@ impl ClusterSwarmKube {
                 seed_peer_ip = fullnode_config.seed_peer_ip,
             )),
             LSR(lsr_config) => Some(format!(
-                include_str!("configs/safetyrules.yaml"),
+                include_str!(SAFETY_RULES_CONFIG!()),
                 vault_addr = lsr_config.vault_addr.as_ref().unwrap_or(&"".to_string()),
                 vault_ns = lsr_config
                     .vault_namespace
@@ -755,6 +800,13 @@ impl ClusterSwarmKube {
 
         Ok(())
     }
+}
+
+/// Retrieves a spec instance of type T from a T template file.
+fn get_spec_instance_from_template<T: DeserializeOwned>(template_yaml: String) -> Result<T> {
+    let spec: serde_yaml::Value = serde_yaml::from_str(&template_yaml)?;
+    let spec = serde_json::value::to_value(spec)?;
+    serde_json::from_value(spec).map_err(|e| format_err!("serde_json::from_value failed: {}", e))
 }
 
 #[async_trait]

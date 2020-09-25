@@ -3,9 +3,8 @@
 
 use crate::{
     annotations::Annotations,
-    borrow_analysis, lifetime_analysis, livevar_analysis, packref_analysis, reaching_def_analysis,
-    stackless_bytecode::{AttrId, Bytecode, Operation, SpecBlockId},
-    writeback_analysis,
+    borrow_analysis, livevar_analysis, reaching_def_analysis,
+    stackless_bytecode::{AttrId, Bytecode, Operation, SpecBlockId, TempIndex},
 };
 use itertools::Itertools;
 use spec_lang::{
@@ -212,6 +211,11 @@ impl<'env> FunctionTarget<'env> {
         self.func_env.get_local_count()
     }
 
+    /// Returns true if the index is for a temporary, not user declared local.
+    pub fn is_temporary(&self, idx: usize) -> bool {
+        self.func_env.is_temporary(idx)
+    }
+
     /// Gets the type of the local at index. This must use an index in the range as determined by
     /// `get_local_count`.
     pub fn get_local_type(&self, idx: usize) -> &Type {
@@ -269,6 +273,19 @@ impl<'env> FunctionTarget<'env> {
         self.data.ref_param_return_map.get(&idx)
     }
 
+    /// For a return index, return the reference input parameter. Inverse of
+    /// `get_return_index`.
+    pub fn get_input_for_return_index(&self, idx: usize) -> Option<&usize> {
+        // We do a brute force linear search. This may need to be changed if we are dealing
+        // with truly large (like generated) parameter lists.
+        for (ref_idx, ret_idx) in &self.data.ref_param_return_map {
+            if *ret_idx == idx {
+                return Some(ref_idx);
+            }
+        }
+        None
+    }
+
     /// Gets index of mutable proxy variable for an input parameter
     pub fn get_proxy_index(&self, idx: usize) -> Option<&usize> {
         self.data.param_proxy_map.get(&idx)
@@ -277,6 +294,24 @@ impl<'env> FunctionTarget<'env> {
     /// Gets index of mutable proxy variable for an input ref parameter
     pub fn get_ref_proxy_index(&self, idx: usize) -> Option<&usize> {
         self.data.ref_param_proxy_map.get(&idx)
+    }
+
+    /// Reverse of `get_ref_proxy_index`.
+    pub fn get_reverse_ref_proxy_index(&self, idx: usize) -> Option<&usize> {
+        // We do a brute force linear search.
+        for (ref_idx, proxy_idx) in &self.data.ref_param_proxy_map {
+            if *proxy_idx == idx {
+                return Some(ref_idx);
+            }
+        }
+        None
+    }
+
+    /// Returns true if this is an unchecked parameter. Such a parameter (currently) stems
+    /// from a `&mut` parameter in Move which has been converted to in/out parameters in the
+    /// transformation pipeline, provided this is a private function.
+    pub fn is_unchecked_param(&self, idx: TempIndex) -> bool {
+        (!self.is_public() || !self.call_ends_lifetime()) && self.get_ref_proxy_index(idx).is_some()
     }
 
     /// Returns whether a call to this function ends lifetime of input references
@@ -328,6 +363,16 @@ impl FunctionTargetData {
         }
     }
 
+    /// Gets the next available index for AttrId.
+    pub fn next_free_attr_index(&self) -> usize {
+        self.code
+            .iter()
+            .map(|b| b.get_attr_id().as_usize())
+            .max()
+            .unwrap_or(0)
+            + 1
+    }
+
     /// Adds a spec block to this function target data and returns a fresh id for it.
     pub fn add_spec_block(&mut self, spec: Spec) -> SpecBlockId {
         let id = SpecBlockId::new(self.next_free_spec_block_id);
@@ -351,6 +396,21 @@ impl FunctionTargetData {
             }
         }
         callees
+    }
+
+    /// Apply a variable renaming to this data, adjusting internal data structures.
+    pub fn rename_vars<F>(&mut self, f: &F)
+    where
+        F: Fn(TempIndex) -> TempIndex,
+    {
+        self.param_proxy_map = std::mem::take(&mut self.param_proxy_map)
+            .into_iter()
+            .map(|(x, y)| (f(x), f(y)))
+            .collect();
+        self.ref_param_proxy_map = std::mem::take(&mut self.ref_param_proxy_map)
+            .into_iter()
+            .map(|(x, y)| (f(x), f(y)))
+            .collect();
     }
 }
 
@@ -376,11 +436,6 @@ impl<'env> FunctionTarget<'env> {
     pub fn register_annotation_formatters_for_test(&self) {
         self.register_annotation_formatter(Box::new(livevar_analysis::format_livevar_annotation));
         self.register_annotation_formatter(Box::new(borrow_analysis::format_borrow_annotation));
-        self.register_annotation_formatter(Box::new(
-            writeback_analysis::format_writeback_annotation,
-        ));
-        self.register_annotation_formatter(Box::new(packref_analysis::format_packref_annotation));
-        self.register_annotation_formatter(Box::new(lifetime_analysis::format_lifetime_annotation));
         self.register_annotation_formatter(Box::new(
             reaching_def_analysis::format_reaching_def_annotation,
         ));
@@ -446,7 +501,7 @@ impl<'env> fmt::Display for FunctionTarget<'env> {
         for i in self.get_parameter_count()..self.get_local_count() {
             writeln!(
                 f,
-                "    var {}: {}",
+                "     var {}: {}",
                 self.get_local_name(i).display(self.symbol_pool()),
                 self.get_local_type(i).display(&tctx)
             )?;
@@ -457,12 +512,12 @@ impl<'env> fmt::Display for FunctionTarget<'env> {
                 .borrow()
                 .iter()
                 .filter_map(|f| f(self, offset as CodeOffset))
-                .map(|s| format!("    // {}", s))
+                .map(|s| format!("     // {}", s.replace("\n", "\n     // ")))
                 .join("\n");
             if !annotations.is_empty() {
                 writeln!(f, "{}", annotations)?;
             }
-            writeln!(f, "    {}", code.display(self))?;
+            writeln!(f, "{:>3}: {}", offset, code.display(self))?;
         }
         writeln!(f, "}}")?;
         Ok(())

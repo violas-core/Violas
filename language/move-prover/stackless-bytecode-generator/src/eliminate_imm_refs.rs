@@ -51,6 +51,10 @@ impl FunctionTargetProcessor for EliminateImmRefsProcessor {
             .collect();
         data
     }
+
+    fn name(&self) -> String {
+        "eliminate_imm_refs".to_string()
+    }
 }
 
 pub struct EliminateImmRefs<'a> {
@@ -101,10 +105,9 @@ impl<'a> EliminateImmRefs<'a> {
                     }
                 }
                 BorrowField(mid, sid, type_actuals, field_offset) => {
-                    let dest = dests[0];
                     if self
                         .func_target
-                        .get_local_type(dest)
+                        .get_local_type(dests[0])
                         .is_immutable_reference()
                     {
                         Call(
