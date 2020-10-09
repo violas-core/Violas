@@ -170,7 +170,7 @@ jobs:
           echo "cti exit code: $ret"
           echo "::set-env name=CTI_REPRO_CMD::$cmd"
           echo "::set-env name=CTI_EXIT_CODE::$ret"
-          msg_text="*${{ github.job }}* job in ${{ github.workflow }} workflow failed."
+          msg_text="*${{ github.job }}* job in ${{ github.workflow }} workflow failed for PR $PR_NUM."
           if [ -s "report.json" ]; then
             echo "report.json start"
             cat report.json
@@ -296,6 +296,9 @@ jobs:
             }
             // Post test result on original pull request
             try {
+              if (!should_fail) {
+                body += "\n :tada: Land-blocking cluster test passed! :ok_hand:"
+              }
               await github.issues.createComment(
                   {
                     issue_number: pr_num,

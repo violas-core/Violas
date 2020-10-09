@@ -197,9 +197,9 @@ where
         // Ensure our metrics counter has an initial value.
         self.record_num_discovery_notes();
 
-        debug!(
+        info!(
             NetworkSchema::new(&self.network_context),
-            "{} Starting Discovery actor event loop", self.network_context
+            "{} Starting Gossip Discovery actor event loop", self.network_context
         );
         loop {
             futures::select! {
@@ -210,15 +210,14 @@ where
                     self.handle_tick();
                 }
                 complete => {
-                    warn!(
-                        NetworkSchema::new(&self.network_context),
-                        "{} Discovery actor terminated",
-                        self.network_context
-                    );
                     break;
                 }
             }
         }
+        warn!(
+            NetworkSchema::new(&self.network_context),
+            "{} Gossip Discovery actor terminated", self.network_context
+        );
     }
 
     // Handles a clock "tick" by:
@@ -240,8 +239,8 @@ where
             if let Err(err) = sender.send_to(peer, msg) {
                 warn!(
                     NetworkSchema::new(&self.network_context)
-                        .remote_peer(&peer)
-                        .debug_error(&err),
+                        .remote_peer(&peer),
+                    error = ?err,
                     "{} Failed to send discovery msg to {}; error: {:?}",
                     self.network_context,
                     peer.short_str(),
@@ -289,7 +288,8 @@ where
             }
             Err(err) => {
                 info!(
-                    NetworkSchema::new(&self.network_context).debug_error(&err),
+                    NetworkSchema::new(&self.network_context),
+                    error = ?err,
                     "{} Received error: {}", self.network_context, err
                 );
             }

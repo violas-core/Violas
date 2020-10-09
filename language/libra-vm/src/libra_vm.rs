@@ -3,6 +3,7 @@
 
 use crate::{
     access_path_cache::AccessPathCache,
+    counters::*,
     data_cache::{RemoteStorage, StateViewCache},
     errors::{
         convert_normal_prologue_error, convert_normal_success_epilogue_error,
@@ -84,6 +85,7 @@ impl LibraVMImpl {
 
     pub(crate) fn publishing_option(&self) -> Result<&VMPublishingOption, VMStatus> {
         self.publishing_option.as_ref().ok_or_else(|| {
+            CRITICAL_ERRORS.inc();
             error!("VM Startup Failed. PublishingOption Not Found");
             VMStatus::Error(StatusCode::VM_STARTUP_FAILURE)
         })
@@ -100,6 +102,7 @@ impl LibraVMImpl {
             .as_ref()
             .map(|config| &config.gas_schedule)
             .ok_or_else(|| {
+                CRITICAL_ERRORS.inc();
                 error!("VM Startup Failed. Gas Schedule Not Found");
                 VMStatus::Error(StatusCode::VM_STARTUP_FAILURE)
             })
@@ -107,6 +110,7 @@ impl LibraVMImpl {
 
     pub fn get_libra_version(&self) -> Result<LibraVersion, VMStatus> {
         self.version.clone().ok_or_else(|| {
+            CRITICAL_ERRORS.inc();
             error!("VM Startup Failed. Libra Version Not Found");
             VMStatus::Error(StatusCode::VM_STARTUP_FAILURE)
         })
@@ -202,24 +206,25 @@ impl LibraVMImpl {
         let txn_max_gas_units = txn_data.max_gas_amount().get();
         let txn_expiration_timestamp_secs = txn_data.expiration_timestamp_secs();
         let chain_id = txn_data.chain_id();
-        session.execute_function(
-            &account_config::ACCOUNT_MODULE,
-            &SCRIPT_PROLOGUE_NAME,
-            vec![gas_currency_ty],
-            vec![
-                Value::transaction_argument_signer_reference(txn_data.sender),
-                Value::u64(txn_sequence_number),
-                Value::vector_u8(txn_public_key),
-                Value::u64(txn_gas_price),
-                Value::u64(txn_max_gas_units),
-                Value::u64(txn_expiration_timestamp_secs),
-                Value::u8(chain_id.id()),
-                Value::vector_u8(txn_data.script_hash.clone()),
-            ],
-            txn_data.sender,
-            cost_strategy,
-            convert_normal_prologue_error,
-        )
+        session
+            .execute_function(
+                &account_config::ACCOUNT_MODULE,
+                &SCRIPT_PROLOGUE_NAME,
+                vec![gas_currency_ty],
+                vec![
+                    Value::transaction_argument_signer_reference(txn_data.sender),
+                    Value::u64(txn_sequence_number),
+                    Value::vector_u8(txn_public_key),
+                    Value::u64(txn_gas_price),
+                    Value::u64(txn_max_gas_units),
+                    Value::u64(txn_expiration_timestamp_secs),
+                    Value::u8(chain_id.id()),
+                    Value::vector_u8(txn_data.script_hash.clone()),
+                ],
+                txn_data.sender,
+                cost_strategy,
+            )
+            .or_else(convert_normal_prologue_error)
     }
 
     /// Run the prologue of a transaction by calling into `MODULE_PROLOGUE_NAME` function stored
@@ -239,23 +244,24 @@ impl LibraVMImpl {
         let txn_max_gas_units = txn_data.max_gas_amount().get();
         let txn_expiration_timestamp_secs = txn_data.expiration_timestamp_secs();
         let chain_id = txn_data.chain_id();
-        session.execute_function(
-            &account_config::ACCOUNT_MODULE,
-            &MODULE_PROLOGUE_NAME,
-            vec![gas_currency_ty],
-            vec![
-                Value::transaction_argument_signer_reference(txn_data.sender),
-                Value::u64(txn_sequence_number),
-                Value::vector_u8(txn_public_key),
-                Value::u64(txn_gas_price),
-                Value::u64(txn_max_gas_units),
-                Value::u64(txn_expiration_timestamp_secs),
-                Value::u8(chain_id.id()),
-            ],
-            txn_data.sender,
-            cost_strategy,
-            convert_normal_prologue_error,
-        )
+        session
+            .execute_function(
+                &account_config::ACCOUNT_MODULE,
+                &MODULE_PROLOGUE_NAME,
+                vec![gas_currency_ty],
+                vec![
+                    Value::transaction_argument_signer_reference(txn_data.sender),
+                    Value::u64(txn_sequence_number),
+                    Value::vector_u8(txn_public_key),
+                    Value::u64(txn_gas_price),
+                    Value::u64(txn_max_gas_units),
+                    Value::u64(txn_expiration_timestamp_secs),
+                    Value::u8(chain_id.id()),
+                ],
+                txn_data.sender,
+                cost_strategy,
+            )
+            .or_else(convert_normal_prologue_error)
     }
 
     /// Run the epilogue of a transaction by calling into `EPILOGUE_NAME` function stored
@@ -273,21 +279,22 @@ impl LibraVMImpl {
         let txn_gas_price = txn_data.gas_unit_price().get();
         let txn_max_gas_units = txn_data.max_gas_amount().get();
         let gas_remaining = cost_strategy.remaining_gas().get();
-        session.execute_function(
-            &account_config::ACCOUNT_MODULE,
-            &USER_EPILOGUE_NAME,
-            vec![gas_currency_ty],
-            vec![
-                Value::transaction_argument_signer_reference(txn_data.sender),
-                Value::u64(txn_sequence_number),
-                Value::u64(txn_gas_price),
-                Value::u64(txn_max_gas_units),
-                Value::u64(gas_remaining),
-            ],
-            txn_data.sender,
-            cost_strategy,
-            convert_normal_success_epilogue_error,
-        )
+        session
+            .execute_function(
+                &account_config::ACCOUNT_MODULE,
+                &USER_EPILOGUE_NAME,
+                vec![gas_currency_ty],
+                vec![
+                    Value::transaction_argument_signer_reference(txn_data.sender),
+                    Value::u64(txn_sequence_number),
+                    Value::u64(txn_gas_price),
+                    Value::u64(txn_max_gas_units),
+                    Value::u64(gas_remaining),
+                ],
+                txn_data.sender,
+                cost_strategy,
+            )
+            .or_else(convert_normal_success_epilogue_error)
     }
 
     /// Run the failure epilogue of a transaction by calling into `USER_EPILOGUE_NAME` function
@@ -305,21 +312,22 @@ impl LibraVMImpl {
         let txn_gas_price = txn_data.gas_unit_price().get();
         let txn_max_gas_units = txn_data.max_gas_amount().get();
         let gas_remaining = cost_strategy.remaining_gas().get();
-        session.execute_function(
-            &account_config::ACCOUNT_MODULE,
-            &USER_EPILOGUE_NAME,
-            vec![gas_currency_ty],
-            vec![
-                Value::transaction_argument_signer_reference(txn_data.sender),
-                Value::u64(txn_sequence_number),
-                Value::u64(txn_gas_price),
-                Value::u64(txn_max_gas_units),
-                Value::u64(gas_remaining),
-            ],
-            txn_data.sender,
-            cost_strategy,
-            expect_only_successful_execution(USER_EPILOGUE_NAME.as_str()),
-        )
+        session
+            .execute_function(
+                &account_config::ACCOUNT_MODULE,
+                &USER_EPILOGUE_NAME,
+                vec![gas_currency_ty],
+                vec![
+                    Value::transaction_argument_signer_reference(txn_data.sender),
+                    Value::u64(txn_sequence_number),
+                    Value::u64(txn_gas_price),
+                    Value::u64(txn_max_gas_units),
+                    Value::u64(gas_remaining),
+                ],
+                txn_data.sender,
+                cost_strategy,
+            )
+            .or_else(|e| expect_only_successful_execution(e, USER_EPILOGUE_NAME.as_str()))
     }
 
     /// Run the prologue of a transaction by calling into `PROLOGUE_NAME` function stored
@@ -331,21 +339,27 @@ impl LibraVMImpl {
     ) -> Result<(), VMStatus> {
         let txn_sequence_number = txn_data.sequence_number();
         let txn_public_key = txn_data.authentication_key_preimage().to_vec();
+        let txn_expiration_timestamp_secs = txn_data.expiration_timestamp_secs();
+        let chain_id = txn_data.chain_id();
+
         let gas_schedule = zero_cost_schedule();
         let mut cost_strategy = CostStrategy::system(&gas_schedule, GasUnits::new(0));
-        session.execute_function(
-            &LIBRA_WRITESET_MANAGER_MODULE,
-            &WRITESET_PROLOGUE_NAME,
-            vec![],
-            vec![
-                Value::transaction_argument_signer_reference(txn_data.sender),
-                Value::u64(txn_sequence_number),
-                Value::vector_u8(txn_public_key),
-            ],
-            txn_data.sender,
-            &mut cost_strategy,
-            convert_write_set_prologue_error,
-        )
+        session
+            .execute_function(
+                &account_config::ACCOUNT_MODULE,
+                &WRITESET_PROLOGUE_NAME,
+                vec![],
+                vec![
+                    Value::transaction_argument_signer_reference(txn_data.sender),
+                    Value::u64(txn_sequence_number),
+                    Value::vector_u8(txn_public_key),
+                    Value::u64(txn_expiration_timestamp_secs),
+                    Value::u8(chain_id.id()),
+                ],
+                txn_data.sender,
+                &mut cost_strategy,
+            )
+            .or_else(convert_write_set_prologue_error)
     }
 
     /// Run the epilogue of a transaction by calling into `WRITESET_EPILOGUE_NAME` function stored
@@ -355,23 +369,27 @@ impl LibraVMImpl {
         session: &mut Session<R>,
         change_set: &ChangeSet,
         txn_data: &TransactionMetadata,
+        should_trigger_reconfiguration: bool,
     ) -> Result<(), VMStatus> {
         let change_set_bytes = lcs::to_bytes(change_set)
             .map_err(|_| VMStatus::Error(StatusCode::FAILED_TO_SERIALIZE_WRITE_SET_CHANGES))?;
         let gas_schedule = zero_cost_schedule();
         let mut cost_strategy = CostStrategy::system(&gas_schedule, GasUnits::new(0));
-        session.execute_function(
-            &LIBRA_WRITESET_MANAGER_MODULE,
-            &WRITESET_EPILOGUE_NAME,
-            vec![],
-            vec![
-                Value::transaction_argument_signer_reference(txn_data.sender),
-                Value::vector_u8(change_set_bytes),
-            ],
-            txn_data.sender,
-            &mut cost_strategy,
-            expect_only_successful_execution(WRITESET_EPILOGUE_NAME.as_str()),
-        )
+        session
+            .execute_function(
+                &account_config::ACCOUNT_MODULE,
+                &WRITESET_EPILOGUE_NAME,
+                vec![],
+                vec![
+                    Value::transaction_argument_signer_reference(txn_data.sender),
+                    Value::vector_u8(change_set_bytes),
+                    Value::u64(txn_data.sequence_number),
+                    Value::bool(should_trigger_reconfiguration),
+                ],
+                txn_data.sender,
+                &mut cost_strategy,
+            )
+            .or_else(|e| expect_only_successful_execution(e, WRITESET_EPILOGUE_NAME.as_str()))
     }
 
     pub fn new_session<'r, R: RemoteCache>(&self, r: &'r R) -> Session<'r, '_, R> {
@@ -432,9 +450,9 @@ pub fn txn_effects_to_writeset_and_events_cached<C: AccessPathCache>(
             let op = match val_opt {
                 None => WriteOp::Deletion,
                 Some((ty_layout, val)) => {
-                    let blob = val
-                        .simple_serialize(&ty_layout)
-                        .ok_or_else(|| VMStatus::Error(StatusCode::VALUE_SERIALIZATION_ERROR))?;
+                    let blob = val.simple_serialize(&ty_layout).ok_or_else(|| {
+                        VMStatus::Error(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
+                    })?;
 
                     WriteOp::Value(blob)
                 }
@@ -449,7 +467,7 @@ pub fn txn_effects_to_writeset_and_events_cached<C: AccessPathCache>(
 
     let ws = WriteSetMut::new(ops)
         .freeze()
-        .map_err(|_| VMStatus::Error(StatusCode::DATA_FORMAT_ERROR))?;
+        .map_err(|_| VMStatus::Error(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR))?;
 
     let events = effects
         .events
@@ -457,7 +475,7 @@ pub fn txn_effects_to_writeset_and_events_cached<C: AccessPathCache>(
         .map(|(guid, seq_num, ty_tag, ty_layout, val)| {
             let msg = val
                 .simple_serialize(&ty_layout)
-                .ok_or_else(|| VMStatus::Error(StatusCode::DATA_FORMAT_ERROR))?;
+                .ok_or_else(|| VMStatus::Error(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR))?;
             let key = EventKey::try_from(guid.as_slice())
                 .map_err(|_| VMStatus::Error(StatusCode::EVENT_KEY_MISMATCH))?;
             Ok(ContractEvent::new(key, seq_num, ty_tag, msg))

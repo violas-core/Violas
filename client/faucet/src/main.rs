@@ -99,7 +99,7 @@ async fn handle(
 ) -> Result<Box<dyn warp::Reply>, warp::Rejection> {
     let ret = service.process(&params).await;
     match ret {
-        Ok(body) => Ok(Box::new(body)),
+        Ok(body) => Ok(Box::new(body.to_string())),
         Err(err) => Err(warp::reject::custom(ServerInternalError(err.to_string()))),
     }
 }
@@ -179,6 +179,9 @@ mod tests {
         let service = setup(accounts.clone());
         let filter = routes(service);
 
+        // auth_key is outside of the loop for minting same account multiple
+        // times, it should success and should not create same account multiple
+        // times.
         let auth_key = "459c77a38803bd53f3adee52703810e3a74fd7c46952c497e75afb0a7932586d";
         let amount = 13345;
         for path in &vec!["/", "/mint"] {
@@ -200,6 +203,37 @@ mod tests {
                 .expect("account should be created");
             assert_eq!(account["balances"][0]["amount"], amount);
         }
+    }
+
+    #[tokio::test]
+    async fn test_mint_with_txns_response() {
+        let accounts = genesis_accounts();
+        let service = setup(accounts.clone());
+        let filter = routes(service);
+
+        let auth_key = "459c77a38803bd53f3adee52703810e3a74fd7c46952c497e75afb0a7932586d";
+        let amount = 13345;
+        let resp = warp::test::request()
+            .method("POST")
+            .path(
+                format!(
+                    "/mint?auth_key={}&amount={}&currency_code=LBR&return_txns=true",
+                    auth_key, amount
+                )
+                .as_str(),
+            )
+            .reply(&filter)
+            .await;
+        let body = resp.body();
+        let txns: Vec<libra_types::transaction::SignedTransaction> =
+            lcs::from_bytes(&hex::decode(body).expect("hex encoded response body"))
+                .expect("valid lcs vec");
+        assert_eq!(txns.len(), 2);
+        let reader = accounts.read().unwrap();
+        let account = reader
+            .get("a74fd7c46952c497e75afb0a7932586d")
+            .expect("account should be created");
+        assert_eq!(account["balances"][0]["amount"], amount);
     }
 
     #[tokio::test]
@@ -271,10 +305,11 @@ mod tests {
                             ..
                         }) => {
                             let mut writer = accounts.write().unwrap();
-                            writer.insert(
+                            let previous = writer.insert(
                                 address.to_string(),
                                 create_vasp_account(address.to_string().as_str(), 0),
                             );
+                            assert!(previous.is_none(), "should not create account twice");
                         }
                         Some(ScriptCall::PeerToPeerWithMetadata { payee, amount, .. }) => {
                             let mut writer = accounts.write().unwrap();
@@ -339,6 +374,7 @@ mod tests {
                 "currency": "LBR"
             }]),
             serde_json::json!({
+                "type": "parent_vasp",
                 "human_name": "No. 0",
                 "base_url": "",
                 "expiration_time": 18446744073709551615u64,

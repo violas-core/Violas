@@ -31,10 +31,8 @@ use crate::{
 };
 // DEBUG
 // use backtrace::Backtrace;
+use bytecode::{function_target::FunctionTarget, function_target_pipeline::FunctionTargetsHolder};
 use spec_lang::env::{ConditionTag, NodeId};
-use stackless_bytecode_generator::{
-    function_target::FunctionTarget, function_target_pipeline::FunctionTargetsHolder,
-};
 
 /// A type alias for the way how we use crate `pretty`'s document type. `pretty` is a
 /// Wadler-style pretty printer. Our simple usage doesn't require any lifetime management.
@@ -123,8 +121,11 @@ impl<'env> BoogieWrapper<'env> {
             // different random seeds cause significant instabilities in verification times.
             // Thus by running multiple instances of Boogie with different random seeds, we can
             // potentially alleviate the instability.
-            let (seed, output) =
-                ProverTaskRunner::run_tasks(task, self.options.prover.num_instances);
+            let (seed, output) = ProverTaskRunner::run_tasks(
+                task,
+                self.options.prover.num_instances,
+                self.options.prover.sequential_task,
+            );
             if self.options.prover.num_instances > 1 {
                 debug!("Boogie instance with seed {} finished first", seed);
             }
@@ -216,7 +217,7 @@ impl<'env> BoogieWrapper<'env> {
             // Expected error did not happen, report it.
             let diag = Diagnostic::new(
                 Severity::Error,
-                info.message.clone(),
+                format!("{} (negative error)", info.message),
                 Label::new(loc.file_id(), loc.span(), ""),
             );
             self.env.add_diag(diag);

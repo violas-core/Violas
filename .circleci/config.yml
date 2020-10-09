@@ -69,7 +69,7 @@ commands:
     steps:
       - run:
           name: update tooling if needed.
-          command: scripts/dev_setup.sh -o -b -p
+          command: scripts/dev_setup.sh -t -o -b -p -y
       - run:
           name: Setup Env
           command: |
@@ -92,6 +92,12 @@ commands:
             echo 'export RUSTC_WRAPPER=sccache' >> $BASH_ENV
             echo 'export CC="sccache cc"' >> $BASH_ENV
             echo 'export CXX="sccache c++"' >> $BASH_ENV
+
+            # Configure Move prover tools
+            echo 'export Z3_EXE="$HOME/bin/z3"' >> $BASH_ENV
+            echo 'export DOTNET_ROOT="$HOME/.dotnet"' >> $BASH_ENV
+            echo 'export BOOGIE_EXE="$HOME/.dotnet/tools/boogie"' >> $BASH_ENV
+
   save_sccache:
     description: Save shared compilation cache for future jobs
     steps:
@@ -406,13 +412,16 @@ jobs:
           name: shell lints
           command: |
             shellcheck scripts/dev_setup.sh && \
-            shellcheck .circleci/get_pr_info.sh
+            shellcheck scripts/dockerhub_prune.sh && \
+            shellcheck .circleci/get_pr_info.sh && \
+            shellcheck docker/build_push.sh && \
+            shellcheck docker/dockerhub_to_novi_ecr.sh
       - run:
           name: docker lints
           command: |
             hadolint docker/ci/circleci/Dockerfile && \
-            hadolint docker/ci/arch/Dockerfile  && \
-            hadolint docker/ci/alpine/Dockerfile  && \
+            hadolint docker/ci/arch/Dockerfile && \
+            hadolint docker/ci/alpine/Dockerfile && \
             hadolint docker/ci/centos/Dockerfile
       - save_sccache
   build-dev:
@@ -425,13 +434,15 @@ jobs:
       - run:
           command: RUST_BACKTRACE=1 $CARGO $CARGOFLAGS build -j 16
       - run:
-          command: RUST_BACKTRACE=1 $CARGO $CARGOFLAGS build -j 16 -p libra-swarm
+          command: RUST_BACKTRACE=1 $CARGO $CARGOFLAGS build -j 16 -p cli
       - run:
           command: RUST_BACKTRACE=1 $CARGO $CARGOFLAGS build -j 16 -p cluster-test
       - run:
+          command: RUST_BACKTRACE=1 $CARGO $CARGOFLAGS build -j 16 -p language-benchmarks
+      - run:
           command: RUST_BACKTRACE=1 $CARGO $CARGOFLAGS build -j 16 -p libra-fuzzer
       - run:
-          command: RUST_BACKTRACE=1 $CARGO $CARGOFLAGS build -j 16 -p language-benchmarks
+          command: RUST_BACKTRACE=1 $CARGO $CARGOFLAGS build -j 16 -p libra-swarm
       - run:
           command: RUST_BACKTRACE=1 $CARGO $CARGOFLAGS build -j 16 -p test-generation
       - run:
@@ -659,49 +670,6 @@ jobs:
           fail_only: true
           webhook: "${WEBHOOK_BREAKING_CHANGE}"
           failure_message: ":red_circle: <@channel> breaking change in *${GIT_REV}*"
-  # build-docs and deploy-docs are adapted from
-  # https://circleci.com/blog/deploying-documentation-to-github-pages-with-continuous-integration/.
-  build-docs:
-    executor: build-executor
-    description: Documentation Build
-    steps:
-      - build_setup
-      - restore_cargo_package_cache
-      - restore_sccache
-      - run:
-          name: Generate documentation
-          command: |
-            # Use `RUSTC_BOOTSTRAP` in order to use the `--enable-index-page` flag of rustdoc
-            # This is needed in order to generate a landing page `index.html` for workspaces
-            RUSTC_BOOTSTRAP=1 RUSTDOCFLAGS="-Z unstable-options --enable-index-page" $CARGO $CARGOFLAGS doc --no-deps --workspace --lib
-      - persist_to_workspace:
-          root: target
-          paths: doc
-      - save_sccache
-  deploy-docs:
-    docker:
-      - image: node:8.10.0
-    steps:
-      - checkout
-      - attach_workspace:
-          at: target
-      - run:
-          name: Disable jekyll builds
-          command: touch target/doc/.nojekyll
-      - run:
-          name: Install and configure gh-pages
-          command: |
-            npm install -g --silent gh-pages@2.0.1
-            git config user.email "libra-doc-bot@users.noreply.github.com"
-            git config user.name "libra-doc-bot"
-      - add_ssh_keys:
-          fingerprints:
-            - "b4:01:8d:ee:cb:ee:84:c6:e3:25:a4:1e:af:cf:7b:f2"
-      - run:
-          name: Deploy to gh-pages branch
-          command: |
-            gh-pages --dotfiles --message "[skip ci] documentation update" --dist target/doc
-
   ######################################################################################################
   # Building docker ci base image if relevant files have changed                                       #
   # Only if "release" parameter is true, will docker images be pushed to Dockerhub and Novi AWS ECR    #
@@ -732,7 +700,7 @@ jobs:
             echo "cargo-toolchain" >> /tmp/ci_docker_files
             echo "docker/ci/<< parameters.target-image >>/Dockerfile" >> /tmp/ci_docker_files
             echo "rust-toolchain" >> /tmp/ci_docker_files
-            echo "scripts/dev_setup.sh" >> /tmp/ci_docker_files
+            echo "scripts/dev_setup.sh -t" >> /tmp/ci_docker_files
       - halt_if_no_relevant_files_changed_since_last_evaluation:
           cache_key_part: "dockerbuild"
           file_of_relevant_git_files: "/tmp/ci_docker_files"
@@ -749,10 +717,6 @@ jobs:
                 command: |
                   #signs the pushed image
                   docker push --disable-content-trust=false libra/build_environment:<< parameters.target-image >>-latest
-            - run:
-                name: docker image pruning.
-                command: |
-                  scripts/dockerhub_prune.sh -u "${DOCKERHUB_USERNAME}"" -p ${DOCKERHUB_PASSWORD}" -x
 
   docker-update-base-images:
     executor: vm-medium-executor
@@ -806,15 +770,14 @@ jobs:
       - run:
           name: pre-release docker images
           command: |
+            BRANCH=${CIRCLE_BRANCH}
             docker/build_push.sh -u -p -b ${BRANCH} -n client
             docker/build_push.sh -u -p -b ${BRANCH} -n init
-            docker/build_push.sh -u -p -b ${BRANCH} -n mint
+            docker/build_push.sh -u -p -b ${BRANCH} -n faucet
             docker/build_push.sh -u -p -b ${BRANCH} -n tools
             docker/build_push.sh -u -p -b ${BRANCH} -n validator
             docker/build_push.sh -u -p -b ${BRANCH} -n validator-tcb
             docker/build_push.sh -u -p -b ${BRANCH} -n cluster-test
-            #build but don't publish
-            docker/build_push.sh -p -b ${BRANCH} -n validator-dynamic
 
   ######################################################################################################
   # Docker Builds:                                                                                     #
@@ -833,12 +796,20 @@ jobs:
             BRANCH=${CIRCLE_BRANCH}
             docker/build_push.sh -u -b ${BRANCH} -n client
             docker/build_push.sh -u -b ${BRANCH} -n init
-            docker/build_push.sh -u -b ${BRANCH} -n mint
+            docker/build_push.sh -u -b ${BRANCH} -n faucet
             docker/build_push.sh -u -b ${BRANCH} -n tools
             docker/build_push.sh -u -b ${BRANCH} -n validator
             docker/build_push.sh -u -b ${BRANCH} -n validator-tcb
             docker/build_push.sh -u -b ${BRANCH} -n cluster-test
-            #push to novi ecr with standard names, and older names.
+      - run:
+          name: docker image pruning.
+          command: |
+            scripts/dockerhub_prune.sh -u "${DOCKERHUB_USERNAME}" -p "${DOCKERHUB_PASSWORD}" -x
+      - run:
+          name: push to novi ecr
+          command: |
+            #push to novi ecr with standard names
+            BRANCH=${CIRCLE_BRANCH}
             GIT_REV=$(git rev-parse --short=8 HEAD)
             aws ecr get-login-password --region ${AWS_REGION} | \
             docker login --username AWS --password-stdin "${AWS_ECR_ACCOUNT_URL}"
@@ -967,12 +938,6 @@ workflows:
       - lint:
           requires:
             - prefetch-crates
-      - build-docs:
-          requires:
-            - lint
-      - deploy-docs:
-          requires:
-            - build-docs
       - check-breaking-change:
           requires:
             - prefetch-crates
@@ -1006,9 +971,6 @@ workflows:
       - build-benchmark:
           requires:
             - prefetch-crates
-      - build-docs:
-          requires:
-            - lint
       - docker-ci-build:
           target-image: circleci
           filters: *filter-only-auto-canary
@@ -1052,9 +1014,6 @@ workflows:
       - build-benchmark:
           requires:
             - prefetch-crates
-      - build-docs:
-          requires:
-            - lint
       - docker-ci-build:
           target-image: circleci
           filters: *filter-only-prs-dependabot

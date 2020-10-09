@@ -64,6 +64,7 @@ fn in_memory(n: u64) {
         signer.private_key().clone(),
         Ed25519PrivateKey::generate_for_testing(),
         waypoint,
+        true,
     );
     let safety_rules_manager = SafetyRulesManager::new_local(storage, false);
     lsr(safety_rules_manager.client(), signer, n);
@@ -79,6 +80,7 @@ fn on_disk(n: u64) {
         signer.private_key().clone(),
         Ed25519PrivateKey::generate_for_testing(),
         waypoint,
+        true,
     );
     let safety_rules_manager = SafetyRulesManager::new_local(storage, false);
     lsr(safety_rules_manager.client(), signer, n);
@@ -94,6 +96,7 @@ fn serializer(n: u64) {
         signer.private_key().clone(),
         Ed25519PrivateKey::generate_for_testing(),
         waypoint,
+        true,
     );
     let safety_rules_manager = SafetyRulesManager::new_serializer(storage, false);
     lsr(safety_rules_manager.client(), signer, n);
@@ -109,6 +112,7 @@ fn thread(n: u64) {
         signer.private_key().clone(),
         Ed25519PrivateKey::generate_for_testing(),
         waypoint,
+        true,
     );
     // Test value, in milliseconds
     let timeout_ms = 5_000;
@@ -126,6 +130,7 @@ fn vault(n: u64) {
         None,
         None,
         None,
+        true,
     );
     storage.reset_and_clear().unwrap();
 
@@ -135,6 +140,7 @@ fn vault(n: u64) {
         signer.private_key().clone(),
         Ed25519PrivateKey::generate_for_testing(),
         waypoint,
+        true,
     );
     // Test value in milliseconds.
     let timeout_ms = 5_000;
@@ -153,6 +159,7 @@ pub fn benchmark(c: &mut Criterion) {
         None,
         None,
         None,
+        true,
     );
 
     let enable_vault = if storage.available().is_err() {

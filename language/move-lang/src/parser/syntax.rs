@@ -1813,7 +1813,7 @@ fn parse_spec_block_member<'input>(tokens: &mut Lexer<'input>) -> Result<SpecBlo
         _ => Err(unexpected_token_error(
             tokens,
             "one of `assert`, `assume`, `decreases`, `aborts_if`, `succeeds_if`, `modifies`, \
-            `ensures`, `requires`, `include`, `apply`, `pragma`, `global`, or a name",
+             `ensures`, `requires`, `include`, `apply`, `pragma`, `global`, or a name",
         )),
     }
 }
@@ -2071,13 +2071,14 @@ fn parse_spec_let<'input>(tokens: &mut Lexer<'input>) -> Result<SpecBlockMember,
 fn parse_spec_include<'input>(tokens: &mut Lexer<'input>) -> Result<SpecBlockMember, Error> {
     let start_loc = tokens.start_loc();
     consume_identifier(tokens, "include")?;
+    let properties = parse_condition_properties(tokens)?;
     let exp = parse_exp(tokens)?;
     consume_token(tokens, Tok::Semicolon)?;
     Ok(spanned(
         tokens.file_name(),
         start_loc,
         tokens.previous_end_loc(),
-        SpecBlockMember_::Include { exp },
+        SpecBlockMember_::Include { properties, exp },
     ))
 }
 

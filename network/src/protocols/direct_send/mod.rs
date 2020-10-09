@@ -133,7 +133,7 @@ impl DirectSend {
         }
         info!(
             NetworkSchema::new(&self.network_context).remote_peer(&peer_id),
-            "{} Terminating direct send actor for peer: {}",
+            "{} Direct send actor for '{}' terminated",
             self.network_context,
             peer_id.short_str()
         );
@@ -170,8 +170,8 @@ impl DirectSend {
                     });
                     if let Err(err) = self.ds_notifs_tx.send(notif).await {
                         warn!(
-                            NetworkSchema::new(&self.network_context)
-                                .debug_error(&err),
+                            NetworkSchema::new(&self.network_context),
+                            error = ?err,
                             "{} Failed to notify upstream actor about inbound DirectSend message. Error: {:?}",
                             self.network_context,
                             err
@@ -187,7 +187,7 @@ impl DirectSend {
                     );
                 }
             }
-            _ => warn!(
+            _ => error!(
                 NetworkSchema::new(&self.network_context),
                 "{} Unexpected PeerNotification: {:?}", self.network_context, notif
             ),

@@ -184,6 +184,10 @@ where
 
     pub async fn start(mut self) {
         let mut tick_handlers = FuturesUnordered::new();
+        info!(
+            NetworkSchema::new(&self.network_context),
+            "{} Health checker actor started", self.network_context
+        );
         loop {
             futures::select! {
                 event = self.network_rx.select_next_some() => {
@@ -198,12 +202,14 @@ where
                             match msg {
                             HealthCheckerMsg::Ping(ping) => self.handle_ping_request(peer_id, ping, res_tx),
                             _ => {
-                                error!(
+                                warn!(
                                     SecurityEvent::InvalidHealthCheckerMsg,
-                                    StructuredLogEntry::default()
-                                        .data("error", "Unexpected rpc message")
-                                        .data("message", &msg)
-                                        .data("peer_id", &peer_id)
+                                    NetworkSchema::new(&self.network_context)
+                                        .remote_peer(&peer_id),
+                                    rpc_message = msg,
+                                    "{} Unexpected RPC message from {}",
+                                    self.network_context,
+                                    peer_id
                                 );
                             },
                             };
@@ -211,17 +217,21 @@ where
                         Ok(Event::Message(msg)) => {
                             error!(
                                 SecurityEvent::InvalidNetworkEventHC,
-                                StructuredLogEntry::default()
-                                    .data("error", "Unexpected network event")
-                                    .data("event_message", &msg)
+                                NetworkSchema::new(&self.network_context),
+                                "{} Unexpected network event: {:?}",
+                                self.network_context,
+                                msg
                             );
                             debug_assert!(false, "Unexpected network event");
                         },
                         Err(err) => {
-                            error!(
+                            warn!(
                                 SecurityEvent::InvalidNetworkEventHC,
-                                StructuredLogEntry::default()
-                                    .data_display("error", &err)
+                                NetworkSchema::new(&self.network_context),
+                                error = ?err,
+                                "{} Unexpected network error: {}",
+                                self.network_context,
+                                err
                             );
 
                             debug_assert!(false, "Unexpected network error");
@@ -271,7 +281,7 @@ where
                 }
             }
         }
-        error!(
+        warn!(
             NetworkSchema::new(&self.network_context),
             "{} Health checker actor terminated", self.network_context
         );
@@ -287,7 +297,8 @@ where
             Ok(msg) => msg,
             Err(e) => {
                 warn!(
-                    NetworkSchema::new(&self.network_context).debug_error(&e),
+                    NetworkSchema::new(&self.network_context),
+                    error = ?e,
                     "{} Unable to serialize pong response: {}", self.network_context, e
                 );
                 return;
@@ -331,14 +342,14 @@ where
                             }
                         });
                 } else {
-                    error!(
+                    warn!(
                         SecurityEvent::InvalidHealthCheckerMsg,
-                        StructuredLogEntry::default()
-                            .data("error", "Pong nonce doesn't match our challenge Ping nonce")
-                            .data("req_nonce", &req_nonce)
-                            .data("peer_id", &peer_id)
-                            .data("pong", pong.0)
-                            .data("round", round)
+                        NetworkSchema::new(&self.network_context).remote_peer(&peer_id),
+                        "{} Pong nonce doesn't match Ping nonce. Round: {}, Pong: {}, Ping: {}",
+                        self.network_context,
+                        round,
+                        pong.0,
+                        req_nonce
                     );
                     debug_assert!(false, "Pong nonce doesn't match our challenge Ping nonce");
                 }
@@ -346,8 +357,8 @@ where
             Err(err) => {
                 warn!(
                     NetworkSchema::new(&self.network_context)
-                        .remote_peer(&peer_id)
-                        .debug_error(&err),
+                        .remote_peer(&peer_id),
+                    error = ?err,
                     round = round,
                     "{} Ping failed for peer: {} round: {} with error: {:?}",
                     self.network_context,
@@ -380,8 +391,8 @@ where
                             if let Err(err) = self.network_tx.disconnect_peer(peer_id).await {
                                 warn!(
                                     NetworkSchema::new(&self.network_context)
-                                        .remote_peer(&peer_id)
-                                        .debug_error(&err),
+                                        .remote_peer(&peer_id),
+                                    error = ?err,
                                     "{} Failed to disconnect from peer: {} with error: {:?}",
                                     self.network_context,
                                     peer_id.short_str(),

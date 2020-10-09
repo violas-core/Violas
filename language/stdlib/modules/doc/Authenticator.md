@@ -3,24 +3,24 @@
 
 # Module `0x1::Authenticator`
 
-### Table of Contents
-
--  [Struct `MultiEd25519PublicKey`](#0x1_Authenticator_MultiEd25519PublicKey)
--  [Const `SINGLE_ED25519_SCHEME_ID`](#0x1_Authenticator_SINGLE_ED25519_SCHEME_ID)
--  [Const `MULTI_ED25519_SCHEME_ID`](#0x1_Authenticator_MULTI_ED25519_SCHEME_ID)
--  [Const `MAX_MULTI_ED25519_KEYS`](#0x1_Authenticator_MAX_MULTI_ED25519_KEYS)
--  [Const `EZERO_THRESHOLD`](#0x1_Authenticator_EZERO_THRESHOLD)
--  [Const `ENOT_ENOUGH_KEYS_FOR_THRESHOLD`](#0x1_Authenticator_ENOT_ENOUGH_KEYS_FOR_THRESHOLD)
--  [Const `ENUM_KEYS_ABOVE_MAX_THRESHOLD`](#0x1_Authenticator_ENUM_KEYS_ABOVE_MAX_THRESHOLD)
--  [Function `create_multi_ed25519`](#0x1_Authenticator_create_multi_ed25519)
--  [Function `ed25519_authentication_key`](#0x1_Authenticator_ed25519_authentication_key)
--  [Function `multi_ed25519_authentication_key`](#0x1_Authenticator_multi_ed25519_authentication_key)
--  [Function `public_keys`](#0x1_Authenticator_public_keys)
--  [Function `threshold`](#0x1_Authenticator_threshold)
-
 Move representation of the authenticator types used in Libra:
 - Ed25519 (single-sig)
 - MultiEd25519 (K-of-N multisig)
+
+
+-  [Struct <code><a href="Authenticator.md#0x1_Authenticator_MultiEd25519PublicKey">MultiEd25519PublicKey</a></code>](#0x1_Authenticator_MultiEd25519PublicKey)
+-  [Const <code><a href="Authenticator.md#0x1_Authenticator_SINGLE_ED25519_SCHEME_ID">SINGLE_ED25519_SCHEME_ID</a></code>](#0x1_Authenticator_SINGLE_ED25519_SCHEME_ID)
+-  [Const <code><a href="Authenticator.md#0x1_Authenticator_MULTI_ED25519_SCHEME_ID">MULTI_ED25519_SCHEME_ID</a></code>](#0x1_Authenticator_MULTI_ED25519_SCHEME_ID)
+-  [Const <code><a href="Authenticator.md#0x1_Authenticator_MAX_MULTI_ED25519_KEYS">MAX_MULTI_ED25519_KEYS</a></code>](#0x1_Authenticator_MAX_MULTI_ED25519_KEYS)
+-  [Const <code><a href="Authenticator.md#0x1_Authenticator_EZERO_THRESHOLD">EZERO_THRESHOLD</a></code>](#0x1_Authenticator_EZERO_THRESHOLD)
+-  [Const <code><a href="Authenticator.md#0x1_Authenticator_ENOT_ENOUGH_KEYS_FOR_THRESHOLD">ENOT_ENOUGH_KEYS_FOR_THRESHOLD</a></code>](#0x1_Authenticator_ENOT_ENOUGH_KEYS_FOR_THRESHOLD)
+-  [Const <code><a href="Authenticator.md#0x1_Authenticator_ENUM_KEYS_ABOVE_MAX_THRESHOLD">ENUM_KEYS_ABOVE_MAX_THRESHOLD</a></code>](#0x1_Authenticator_ENUM_KEYS_ABOVE_MAX_THRESHOLD)
+-  [Function <code>create_multi_ed25519</code>](#0x1_Authenticator_create_multi_ed25519)
+-  [Function <code>ed25519_authentication_key</code>](#0x1_Authenticator_ed25519_authentication_key)
+-  [Function <code>multi_ed25519_authentication_key</code>](#0x1_Authenticator_multi_ed25519_authentication_key)
+-  [Function <code>public_keys</code>](#0x1_Authenticator_public_keys)
+-  [Function <code>threshold</code>](#0x1_Authenticator_threshold)
+-  [Module Specification](#@Module_Specification_0)
 
 
 <a name="0x1_Authenticator_MultiEd25519PublicKey"></a>
@@ -30,7 +30,7 @@ Move representation of the authenticator types used in Libra:
 A multi-ed25519 public key
 
 
-<pre><code><b>struct</b> <a href="#0x1_Authenticator_MultiEd25519PublicKey">MultiEd25519PublicKey</a>
+<pre><code><b>struct</b> <a href="Authenticator.md#0x1_Authenticator_MultiEd25519PublicKey">MultiEd25519PublicKey</a>
 </code></pre>
 
 
@@ -41,14 +41,12 @@ A multi-ed25519 public key
 
 <dl>
 <dt>
-
 <code>public_keys: vector&lt;vector&lt;u8&gt;&gt;</code>
 </dt>
 <dd>
  vector of ed25519 public keys
 </dd>
 <dt>
-
 <code>threshold: u8</code>
 </dt>
 <dd>
@@ -66,7 +64,7 @@ A multi-ed25519 public key
 Scheme byte ID for ed25519
 
 
-<pre><code><b>const</b> SINGLE_ED25519_SCHEME_ID: u8 = 0;
+<pre><code><b>const</b> <a href="Authenticator.md#0x1_Authenticator_SINGLE_ED25519_SCHEME_ID">SINGLE_ED25519_SCHEME_ID</a>: u8 = 0;
 </code></pre>
 
 
@@ -78,7 +76,7 @@ Scheme byte ID for ed25519
 Scheme byte ID for multi-ed25519
 
 
-<pre><code><b>const</b> MULTI_ED25519_SCHEME_ID: u8 = 1;
+<pre><code><b>const</b> <a href="Authenticator.md#0x1_Authenticator_MULTI_ED25519_SCHEME_ID">MULTI_ED25519_SCHEME_ID</a>: u8 = 1;
 </code></pre>
 
 
@@ -90,7 +88,7 @@ Scheme byte ID for multi-ed25519
 Maximum number of keys allowed in a MultiEd25519 public/private key
 
 
-<pre><code><b>const</b> MAX_MULTI_ED25519_KEYS: u64 = 32;
+<pre><code><b>const</b> <a href="Authenticator.md#0x1_Authenticator_MAX_MULTI_ED25519_KEYS">MAX_MULTI_ED25519_KEYS</a>: u64 = 32;
 </code></pre>
 
 
@@ -99,11 +97,10 @@ Maximum number of keys allowed in a MultiEd25519 public/private key
 
 ## Const `EZERO_THRESHOLD`
 
-Threshold provided was 0 which can't be used to create a
-<code>MultiEd25519</code> key
+Threshold provided was 0 which can't be used to create a <code>MultiEd25519</code> key
 
 
-<pre><code><b>const</b> EZERO_THRESHOLD: u64 = 0;
+<pre><code><b>const</b> <a href="Authenticator.md#0x1_Authenticator_EZERO_THRESHOLD">EZERO_THRESHOLD</a>: u64 = 0;
 </code></pre>
 
 
@@ -112,11 +109,10 @@ Threshold provided was 0 which can't be used to create a
 
 ## Const `ENOT_ENOUGH_KEYS_FOR_THRESHOLD`
 
-Not enough keys were provided for the specified threshold when creating an
-<code>MultiEd25519</code> key
+Not enough keys were provided for the specified threshold when creating an <code>MultiEd25519</code> key
 
 
-<pre><code><b>const</b> ENOT_ENOUGH_KEYS_FOR_THRESHOLD: u64 = 1;
+<pre><code><b>const</b> <a href="Authenticator.md#0x1_Authenticator_ENOT_ENOUGH_KEYS_FOR_THRESHOLD">ENOT_ENOUGH_KEYS_FOR_THRESHOLD</a>: u64 = 1;
 </code></pre>
 
 
@@ -125,11 +121,10 @@ Not enough keys were provided for the specified threshold when creating an
 
 ## Const `ENUM_KEYS_ABOVE_MAX_THRESHOLD`
 
-Too many keys were provided for the specified threshold when creating an
-<code>MultiEd25519</code> key
+Too many keys were provided for the specified threshold when creating an <code>MultiEd25519</code> key
 
 
-<pre><code><b>const</b> ENUM_KEYS_ABOVE_MAX_THRESHOLD: u64 = 2;
+<pre><code><b>const</b> <a href="Authenticator.md#0x1_Authenticator_ENUM_KEYS_ABOVE_MAX_THRESHOLD">ENUM_KEYS_ABOVE_MAX_THRESHOLD</a>: u64 = 2;
 </code></pre>
 
 
@@ -142,11 +137,10 @@ Create a a multisig policy from a vector of ed25519 public keys and a threshold.
 Note: this does *not* check uniqueness of keys. Repeated keys are convenient to
 encode weighted multisig policies. For example Alice AND 1 of Bob or Carol is
 public_key: {alice_key, alice_key, bob_key, carol_key}, threshold: 3
-Aborts if threshold is zero or bigger than the length of
-<code>public_keys</code>.
+Aborts if threshold is zero or bigger than the length of <code>public_keys</code>.
 
 
-<pre><code><b>public</b> <b>fun</b> <a href="#0x1_Authenticator_create_multi_ed25519">create_multi_ed25519</a>(public_keys: vector&lt;vector&lt;u8&gt;&gt;, threshold: u8): <a href="#0x1_Authenticator_MultiEd25519PublicKey">Authenticator::MultiEd25519PublicKey</a>
+<pre><code><b>public</b> <b>fun</b> <a href="Authenticator.md#0x1_Authenticator_create_multi_ed25519">create_multi_ed25519</a>(public_keys: vector&lt;vector&lt;u8&gt;&gt;, threshold: u8): <a href="Authenticator.md#0x1_Authenticator_MultiEd25519PublicKey">Authenticator::MultiEd25519PublicKey</a>
 </code></pre>
 
 
@@ -155,24 +149,24 @@ Aborts if threshold is zero or bigger than the length of
 <summary>Implementation</summary>
 
 
-<pre><code><b>public</b> <b>fun</b> <a href="#0x1_Authenticator_create_multi_ed25519">create_multi_ed25519</a>(
+<pre><code><b>public</b> <b>fun</b> <a href="Authenticator.md#0x1_Authenticator_create_multi_ed25519">create_multi_ed25519</a>(
     public_keys: vector&lt;vector&lt;u8&gt;&gt;,
     threshold: u8
-): <a href="#0x1_Authenticator_MultiEd25519PublicKey">MultiEd25519PublicKey</a> {
+): <a href="Authenticator.md#0x1_Authenticator_MultiEd25519PublicKey">MultiEd25519PublicKey</a> {
     // check theshold requirements
     <b>let</b> len = <a href="Vector.md#0x1_Vector_length">Vector::length</a>(&public_keys);
-    <b>assert</b>(threshold != 0, <a href="Errors.md#0x1_Errors_invalid_argument">Errors::invalid_argument</a>(EZERO_THRESHOLD));
+    <b>assert</b>(threshold != 0, <a href="Errors.md#0x1_Errors_invalid_argument">Errors::invalid_argument</a>(<a href="Authenticator.md#0x1_Authenticator_EZERO_THRESHOLD">EZERO_THRESHOLD</a>));
     <b>assert</b>(
         (threshold <b>as</b> u64) &lt;= len,
-        <a href="Errors.md#0x1_Errors_invalid_argument">Errors::invalid_argument</a>(ENOT_ENOUGH_KEYS_FOR_THRESHOLD)
+        <a href="Errors.md#0x1_Errors_invalid_argument">Errors::invalid_argument</a>(<a href="Authenticator.md#0x1_Authenticator_ENOT_ENOUGH_KEYS_FOR_THRESHOLD">ENOT_ENOUGH_KEYS_FOR_THRESHOLD</a>)
     );
     // the multied25519 signature scheme allows at most 32 keys
     <b>assert</b>(
-        len &lt;= MAX_MULTI_ED25519_KEYS,
-        <a href="Errors.md#0x1_Errors_invalid_argument">Errors::invalid_argument</a>(ENUM_KEYS_ABOVE_MAX_THRESHOLD)
+        len &lt;= <a href="Authenticator.md#0x1_Authenticator_MAX_MULTI_ED25519_KEYS">MAX_MULTI_ED25519_KEYS</a>,
+        <a href="Errors.md#0x1_Errors_invalid_argument">Errors::invalid_argument</a>(<a href="Authenticator.md#0x1_Authenticator_ENUM_KEYS_ABOVE_MAX_THRESHOLD">ENUM_KEYS_ABOVE_MAX_THRESHOLD</a>)
     );
 
-    <a href="#0x1_Authenticator_MultiEd25519PublicKey">MultiEd25519PublicKey</a> { public_keys, threshold }
+    <a href="Authenticator.md#0x1_Authenticator_MultiEd25519PublicKey">MultiEd25519PublicKey</a> { public_keys, threshold }
 }
 </code></pre>
 
@@ -184,11 +178,10 @@ Aborts if threshold is zero or bigger than the length of
 
 ## Function `ed25519_authentication_key`
 
-Compute an authentication key for the ed25519 public key
-<code>public_key</code>
+Compute an authentication key for the ed25519 public key <code>public_key</code>
 
 
-<pre><code><b>public</b> <b>fun</b> <a href="#0x1_Authenticator_ed25519_authentication_key">ed25519_authentication_key</a>(public_key: vector&lt;u8&gt;): vector&lt;u8&gt;
+<pre><code><b>public</b> <b>fun</b> <a href="Authenticator.md#0x1_Authenticator_ed25519_authentication_key">ed25519_authentication_key</a>(public_key: vector&lt;u8&gt;): vector&lt;u8&gt;
 </code></pre>
 
 
@@ -197,10 +190,24 @@ Compute an authentication key for the ed25519 public key
 <summary>Implementation</summary>
 
 
-<pre><code><b>public</b> <b>fun</b> <a href="#0x1_Authenticator_ed25519_authentication_key">ed25519_authentication_key</a>(public_key: vector&lt;u8&gt;): vector&lt;u8&gt; {
-    <a href="Vector.md#0x1_Vector_push_back">Vector::push_back</a>(&<b>mut</b> public_key, SINGLE_ED25519_SCHEME_ID);
+<pre><code><b>public</b> <b>fun</b> <a href="Authenticator.md#0x1_Authenticator_ed25519_authentication_key">ed25519_authentication_key</a>(public_key: vector&lt;u8&gt;): vector&lt;u8&gt; {
+    <a href="Vector.md#0x1_Vector_push_back">Vector::push_back</a>(&<b>mut</b> public_key, <a href="Authenticator.md#0x1_Authenticator_SINGLE_ED25519_SCHEME_ID">SINGLE_ED25519_SCHEME_ID</a>);
     <a href="Hash.md#0x1_Hash_sha3_256">Hash::sha3_256</a>(public_key)
 }
+</code></pre>
+
+
+
+</details>
+
+<details>
+<summary>Specification</summary>
+
+
+
+<pre><code>pragma opaque = <b>true</b>;
+<b>aborts_if</b> <b>false</b>;
+<b>ensures</b> [abstract] result == <a href="Authenticator.md#0x1_Authenticator_spec_ed25519_authentication_key">spec_ed25519_authentication_key</a>(public_key);
 </code></pre>
 
 
@@ -211,11 +218,10 @@ Compute an authentication key for the ed25519 public key
 
 ## Function `multi_ed25519_authentication_key`
 
-Compute a multied25519 account authentication key for the policy
-<code>k</code>
+Compute a multied25519 account authentication key for the policy <code>k</code>
 
 
-<pre><code><b>public</b> <b>fun</b> <a href="#0x1_Authenticator_multi_ed25519_authentication_key">multi_ed25519_authentication_key</a>(k: &<a href="#0x1_Authenticator_MultiEd25519PublicKey">Authenticator::MultiEd25519PublicKey</a>): vector&lt;u8&gt;
+<pre><code><b>public</b> <b>fun</b> <a href="Authenticator.md#0x1_Authenticator_multi_ed25519_authentication_key">multi_ed25519_authentication_key</a>(k: &<a href="Authenticator.md#0x1_Authenticator_MultiEd25519PublicKey">Authenticator::MultiEd25519PublicKey</a>): vector&lt;u8&gt;
 </code></pre>
 
 
@@ -224,7 +230,7 @@ Compute a multied25519 account authentication key for the policy
 <summary>Implementation</summary>
 
 
-<pre><code><b>public</b> <b>fun</b> <a href="#0x1_Authenticator_multi_ed25519_authentication_key">multi_ed25519_authentication_key</a>(k: &<a href="#0x1_Authenticator_MultiEd25519PublicKey">MultiEd25519PublicKey</a>): vector&lt;u8&gt; {
+<pre><code><b>public</b> <b>fun</b> <a href="Authenticator.md#0x1_Authenticator_multi_ed25519_authentication_key">multi_ed25519_authentication_key</a>(k: &<a href="Authenticator.md#0x1_Authenticator_MultiEd25519PublicKey">MultiEd25519PublicKey</a>): vector&lt;u8&gt; {
     <b>let</b> public_keys = &k.public_keys;
     <b>let</b> len = <a href="Vector.md#0x1_Vector_length">Vector::length</a>(public_keys);
     <b>let</b> authentication_key_preimage = <a href="Vector.md#0x1_Vector_empty">Vector::empty</a>();
@@ -238,7 +244,7 @@ Compute a multied25519 account authentication key for the policy
         i = i + 1;
     };
     <a href="Vector.md#0x1_Vector_append">Vector::append</a>(&<b>mut</b> authentication_key_preimage, <a href="LCS.md#0x1_LCS_to_bytes">LCS::to_bytes</a>(&k.threshold));
-    <a href="Vector.md#0x1_Vector_push_back">Vector::push_back</a>(&<b>mut</b> authentication_key_preimage, MULTI_ED25519_SCHEME_ID);
+    <a href="Vector.md#0x1_Vector_push_back">Vector::push_back</a>(&<b>mut</b> authentication_key_preimage, <a href="Authenticator.md#0x1_Authenticator_MULTI_ED25519_SCHEME_ID">MULTI_ED25519_SCHEME_ID</a>);
     <a href="Hash.md#0x1_Hash_sha3_256">Hash::sha3_256</a>(authentication_key_preimage)
 }
 </code></pre>
@@ -251,11 +257,10 @@ Compute a multied25519 account authentication key for the policy
 
 ## Function `public_keys`
 
-Return the public keys involved in the multisig policy
-<code>k</code>
+Return the public keys involved in the multisig policy <code>k</code>
 
 
-<pre><code><b>public</b> <b>fun</b> <a href="#0x1_Authenticator_public_keys">public_keys</a>(k: &<a href="#0x1_Authenticator_MultiEd25519PublicKey">Authenticator::MultiEd25519PublicKey</a>): &vector&lt;vector&lt;u8&gt;&gt;
+<pre><code><b>public</b> <b>fun</b> <a href="Authenticator.md#0x1_Authenticator_public_keys">public_keys</a>(k: &<a href="Authenticator.md#0x1_Authenticator_MultiEd25519PublicKey">Authenticator::MultiEd25519PublicKey</a>): &vector&lt;vector&lt;u8&gt;&gt;
 </code></pre>
 
 
@@ -264,7 +269,7 @@ Return the public keys involved in the multisig policy
 <summary>Implementation</summary>
 
 
-<pre><code><b>public</b> <b>fun</b> <a href="#0x1_Authenticator_public_keys">public_keys</a>(k: &<a href="#0x1_Authenticator_MultiEd25519PublicKey">MultiEd25519PublicKey</a>): &vector&lt;vector&lt;u8&gt;&gt; {
+<pre><code><b>public</b> <b>fun</b> <a href="Authenticator.md#0x1_Authenticator_public_keys">public_keys</a>(k: &<a href="Authenticator.md#0x1_Authenticator_MultiEd25519PublicKey">MultiEd25519PublicKey</a>): &vector&lt;vector&lt;u8&gt;&gt; {
     &k.public_keys
 }
 </code></pre>
@@ -277,11 +282,10 @@ Return the public keys involved in the multisig policy
 
 ## Function `threshold`
 
-Return the threshold for the multisig policy
-<code>k</code>
+Return the threshold for the multisig policy <code>k</code>
 
 
-<pre><code><b>public</b> <b>fun</b> <a href="#0x1_Authenticator_threshold">threshold</a>(k: &<a href="#0x1_Authenticator_MultiEd25519PublicKey">Authenticator::MultiEd25519PublicKey</a>): u8
+<pre><code><b>public</b> <b>fun</b> <a href="Authenticator.md#0x1_Authenticator_threshold">threshold</a>(k: &<a href="Authenticator.md#0x1_Authenticator_MultiEd25519PublicKey">Authenticator::MultiEd25519PublicKey</a>): u8
 </code></pre>
 
 
@@ -290,7 +294,7 @@ Return the threshold for the multisig policy
 <summary>Implementation</summary>
 
 
-<pre><code><b>public</b> <b>fun</b> <a href="#0x1_Authenticator_threshold">threshold</a>(k: &<a href="#0x1_Authenticator_MultiEd25519PublicKey">MultiEd25519PublicKey</a>): u8 {
+<pre><code><b>public</b> <b>fun</b> <a href="Authenticator.md#0x1_Authenticator_threshold">threshold</a>(k: &<a href="Authenticator.md#0x1_Authenticator_MultiEd25519PublicKey">MultiEd25519PublicKey</a>): u8 {
     *&k.threshold
 }
 </code></pre>
@@ -298,3 +302,17 @@ Return the threshold for the multisig policy
 
 
 </details>
+
+<a name="@Module_Specification_0"></a>
+
+## Module Specification
+
+We use an uninterpreted function to represent the result of key construction. The actual value
+does not matter for the verification of callers.
+
+
+<a name="0x1_Authenticator_spec_ed25519_authentication_key"></a>
+
+
+<pre><code><b>define</b> <a href="Authenticator.md#0x1_Authenticator_spec_ed25519_authentication_key">spec_ed25519_authentication_key</a>(public_key: vector&lt;u8&gt;): vector&lt;u8&gt;;
+</code></pre>

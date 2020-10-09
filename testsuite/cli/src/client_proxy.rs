@@ -237,7 +237,7 @@ impl ClientProxy {
         };
 
         let (auth_key, child_number) = self.wallet.new_address()?;
-        let private_key = self.wallet.get_private_key(child_number)?;
+        let private_key = self.wallet.get_private_key_by_child_num(child_number)?;
 
         let account_data = Self::get_account_data_from_address(
             &mut self.client,
@@ -266,9 +266,10 @@ impl ClientProxy {
         } else {
             for (ref index, ref account) in self.accounts.iter().enumerate() {
                 println!(
-                    "User account index: {}, address: {}, sequence number: {}, status: {:?}",
+                    "User account index: {}, address: {}, private_key: {:?}, sequence number: {}, status: {:?}",
                     index,
                     hex::encode(&account.address),
+                    hex::encode(&self.wallet.get_private_key(&account.address).unwrap().to_bytes()),
                     account.sequence_number,
                     account.status,
                 );

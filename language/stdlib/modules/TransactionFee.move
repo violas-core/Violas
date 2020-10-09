@@ -157,9 +157,6 @@ module TransactionFee {
     }
 
     spec fun burn_fees {
-        /// > TODO: this times out and likely is also not fully correct yet.
-        pragma verify = false;
-
         /// Must abort if the account does not have the TreasuryCompliance role [B12].
         include Roles::AbortsIfNotTreasuryCompliance{account: tc_account};
 
@@ -198,10 +195,6 @@ module TransactionFee {
 
         /// tc_account retrieves BurnCapability [B12]. BurnCapability is not transferrable [D12].
         ensures exists<Libra::BurnCapability<CoinType>>(Signer::spec_address_of(tc_account));
-    }
-
-    spec module {
-        pragma verify;
     }
 }
 }

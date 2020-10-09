@@ -31,7 +31,7 @@ pub struct StorageClient {
 impl StorageClient {
     pub fn new(server_address: &SocketAddr, timeout: u64) -> Self {
         Self {
-            network_client: Mutex::new(NetworkClient::new(*server_address, timeout)),
+            network_client: Mutex::new(NetworkClient::new("storage", *server_address, timeout)),
         }
     }
 
@@ -45,7 +45,11 @@ impl StorageClient {
         let input_message = lcs::to_bytes(&input)?;
         let result = loop {
             match self.process_one_message(&input_message) {
-                Err(err) => warn!("Failed to communicate with storage service: {}", err),
+                Err(err) => warn!(
+                    error = ?err,
+                    request = ?input,
+                    "Failed to communicate with storage service.",
+                ),
                 Ok(value) => break value,
             }
         };

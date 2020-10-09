@@ -98,10 +98,7 @@ pub struct OwnerKey {
 
 impl OwnerKey {
     pub fn execute(self) -> Result<Ed25519PublicKey, Error> {
-        self.key.submit_key(
-            libra_global_constants::OWNER_KEY,
-            Some(libra_global_constants::OWNER_ACCOUNT),
-        )
+        self.key.submit_key(libra_global_constants::OWNER_KEY, None)
     }
 }
 
@@ -147,7 +144,7 @@ mod tests {
 
         op(&helper, &local_ns, &remote_ns).unwrap_err();
 
-        helper.initialize(local_ns.clone());
+        helper.initialize_by_idx(local_ns.clone(), 0);
         let local = helper.storage(local_ns.clone());
         let local_key = local.get_public_key(key_name).unwrap().public_key;
 

@@ -95,6 +95,7 @@ impl Experiment for ValidatorVersioning {
                 &EmitJobRequest::for_instances(
                     context.cluster.validator_instances().to_vec(),
                     context.global_emit_job_request,
+                    0,
                 ),
                 150,
             )
@@ -163,7 +164,10 @@ impl Experiment for ValidatorVersioning {
             .await?;
 
         info!("5. Send a transaction to activate such feature");
-        let mut faucet_account = context.tx_emitter.load_faucet_account(&full_node).await?;
+        let mut faucet_account = context
+            .tx_emitter
+            .load_faucet_account(&full_node.json_rpc_client())
+            .await?;
         let allowed_nonce = 0;
         let update_txn = create_user_txn(
             &faucet_account.key_pair,

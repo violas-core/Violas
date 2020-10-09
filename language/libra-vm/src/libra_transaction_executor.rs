@@ -330,7 +330,7 @@ impl LibraVM {
                 let args = convert_txn_args(script.args());
                 let senders = match txn_sender {
                     None => vec![*execute_as],
-                    Some(sender) => vec![*execute_as, sender],
+                    Some(sender) => vec![sender, *execute_as],
                 };
                 let execution_result = tmp_session
                     .execute_script(
@@ -409,15 +409,16 @@ impl LibraVM {
                 Value::vector_address(previous_vote),
                 Value::address(proposer),
             ];
-            session.execute_function(
-                &LIBRA_BLOCK_MODULE,
-                &BLOCK_PROLOGUE,
-                vec![],
-                args,
-                txn_data.sender,
-                &mut cost_strategy,
-                expect_only_successful_execution(BLOCK_PROLOGUE.as_str()),
-            )?
+            session
+                .execute_function(
+                    &LIBRA_BLOCK_MODULE,
+                    &BLOCK_PROLOGUE,
+                    vec![],
+                    args,
+                    txn_data.sender,
+                    &mut cost_strategy,
+                )
+                .or_else(|e| expect_only_successful_execution(e, BLOCK_PROLOGUE.as_str()))?
         } else {
             return Err(VMStatus::Error(StatusCode::MALFORMED));
         };
@@ -448,22 +449,6 @@ impl LibraVM {
             return Ok((e, discard_error_output(StatusCode::REJECTED_WRITE_SET)));
         };
 
-        // Bump the sequence number of sender.
-        let gas_schedule = zero_cost_schedule();
-        let mut cost_strategy = CostStrategy::system(&gas_schedule, GasUnits::new(0));
-
-        session.execute_function(
-            &account_config::ACCOUNT_MODULE,
-            &BUMP_SEQUENCE_NUMBER_NAME,
-            vec![],
-            vec![Value::transaction_argument_signer_reference(
-                txn_data.sender,
-            )],
-            txn_data.sender,
-            &mut cost_strategy,
-            expect_only_successful_execution(BUMP_SEQUENCE_NUMBER_NAME.as_str()),
-        )?;
-
         let change_set = match txn.payload() {
             TransactionPayload::WriteSet(writeset_payload) => {
                 match self.execute_writeset(remote_cache, writeset_payload, Some(txn_data.sender()))
@@ -481,8 +466,12 @@ impl LibraVM {
         };
 
         // Emit the reconfiguration event
-        self.0
-            .run_writeset_epilogue(&mut session, &change_set, &txn_data)?;
+        self.0.run_writeset_epilogue(
+            &mut session,
+            &change_set,
+            &txn_data,
+            txn.payload().should_trigger_reconfiguration_by_default(),
+        )?;
 
         if let Err(e) = self.read_writeset(remote_cache, &change_set.write_set()) {
             // Any error at this point would be an invalid writeset

@@ -18,7 +18,9 @@ A transaction on the blockchain.
 | vm_status                 | [VMStatus](#type-vmstatus)               | The returned status of the transaction after being processed by the VM                     |
 | gas_used                  | unsigned int64 | Amount of gas used by this transaction, to know how much you paid for the transaction, you need multiply it with your RawTransaction#gas_unit_price |
 
-Note: For the gas_used, internally within the VM we scale the gas units down by 1000 in order to allow granularity of costing for instruction, but without having to use floating point numbers, but we do round-up the gas used to the nearest "1" when we convert back out.
+Note:
+* For the gas_used, internally within the VM we scale the gas units down by 1000 in order to allow granularity of costing for instruction, but without having to use floating point numbers, but we do round-up the gas used to the nearest "1" when we convert back out.
+* Formula to create hash for a signed transaction before it is executed: hex-encode(sha3-256([]byte("LIBRA::Transaction")) + []byte(0) + signed transaction bytes) ([implementation example](https://github.com/libra/libra-client-sdk-go/blob/master/libratypes/hash.go#L27))
 
 
 ### Example
@@ -78,6 +80,7 @@ User submitted transaction.
 | chain_id                  | unsigned int8          | Chain ID of the Libra network this transaction is intended for        |
 | max_gas_amount            | unsigned int64         | Maximum amount of gas that can be spent for this transaction          |
 | gas_unit_price            | unsigned int64         | Maximum gas price to be paid per unit of gas                          |
+| gas_currency              | string                 | Gas price currency code                                               |
 | expiration_timestamp_secs | unsigned int64         | The expiration time (Unix Epoch in seconds) for this transaction      |
 | script_hash               | string                 | Hex-encoded hash of the script used in this transaction               |
 | script_bytes              | string                 | Hex-encoded string of the bytes of the script                         |
@@ -174,15 +177,16 @@ Transaction execution runs out of gas, no effect.
 Object representing the abort condition raised by Move code via `abort` or `assert` during execution of a transaction by the VM on the blockchain.
 
 ```
-{ type: "move_abort", location: string, abort_code: unsigned int64 }
+{ type: "move_abort", location: string, abort_code: unsigned int64, explanation: object MoveAbortExplanation or "null" }
 ```
 
 
-| Name       | Type           | Description                                                                                                                                  |
-|------------|----------------|----------------------------------------------------------------------------------------------------------------------------------------------|
-| type       | string         | constant of string "move_abort"                              |
-| location   | string         | String of the form "address::moduleName" where the abort condition was triggered. "Script" if the abort was raised in the transaction script |
-| abort_code | unsigned int64 | Abort code raised by the Move module                                                                                                         |
+| Name          | Type                                                        | Description                                                                                                                                    |
+| ------------- | ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| type          | string                                                      | constant of string "move_abort"                                                                                                                |
+| location      | string                                                      | String of the form "address::moduleName" where the abort condition was triggered. "Script" if the abort was raised in the transaction script   |
+| abort_code    | unsigned int64                                              | Abort code raised by the Move module                                                                                                           |
+| explanation   | [MoveAbortExplanation](#type-moveabortexplanation)>         | Human readable explanation for abort code. "null" if no explanation found.                                                                     |
 
 #### execution_failure
 
@@ -219,5 +223,33 @@ Note that this explicitly excludes any invariant violation coming from inside of
 | Name                      | Type           | Description                                                           |
 |---------------------------|----------------|-----------------------------------------------------------------------|
 | type                      | string         | constant of string "miscellaneous_error"                              |
+
+### Type MoveAbortExplanation
+
+a `MoveAbortExplanation` is an object containing globally-defined categories for the abort error e.g., `INVALID_ARGUMENT` along with the Move-module-specific
+error reason for the error e.g., `EPAYEE_CANT_ACCEPT_CURRENCY_TYPE`. Both the category and reason are augmented with human-readable descriptions for each.
+
+### Example
+
+```
+   {
+      "category":"INVALID_ARGUMENT",
+      "category_description":" An argument provided to an operation is invalid. Example: a signing key has the wrong format.",
+      "reason":"EPAYEE_CANT_ACCEPT_CURRENCY_TYPE",
+      "reason_description":" Attempted to send funds in a currency that the receiving account does not hold.\n e.g., `Libra<LBR> to an account that exists, but does not have a `Balance<LBR>` resource"
+   }
+```
+
+```
+{ category: string, category_description: string, reason: string, reason_description: string }
+```
+
+| Name                      | Type           | Description                                                           |
+|---------------------------|----------------|-----------------------------------------------------------------------|
+| category                  | string         | Globally-defined error category                                       |
+| category_description      | string         | Description of the error category                                     |
+| reason                    | string         | Module-specific error reason                                          |
+| reason_description        | string         | Description of the error reason                                       |
+
 
 [1]: https://libra.github.io/libra/libra_types/transaction/metadata/enum.Metadata.html "Transaction Metadata"

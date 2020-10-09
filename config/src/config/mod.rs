@@ -289,7 +289,7 @@ impl NodeConfig {
     }
 
     fn random_internal(&mut self, idx: u32, rng: &mut StdRng) {
-        let mut test = TestConfig::new_with_temp_dir();
+        let mut test = TestConfig::new_with_temp_dir(None);
 
         if self.base.role == RoleType::Validator {
             test.random_account_key(rng);
@@ -325,21 +325,18 @@ impl NodeConfig {
         self.test = Some(test);
     }
 
-    #[cfg(any(test, feature = "fuzzing"))]
     pub fn default_for_public_full_node() -> Self {
         let contents = std::include_str!("test_data/public_full_node.yaml");
         let path = "default_for_public_full_node";
         Self::parse(&contents).unwrap_or_else(|e| panic!("Error in {}: {}", path, e))
     }
 
-    #[cfg(any(test, feature = "fuzzing"))]
     pub fn default_for_validator() -> Self {
         let contents = std::include_str!("test_data/validator.yaml");
         let path = "default_for_validator";
         Self::parse(&contents).unwrap_or_else(|e| panic!("Error in {}: {}", path, e))
     }
 
-    #[cfg(any(test, feature = "fuzzing"))]
     pub fn default_for_validator_full_node() -> Self {
         let contents = std::include_str!("test_data/validator_full_node.yaml");
         let path = "default_for_validator_full_node";
@@ -436,6 +433,11 @@ mod test {
         NodeConfig::default_for_public_full_node();
         NodeConfig::default_for_validator();
         NodeConfig::default_for_validator_full_node();
+
+        let docker_public_full_node =
+            std::include_str!("../../../docker/compose/public_full_node/public_full_node.yaml");
+        // Only verify it is in the correct format as the values cannot be loaded for this config
+        NodeConfig::parse(docker_public_full_node).unwrap();
 
         let contents = std::include_str!("test_data/safety_rules.yaml");
         SafetyRulesConfig::parse(&contents)

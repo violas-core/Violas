@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use errmapgen::ErrorMapping;
-use move_cli::OnDiskStateView;
+
+use move_cli::*;
 use move_core_types::{
     account_address::AccountAddress,
     gas_schedule::{GasAlgebra, GasUnits},
@@ -11,12 +12,13 @@ use move_core_types::{
     transaction_argument::TransactionArgument,
     vm_status::{AbortLocation, StatusCode, VMStatus},
 };
-use move_lang::{self, compiled_unit::CompiledUnit, shared::Address};
+use move_lang::{self, compiled_unit::CompiledUnit};
 use move_vm_runtime::{data_cache::TransactionEffects, move_vm::MoveVM};
 use move_vm_types::{gas_schedule, values::Value};
 use vm::{
+    access::ScriptAccess,
     errors::VMError,
-    file_format::{CompiledModule, CompiledScript},
+    file_format::{CompiledModule, CompiledScript, SignatureToken},
 };
 
 use anyhow::{anyhow, bail, Result};
@@ -26,12 +28,12 @@ use structopt::StructOpt;
 #[derive(StructOpt)]
 #[structopt(name = "Move", about = "CLI frontend for Move compiler and VM")]
 struct Move {
-    /// Directory storing Move resources and module bytecodes produced by script execution.
-    #[structopt(name = "move-data", long = "move-data", default_value = "move_data")]
+    /// Directory storing Move resources, events, and module bytecodes produced by script execution.
+    #[structopt(name = "move-data", long = "move-data", default_value = MOVE_DATA)]
     move_data: String,
     /// Directory storing Move source files that will be compiled and loaded into the VM before
     /// script execution.
-    #[structopt(name = "move-src", long = "move-src", default_value = "move_src")]
+    #[structopt(name = "move-src", long = "move-src", default_value = MOVE_SRC)]
     move_src: String,
     // Command to be run.
     #[structopt(subcommand)]
@@ -50,9 +52,9 @@ enum Command {
         #[structopt(long = "commit", short = "c")]
         commit: bool,
     },
-    /// Compile/run a Move script that reads/writes resources stored on disk in `move_data`. This
-    /// command compiles each each module stored in `move_src` and loads it into the VM before
-    /// running the script.
+    /// Compile/run a Move script that reads/writes resources stored on disk in `move_data`.
+    /// This command compiles each each module stored in `move_src` and loads it into the VM
+    /// before running the script.
     #[structopt(name = "run")]
     Run {
         /// Path to script to compile and run.
@@ -70,27 +72,36 @@ enum Command {
         /// `main<T>()`). Must match the type arguments kinds expected by `script_file`.
         #[structopt(long = "type-args", parse(try_from_str = parser::parse_type_tag))]
         type_args: Vec<TypeTag>,
+        /// Maximum number of gas units to be consumed by execution.
+        /// When the budget is exhaused, execution will abort.
+        /// By default, no `gas-budget` is specified and gas metering is disabled.
+        #[structopt(long = "gas-budget", short = "g")]
+        gas_budget: Option<u64>,
         /// If true, commit the effects of executing `script_file` (i.e., published, updated, and
         /// deleted resources) to disk.
         #[structopt(long = "commit", short = "c")]
         commit: bool,
     },
-    /// View Move resources and modules stored on disk
-    #[structopt(name = "view")]
-    View {
-        /// Path to a resource or module stored on disk.
+
+    /// Run expected value tests using the given batch file
+    #[structopt(name = "test")]
+    Test {
+        // TODO: generalize this to support running all the tests in a given directory
+        /// File containing batch of commands to run
         #[structopt(name = "file")]
         file: String,
     },
-    /// Delete all modules and resources stored on disk under `move_data`. Does *not* delete
-    /// anything in `move_src`.
+    /// View Move resources, events files, and modules stored on disk
+    #[structopt(name = "view")]
+    View {
+        /// Path to a resource, events file, or module stored on disk.
+        #[structopt(name = "file")]
+        file: String,
+    },
+    /// Delete all resources, events, and modules stored on disk under `move_data`.
+    /// Does *not* delete anything in `move_src`.
     Clean {},
 }
-
-/// Store modules under move_src without an explicit `address {}` block under 0x2.
-const MOVE_SRC: Address = Address::new([
-    0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 2u8,
-]);
 
 /// Create a directory at ./`dir_name` if one does not already exist
 fn maybe_create_dir(dir_name: &str) -> Result<&Path> {
@@ -101,34 +112,31 @@ fn maybe_create_dir(dir_name: &str) -> Result<&Path> {
     Ok(dir)
 }
 
-/// Compile the user modules in `move_src_directory` and the script in `script_file`
+/// Compile the user modules in `move_src` and the script in `script_file`
 fn compile(
     args: &Move,
     script_file: &Option<String>,
 ) -> Result<(OnDiskStateView, Option<CompiledScript>)> {
-    let move_src = maybe_create_dir(&args.move_src)?;
     let move_data = maybe_create_dir(&args.move_data)?;
 
-    // allow user modules in move_src directory to compile against stdlib and move_data modules, but
-    // not Libra framework modules
-    // TODO: prevent cyclic dep?
-    let mut user_lib_files: Vec<String> = fs::read_dir(move_src)?
-        .map(|f| f.map_or("".to_string(), |f| f.path().to_string_lossy().into_owned()))
-        .filter(|p| p.ends_with(".move"))
-        .collect();
-
-    if !user_lib_files.is_empty() {
-        println!("Compiling {:?} user module(s)", user_lib_files.len());
-    }
+    let mut user_move_src_files = if Path::new(&args.move_src).exists() {
+        move_lang::find_move_filenames(&[args.move_src.clone()], true)?
+    } else {
+        vec![]
+    };
     if let Some(f) = script_file.as_ref() {
-        user_lib_files.push(f.to_string())
+        user_move_src_files.push(f.to_string())
     }
 
-    // allow script to compile against both modules in `move_src` and Libra framework modules
-    // modules
+    let has_user_modules = !user_move_src_files.is_empty();
+    if has_user_modules {
+        println!("Compiling {:?} source file(s)", user_move_src_files.len());
+    }
+
     let deps = stdlib::stdlib_files();
-    let code_address = Some(MOVE_SRC);
-    let (_, compilation_units) = move_lang::move_compile(&user_lib_files, &deps, code_address)?;
+    let code_address = Some(MOVE_SRC_ADDRESS);
+    let (_, compilation_units) =
+        move_lang::move_compile(&user_move_src_files, &deps, code_address, None)?;
 
     let mut modules: Vec<CompiledModule> = stdlib::stdlib_bytecode_files()
         .iter()
@@ -141,11 +149,16 @@ fn compile(
     let mut script_opt = None;
     for c in compilation_units {
         match c {
-            CompiledUnit::Script { script, .. } => {
-                if script_opt.is_some() {
-                    bail!("Error: found script in move_lib")
+            CompiledUnit::Script { script, loc, .. } => {
+                match script_file {
+                    Some(f) => {
+                        if Path::new(f).canonicalize()? == Path::new(loc.file()).canonicalize()? {
+                            script_opt = Some(script)
+                        }
+                    }
+                    None => (),
                 }
-                script_opt = Some(script)
+                // TODO: save script bytecodes on disk? where should we put them?
             }
             CompiledUnit::Module { module, .. } => modules.push(module),
         }
@@ -162,29 +175,38 @@ fn run(
     signers: &[String],
     txn_args: &[TransactionArgument],
     vm_type_args: Vec<TypeTag>,
+    gas_budget: Option<u64>,
     commit: bool,
 ) -> Result<()> {
     let (state, script_opt) = compile(args, &Some(script_file.to_string()))?;
-    let mut script_bytes = vec![];
-    if let Some(script) = script_opt {
-        script.serialize(&mut script_bytes)?
-    } else {
-        bail!(
+    let script = match script_opt {
+        Some(s) => s,
+        None => bail!(
             "Script file {:?} contains module instead of script",
             script_file
-        )
-    }
+        ),
+    };
+    let mut script_bytes = vec![];
+    script.serialize(&mut script_bytes)?;
 
     let vm = MoveVM::new();
-    // TODO: use nonzero schedule and pick reasonable max default gas price
-    let cost_schedule = gas_schedule::zero_cost_schedule();
-    let mut cost_strategy = gas_schedule::CostStrategy::system(&cost_schedule, GasUnits::new(0));
-    let mut signers = signers
+    let gas_schedule = &vm_genesis::genesis_gas_schedule::INITIAL_GAS_SCHEDULE;
+    let mut cost_strategy = if let Some(gas_budget) = gas_budget {
+        let max_gas_budget = u64::MAX / gas_schedule.gas_constants.gas_unit_scaling_factor;
+        if gas_budget >= max_gas_budget {
+            bail!("Gas budget set too high; maximum is {}", max_gas_budget)
+        }
+        gas_schedule::CostStrategy::transaction(gas_schedule, GasUnits::new(gas_budget))
+    } else {
+        // no budget specified. use CostStrategy::system, which disables gas metering
+        gas_schedule::CostStrategy::system(gas_schedule, GasUnits::new(0))
+    };
+
+    let signer_addresses = signers
         .iter()
         .map(|s| AccountAddress::from_hex_literal(&s))
         .collect::<Result<Vec<AccountAddress>>>()?;
-    signers.reverse(); // TODO: figure out why VM reads this right-to-left
-                       // TODO: parse Value's directly instead of going through the indirection of TransactionArgument?
+    // TODO: parse Value's directly instead of going through the indirection of TransactionArgument?
     let vm_args: Vec<Value> = txn_args
         .iter()
         .map(|arg| match arg {
@@ -201,21 +223,26 @@ fn run(
 
     let res = session.execute_script(
         script_bytes,
-        vm_type_args,
+        vm_type_args.clone(),
         vm_args,
-        signers,
+        signer_addresses.clone(),
         &mut cost_strategy,
     );
 
     if let Err(err) = res {
-        explain_error(err, &state)?
+        explain_error(
+            err,
+            &state,
+            &script,
+            &vm_type_args,
+            &signer_addresses,
+            txn_args,
+        )
     } else {
         let effects = session.finish().map_err(|e| e.into_vm_status())?;
         explain_effects(&effects, &state)?;
-        maybe_commit_effects(commit, Some(effects), &state)?;
+        maybe_commit_effects(commit, Some(effects), &state)
     }
-
-    Ok(())
 }
 
 fn explain_effects(effects: &TransactionEffects, state: &OnDiskStateView) -> Result<()> {
@@ -224,16 +251,14 @@ fn explain_effects(effects: &TransactionEffects, state: &OnDiskStateView) -> Res
     if !effects.events.is_empty() {
         println!("Emitted {:?} events:", effects.events.len());
         // TODO: better event printing
-        for (event_handle, event_sequence_number, _event_type, _event_layout, event_data) in
+        for (event_key, event_sequence_number, _event_type, _event_layout, event_data) in
             &effects.events
         {
             println!(
                 "Emitted {:?} as the {}th event to stream {:?}",
-                event_data, event_sequence_number, event_handle
+                event_data, event_sequence_number, event_key
             )
         }
-        // TODO: support saving events to disk
-        println!("Warning: saving events to disk is currently not supported. Discarding events.");
     }
     if !effects.resources.is_empty() {
         println!(
@@ -288,19 +313,80 @@ fn maybe_commit_effects(
                     }
                 }
             }
+
+            for (event_key, event_sequence_number, event_type, event_layout, event_data) in
+                effects.events
+            {
+                state.save_event(
+                    &event_key,
+                    event_sequence_number,
+                    event_type,
+                    &event_layout,
+                    event_data,
+                )?
+            }
         }
+
         // TODO: print modules to be saved?
         state.save_modules()?;
         println!("Committed changes.")
-    } else if !effects_opt.map_or(false, |effects| effects.resources.is_empty()) {
+    } else if !effects_opt.map_or(true, |effects| effects.resources.is_empty()) {
         println!("Discarding changes; re-run with --commit if you would like to keep them.")
     }
 
     Ok(())
 }
 
+fn explain_type_error(
+    script: &CompiledScript,
+    signers: &[AccountAddress],
+    txn_args: &[TransactionArgument],
+) {
+    use SignatureToken::*;
+    let script_params = script.signature_at(script.as_inner().parameters);
+    let expected_num_signers = script_params
+        .0
+        .iter()
+        .filter(|t| match t {
+            Reference(r) => r.is_signer(),
+            _ => false,
+        })
+        .count();
+    if expected_num_signers != signers.len() {
+        println!(
+            "Execution failed with incorrect number of signers: script expected {:?}, but found {:?}",
+            expected_num_signers,
+            signers.len()
+        );
+        return;
+    }
+
+    // TODO: printing type(s) of missing arguments could be useful
+    let expected_num_args = script_params.len() - signers.len();
+    if expected_num_args != txn_args.len() {
+        println!(
+            "Execution failed with incorrect number of arguments: script expected {:?}, but found {:?}",
+	    expected_num_args,
+            txn_args.len()
+        );
+        return;
+    }
+
+    // TODO: print more helpful error message pinpointing the (argument, type)
+    // pair that didn't match
+    println!("Execution failed with type error when binding type arguments to type parameters")
+}
+
 /// Explain an execution error
-fn explain_error(error: VMError, state: &OnDiskStateView) -> Result<()> {
+fn explain_error(
+    error: VMError,
+    state: &OnDiskStateView,
+    script: &CompiledScript,
+    vm_type_args: &[TypeTag],
+    signers: &[AccountAddress],
+    txn_args: &[TransactionArgument],
+) -> Result<()> {
+    use StatusCode::*;
     match error.into_vm_status() {
         VMStatus::MoveAbort(AbortLocation::Module(id), abort_code) => {
             // try to use move-explain to explain the abort
@@ -339,13 +425,13 @@ fn explain_error(error: VMError, state: &OnDiskStateView) -> Result<()> {
             code_offset,
         } => {
             let status_explanation = match status_code {
-                    StatusCode::RESOURCE_ALREADY_EXISTS => "resource already exists (i.e., move_to<T>(account) when there is already a value of type T under account)".to_string(),
-                    StatusCode::MISSING_DATA => "resource does not exist (i.e., move_from<T>(a), borrow_global<T>(a), or borrow_global_mut<T>(a) when there is no value of type T at address a)".to_string(),
-                    StatusCode::ARITHMETIC_ERROR => "arithmetic error (i.e., integer overflow, underflow, or divide-by-zero)".to_string(),
-                    StatusCode::EXECUTION_STACK_OVERFLOW => "execution stack overflow".to_string(),
-                    StatusCode::CALL_STACK_OVERFLOW => "call stack overflow".to_string(),
-                    StatusCode::OUT_OF_GAS => "out of gas".to_string(),
-                    _ => format!("{} error", status_code.status_type()),
+                    RESOURCE_ALREADY_EXISTS => "a RESOURCE_ALREADY_EXISTS error (i.e., `move_to<T>(account)` when there is already a resource of type `T` under `account`)".to_string(),
+                    MISSING_DATA => "a RESOURCE_DOES_NOT_EXIST error (i.e., `move_from<T>(a)`, `borrow_global<T>(a)`, or `borrow_global_mut<T>(a)` when there is no resource of type `T` at address `a`)".to_string(),
+                    ARITHMETIC_ERROR => "an arithmetic error (i.e., integer overflow, underflow, or divide-by-zero)".to_string(),
+                    EXECUTION_STACK_OVERFLOW => "an execution stack overflow".to_string(),
+                    CALL_STACK_OVERFLOW => "a call stack overflow".to_string(),
+                    OUT_OF_GAS => "an out of gas error".to_string(),
+                    _ => format!("a {} error", status_code.status_type()),
                 };
             // TODO: map to source code location
             let location_explanation = match location {
@@ -358,10 +444,20 @@ fn explain_error(error: VMError, state: &OnDiskStateView) -> Result<()> {
             // This is potentially confusing to someone trying to understnd where something failed
             // by looking at a code offset + disassembled bytecode; we should fix it
             println!(
-                "Execution failed with {} in {} at code offset {}",
+                "Execution failed because of {} in {} at code offset {}",
                 status_explanation, location_explanation, code_offset
             )
         }
+        VMStatus::Error(NUMBER_OF_TYPE_ARGUMENTS_MISMATCH) => {
+	    println!("Execution failed with incorrect number of type arguments: script expected {:?}, but found {:?}", &script.as_inner().type_parameters.len(), vm_type_args.len())
+	}
+        VMStatus::Error(TYPE_MISMATCH) => {
+	    explain_type_error(script, signers, txn_args)
+        }
+	VMStatus::Error(LINKER_ERROR) => {
+	    // TODO: is this the only reason we can see LINKER_ERROR? Can we also see it if someone manually deletes modules in move_data?
+	    println!("Execution failed due to unresolved type argument(s) (i.e., `--type-args 0x1::M:T` when there is no module named M at 0x1 or no type named T in module 0x1::M)");
+	}
         VMStatus::Error(status_code) => {
             println!("Execution failed with unexpected error {:?}", status_code)
         }
@@ -372,27 +468,36 @@ fn explain_error(error: VMError, state: &OnDiskStateView) -> Result<()> {
 
 /// Print a module or resource stored in `file`
 fn view(args: &Move, file: &str) -> Result<()> {
-    let move_data = maybe_create_dir(&args.move_data)?;
+    let move_data = maybe_create_dir(&args.move_data)?.canonicalize()?;
     let stdlib_modules = vec![]; // ok to use empty dir here since we're not compiling
-    let state = OnDiskStateView::create(move_data.to_path_buf(), &stdlib_modules)?;
-    if file.contains("::") {
-        // TODO: less hacky way to detect this?
-        // viewing resource
-        match state.view_resource(Path::new(&file))? {
+    let state = OnDiskStateView::create(move_data, &stdlib_modules)?;
+
+    let path = Path::new(&file);
+    if state.is_resource_path(path) {
+        match state.view_resource(path)? {
             Some(resource) => println!("{}", resource),
             None => println!("Resource not found."),
         }
-    } else {
-        // viewing module
-        match state.view_module(Path::new(&file))? {
+    } else if state.is_event_path(path) {
+        let events = state.view_events(path)?;
+        if events.is_empty() {
+            println!("Events not found.")
+        } else {
+            for event in events {
+                println!("{}", event)
+            }
+        }
+    } else if state.is_module_path(path) {
+        match state.view_module(path)? {
             Some(module) => println!("{}", module),
             None => println!("Module not found."),
         }
+    } else {
+        bail!("`move view <file>` must point to a valid file under move_data")
     }
     Ok(())
 }
 
-// TODO: add expected output tests
 fn main() -> Result<()> {
     let move_args = Move::from_args();
 
@@ -410,6 +515,7 @@ fn main() -> Result<()> {
             signers,
             args,
             type_args,
+            gas_budget,
             commit,
         } => run(
             &move_args,
@@ -417,14 +523,19 @@ fn main() -> Result<()> {
             signers,
             args,
             type_args.to_vec(),
+            *gas_budget,
             *commit,
+        ),
+        Command::Test { file } => test::run_one(
+            &Path::new(file),
+            &std::env::current_exe()?.to_string_lossy(),
         ),
         Command::View { file } => view(&move_args, file),
         Command::Clean {} => {
+            // delete move_data
             let move_data = Path::new(&move_args.move_data);
             if move_data.exists() {
                 fs::remove_dir_all(&move_data)?;
-                fs::create_dir(&move_data)?;
             }
             Ok(())
         }

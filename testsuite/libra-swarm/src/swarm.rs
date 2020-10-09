@@ -2,10 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::{Context, Result};
-use config_builder::SwarmConfig;
 use debug_interface::NodeDebugClient;
 use libra_config::config::{NodeConfig, RoleType};
-use libra_genesis_tool::config_builder::{FullnodeBuilder, FullnodeType, ValidatorBuilder};
+use libra_genesis_tool::{
+    config_builder::{FullnodeBuilder, FullnodeType, ValidatorBuilder},
+    swarm_config::SwarmConfig,
+};
 use libra_logger::prelude::*;
 use libra_temppath::TempPath;
 use libra_types::account_address::AccountAddress;
@@ -27,7 +29,7 @@ pub struct LibraNode {
     role: RoleType,
     debug_client: NodeDebugClient,
     port: u16,
-    log: PathBuf,
+    pub log: PathBuf,
 }
 
 impl Drop for LibraNode {
@@ -50,22 +52,12 @@ impl Drop for LibraNode {
 }
 
 impl LibraNode {
-    /// Prior to using LibraSwarm this should be run. LibraSwarm will acquire ephemeral networking
-    /// ports that are only reserved in a safe state for a brief period of time.
-    /// workspace_builder::get_bin actually compiles all of the Libra code base which can take
-    /// substantially longer time than the networking ports are reserved. Calling prior to
-    /// reserving those ports will reduce the likelihood of issues.
-    pub fn prepare() {
-        Command::new(workspace_builder::get_libra_node_with_failpoints());
-    }
-
     pub fn launch(
+        libra_node_bin_path: &Path,
         node_id: String,
         role: RoleType,
         config_path: &Path,
         log_path: PathBuf,
-        struct_log_path: PathBuf,
-        disable_logging: bool,
     ) -> Result<Self> {
         let config = NodeConfig::load(&config_path)
             .unwrap_or_else(|_| panic!("Failed to load NodeConfig from file: {:?}", config_path));
@@ -74,26 +66,21 @@ impl LibraNode {
             RoleType::Validator => Some(config.validator_network.as_ref().unwrap().peer_id()),
             RoleType::FullNode => None,
         };
-        let mut node_command = Command::new(workspace_builder::get_libra_node_with_failpoints());
-        node_command
-            .current_dir(workspace_builder::workspace_root())
-            .arg("-f")
-            .arg(config_path);
+        let mut node_command = Command::new(libra_node_bin_path);
+        node_command.arg("-f").arg(config_path);
         if env::var("RUST_LOG").is_err() {
             // Only set our RUST_LOG if its not present in environment
             node_command.env("RUST_LOG", "debug");
         }
-        if disable_logging {
-            node_command.arg("-d");
-        } else {
-            node_command.env("STRUCT_LOG_FILE", struct_log_path);
-        }
         node_command
             .stdout(log_file.try_clone()?)
             .stderr(log_file.try_clone()?);
-        let node = node_command
-            .spawn()
-            .context("Error launching node process")?;
+        let node = node_command.spawn().with_context(|| {
+            format!(
+                "Error launching node process with binary: {:?}",
+                libra_node_bin_path
+            )
+        })?;
         let debug_client = NodeDebugClient::new(
             "localhost",
             config.debug_interface.admission_control_node_debug_port,
@@ -218,6 +205,7 @@ impl AsRef<Path> for LibraSwarmDir {
 
 /// Struct holding instances and information of Libra Swarm
 pub struct LibraSwarm {
+    libra_node_bin_path: PathBuf,
     // Output log, LibraNodes' config file, libradb etc, into this dir.
     pub dir: LibraSwarmDir,
     // Maps the node id of a node to the LibraNode struct
@@ -264,6 +252,7 @@ impl LibraSwarm {
     }
 
     pub fn configure_fn_swarm(
+        libra_node_bin_path: &Path,
         config_dir: Option<String>,
         template: Option<NodeConfig>,
         upstream_config: &SwarmConfig,
@@ -287,6 +276,7 @@ impl LibraSwarm {
         let config = SwarmConfig::build(&builder, config_path)?;
 
         Ok(Self {
+            libra_node_bin_path: libra_node_bin_path.to_path_buf(),
             dir: swarm_config_dir,
             nodes: HashMap::new(),
             config,
@@ -295,12 +285,11 @@ impl LibraSwarm {
     }
 
     pub fn configure_validator_swarm(
+        libra_node_bin_path: &Path,
         num_nodes: usize,
         config_dir: Option<String>,
         template: Option<NodeConfig>,
     ) -> Result<LibraSwarm> {
-        LibraNode::prepare();
-
         let swarm_config_dir = Self::setup_config_dir(&config_dir);
         info!("logs for validator at {:?}", swarm_config_dir);
 
@@ -311,6 +300,7 @@ impl LibraSwarm {
         let config = SwarmConfig::build(&builder, config_path)?;
 
         Ok(Self {
+            libra_node_bin_path: libra_node_bin_path.to_path_buf(),
             dir: swarm_config_dir,
             nodes: HashMap::new(),
             config,
@@ -321,7 +311,7 @@ impl LibraSwarm {
     pub fn launch(&mut self) {
         let num_attempts = 5;
         for _ in 0..num_attempts {
-            match self.launch_attempt(false) {
+            match self.launch_attempt() {
                 Ok(_) => return,
                 Err(err) => error!("Error launching swarm: {}", err),
             }
@@ -329,7 +319,7 @@ impl LibraSwarm {
         panic!("Max out {} attempts to launch test swarm", num_attempts);
     }
 
-    pub fn launch_attempt(&mut self, disable_logging: bool) -> Result<(), SwarmLaunchFailure> {
+    pub fn launch_attempt(&mut self) -> Result<(), SwarmLaunchFailure> {
         let logs_dir_path = self.dir.as_ref().join("logs");
         std::fs::create_dir(&logs_dir_path)?;
         // For each config launch a node
@@ -337,12 +327,11 @@ impl LibraSwarm {
             // Use index as node id.
             let node_id = format!("{}", index);
             let node = LibraNode::launch(
+                &self.libra_node_bin_path,
                 node_id.clone(),
                 self.role,
                 &path,
                 logs_dir_path.join(format!("{}.log", index)),
-                logs_dir_path.join(format!("{}.struct.log", index)),
-                disable_logging,
             )
             .unwrap();
             self.nodes.insert(node_id, node);
@@ -524,11 +513,7 @@ impl LibraSwarm {
         self.nodes.remove(&node_id);
     }
 
-    pub fn add_node(
-        &mut self,
-        idx: usize,
-        disable_logging: bool,
-    ) -> Result<(), SwarmLaunchFailure> {
+    pub fn add_node(&mut self, idx: usize) -> Result<(), SwarmLaunchFailure> {
         // First take the configs out to not keep immutable borrow on self when calling
         // `launch_node`.
         let path = self
@@ -537,19 +522,13 @@ impl LibraSwarm {
             .get(idx)
             .unwrap_or_else(|| panic!("Node at index {} not found", idx));
         let log_file_path = self.dir.as_ref().join("logs").join(format!("{}.log", idx));
-        let struct_log_file_path = self
-            .dir
-            .as_ref()
-            .join("logs")
-            .join(format!("{}.struct.log", idx));
         let node_id = format!("{}", idx);
         let mut node = LibraNode::launch(
+            &self.libra_node_bin_path,
             node_id.clone(),
             self.role,
             path,
             log_file_path,
-            struct_log_file_path,
-            disable_logging,
         )
         .unwrap();
         for _ in 0..60 {

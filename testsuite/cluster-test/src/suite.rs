@@ -9,7 +9,8 @@ use crate::{
     experiments::{
         CompatiblityTestParams, CpuFlamegraphParams, Experiment, ExperimentParam,
         PerformanceBenchmarkParams, PerformanceBenchmarkThreeRegionSimulationParams,
-        RebootRandomValidatorsParams, RecoveryTimeParams, TwinValidatorsParams,
+        RebootRandomValidatorsParams, ReconfigurationParams, RecoveryTimeParams,
+        TwinValidatorsParams,
     },
 };
 use anyhow::{format_err, Result};
@@ -36,6 +37,11 @@ impl ExperimentSuite {
             experiments.push(b);
         }
         experiments.push(Box::new(
+            PerformanceBenchmarkParams::non_zero_gas_price(0, 1)
+                .enable_db_backup()
+                .build(cluster),
+        ));
+        experiments.push(Box::new(
             PerformanceBenchmarkParams::new_nodes_down(0)
                 .enable_db_backup()
                 .build(cluster),
@@ -54,6 +60,14 @@ impl ExperimentSuite {
                 .build(cluster),
         ));
         experiments.push(Box::new(TwinValidatorsParams { pair: 1 }.build(cluster)));
+        // This can't be run before any experiment that requires clean_data.
+        experiments.push(Box::new(
+            ReconfigurationParams {
+                count: 101,
+                emit_txn: false,
+            }
+            .build(cluster),
+        ));
         experiments.push(Box::new(
             CpuFlamegraphParams { duration_secs: 60 }.build(cluster),
         ));

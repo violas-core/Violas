@@ -276,11 +276,28 @@ module Libra {
         )
     }
     spec fun burn {
+        include BurnAbortsIf<CoinType>;
+        include BurnEnsures<CoinType>;
+    }
+    spec schema BurnAbortsIf<CoinType> {
+        account: signer;
+        preburn_address: address;
+
         /// Must abort if the account does not have the BurnCapability [B12].
         aborts_if !exists<BurnCapability<CoinType>>(Signer::spec_address_of(account)) with Errors::REQUIRES_CAPABILITY;
 
+        include AbortsIfNoPreburn<CoinType>;
+        include BurnWithResourceCapAbortsIf<CoinType>{preburn: global<Preburn<CoinType>>(preburn_address)};
+    }
+    spec schema BurnEnsures<CoinType> {
+        account: signer;
+        preburn_address: address;
+
+        include BurnWithResourceCapEnsures<CoinType>{preburn: global<Preburn<CoinType>>(preburn_address)};
+    }
+    spec schema AbortsIfNoPreburn<CoinType> {
+        preburn_address: address;
         aborts_if !exists<Preburn<CoinType>>(preburn_address) with Errors::NOT_PUBLISHED;
-        include BurnAbortsIf<CoinType>{preburn: global<Preburn<CoinType>>(preburn_address)};
     }
 
     /// Cancels the current burn request in the `Preburn` resource held
@@ -300,11 +317,10 @@ module Libra {
         )
     }
     spec fun cancel_burn {
-        pragma aborts_if_is_partial = true;
         /// Must abort if the account does not have the BurnCapability [B12].
         aborts_if !exists<BurnCapability<CoinType>>(Signer::spec_address_of(account)) with Errors::REQUIRES_CAPABILITY;
-
-        aborts_with Errors::NOT_PUBLISHED, Errors::LIMIT_EXCEEDED;
+        include CancelBurnWithCapAbortsIf<CoinType>;
+        include CancelBurnWithCapEnsures<CoinType>;
     }
 
     /// Mint a new `Libra` coin of `CoinType` currency worth `value`. The
@@ -391,25 +407,25 @@ module Libra {
         };
     }
     spec fun preburn_with_resource {
-        include PreburnWithResourceAbortsIf<CoinType>;
-        include PreburnEnsures<CoinType>;
+        include PreburnWithResourceAbortsIf<CoinType>{amount: coin.value};
+        include PreburnEnsures<CoinType>{amount: coin.value};
     }
     spec schema PreburnWithResourceAbortsIf<CoinType> {
-        coin: Libra<CoinType>;
+        amount: u64;
         preburn: Preburn<CoinType>;
         aborts_if preburn.to_burn.value != 0 with Errors::INVALID_STATE;
         include PreburnAbortsIf<CoinType>;
     }
     spec schema PreburnAbortsIf<CoinType> {
-        coin: Libra<CoinType>;
+        amount: u64;
         include AbortsIfNoCurrency<CoinType>;
-        aborts_if spec_currency_info<CoinType>().preburn_value + coin.value > MAX_U64 with Errors::LIMIT_EXCEEDED;
+        aborts_if spec_currency_info<CoinType>().preburn_value + amount > MAX_U64 with Errors::LIMIT_EXCEEDED;
     }
     spec schema PreburnEnsures<CoinType> {
-        coin: Libra<CoinType>;
+        amount: u64;
         preburn: Preburn<CoinType>;
         ensures spec_currency_info<CoinType>().preburn_value
-                    == old(spec_currency_info<CoinType>().preburn_value) + coin.value;
+                    == old(spec_currency_info<CoinType>().preburn_value) + amount;
     }
 
     ///////////////////////////////////////////////////////////////////////////
@@ -469,13 +485,19 @@ module Libra {
         preburn_with_resource(coin, borrow_global_mut<Preburn<CoinType>>(sender), sender);
     }
     spec fun preburn_to {
-        /// Must abort if the account does have the Preburn [B13].
-        aborts_if !exists<Preburn<CoinType>>(Signer::spec_address_of(account)) with Errors::NOT_PUBLISHED;
+        let preburn = global<Preburn<CoinType>>(Signer::spec_address_of(account));
+        include PreburnToAbortsIf<CoinType>{amount: coin.value};
+        include PreburnEnsures<CoinType>{preburn: preburn, amount: coin.value};
+    }
 
-        aborts_if global<Preburn<CoinType>>(Signer::spec_address_of(account)).to_burn.value != 0
-            with Errors::INVALID_STATE;
-        include PreburnAbortsIf<CoinType>;
-        include PreburnEnsures<CoinType>{preburn: global<Preburn<CoinType>>(Signer::spec_address_of(account))};
+    spec schema PreburnToAbortsIf<CoinType> {
+        account: signer;
+        amount: u64;
+        let account_addr = Signer::spec_address_of(account);
+        let preburn = global<Preburn<CoinType>>(account_addr);
+        /// Must abort if the account does have the Preburn [B13].
+        include AbortsIfNoPreburn<CoinType>{preburn_address: account_addr};
+        include PreburnWithResourceAbortsIf<CoinType>{preburn: preburn};
     }
 
     /// Permanently removes the coins held in the `Preburn` resource (in to_burn field)
@@ -497,9 +519,9 @@ module Libra {
         )
     }
     spec fun burn_with_capability {
-        aborts_if !exists<Preburn<CoinType>>(preburn_address) with Errors::NOT_PUBLISHED;
-        include BurnAbortsIf<CoinType>{preburn: global<Preburn<CoinType>>(preburn_address)};
-        include BurnEnsures<CoinType>{preburn: global<Preburn<CoinType>>(preburn_address)};
+        include AbortsIfNoPreburn<CoinType>;
+        include BurnWithResourceCapAbortsIf<CoinType>{preburn: global<Preburn<CoinType>>(preburn_address)};
+        include BurnWithResourceCapEnsures<CoinType>{preburn: global<Preburn<CoinType>>(preburn_address)};
     }
 
     /// Permanently removes the coins held in the `Preburn` resource (in to_burn field)
@@ -519,6 +541,7 @@ module Libra {
         // destroy the coin in Preburn area
         let Libra { value } = withdraw_all<CoinType>(&mut preburn.to_burn);
         // update the market cap
+        // > TODO(tzakian): this assertion should be moved to the top of this function.
         assert_is_currency<CoinType>();
         let info = borrow_global_mut<CurrencyInfo<CoinType>>(CoreAddresses::CURRENCY_INFO_ADDRESS());
         assert(info.total_value >= (value as u128), Errors::limit_exceeded(ECURRENCY_INFO));
@@ -538,11 +561,11 @@ module Libra {
         };
     }
     spec fun burn_with_resource_cap {
-        include BurnAbortsIf<CoinType>;
-        include BurnEnsures<CoinType>;
+        include BurnWithResourceCapAbortsIf<CoinType>;
+        include BurnWithResourceCapEnsures<CoinType>;
     }
 
-    spec schema BurnAbortsIf<CoinType> {
+    spec schema BurnWithResourceCapAbortsIf<CoinType> {
         preburn: Preburn<CoinType>;
         include AbortsIfNoCurrency<CoinType>;
         let to_burn = preburn.to_burn.value;
@@ -552,7 +575,7 @@ module Libra {
         aborts_if info.preburn_value < to_burn with Errors::LIMIT_EXCEEDED;
     }
 
-    spec schema BurnEnsures<CoinType> {
+    spec schema BurnWithResourceCapEnsures<CoinType> {
         preburn: Preburn<CoinType>;
         ensures spec_currency_info<CoinType>().total_value
                 == old(spec_currency_info<CoinType>().total_value) - old(preburn.to_burn.value);
@@ -595,6 +618,29 @@ module Libra {
         coin
     }
 
+    spec fun cancel_burn_with_capability {
+        include CancelBurnWithCapAbortsIf<CoinType>;
+        include CancelBurnWithCapEnsures<CoinType>;
+    }
+
+    spec schema CancelBurnWithCapAbortsIf<CoinType> {
+        preburn_address: address;
+        let info = global<CurrencyInfo<CoinType>>(CoreAddresses::CURRENCY_INFO_ADDRESS());
+        let amount = global<Preburn<CoinType>>(preburn_address).to_burn.value;
+        aborts_if !exists<Preburn<CoinType>>(preburn_address) with Errors::NOT_PUBLISHED;
+        include AbortsIfNoCurrency<CoinType>;
+        aborts_if info.preburn_value < amount with Errors::LIMIT_EXCEEDED;
+    }
+
+    spec schema CancelBurnWithCapEnsures<CoinType> {
+        preburn_address: address;
+        let preburn_value = global<Preburn<CoinType>>(preburn_address).to_burn.value;
+        let total_preburn_value =
+            global<CurrencyInfo<CoinType>>(CoreAddresses::CURRENCY_INFO_ADDRESS()).preburn_value;
+        ensures preburn_value == 0;
+        ensures total_preburn_value == old(total_preburn_value) - old(preburn_value);
+    }
+
     /// A shortcut for immediately burning a coin. This calls preburn followed by a subsequent burn, and is
     /// used for administrative burns, like unpacking an LBR coin or charging fees.
     /// > TODO(wrwg): consider removing complexity here by removing the need for a preburn resource. The preburn
@@ -619,7 +665,7 @@ module Libra {
         coin: Libra<CoinType>;
         preburn: Preburn<CoinType>;
         aborts_if coin.value == 0 with Errors::INVALID_ARGUMENT;
-        include PreburnWithResourceAbortsIf<CoinType>;
+        include PreburnWithResourceAbortsIf<CoinType>{amount: coin.value};
         // The aborts condition for the burn is simplified because of previous call to preburn.
         let info = spec_currency_info<CoinType>();
         aborts_if info.total_value < coin.value with Errors::LIMIT_EXCEEDED;
@@ -988,13 +1034,20 @@ module Libra {
         );
     }
     spec fun update_lbr_exchange_rate {
+        include UpdateLBRExchangeRateAbortsIf<FromCoinType>;
+        include UpdateLBRExchangeRateEnsures<FromCoinType>;
+    }
+    spec schema UpdateLBRExchangeRateAbortsIf<FromCoinType> {
+        tc_account: signer;
         /// Must abort if the account does not have the TreasuryCompliance Role [B14].
         include Roles::AbortsIfNotTreasuryCompliance{account: tc_account};
 
         include AbortsIfNoCurrency<FromCoinType>;
+    }
+    spec schema UpdateLBRExchangeRateEnsures<FromCoinType> {
+        lbr_exchange_rate: FixedPoint32;
         ensures spec_currency_info<FromCoinType>().to_lbr_exchange_rate == lbr_exchange_rate;
     }
-
 
     /// Returns the (rough) exchange rate between `CoinType` and `LBR`
     public fun lbr_exchange_rate<CoinType>(): FixedPoint32
@@ -1048,13 +1101,9 @@ module Libra {
 
 
     /// **************** MODULE SPECIFICATION ****************
+    spec module {} // switch documentation context back to module level
 
     /// # Module Specification
-
-    spec module {
-        /// Verify all functions in this module.
-        pragma verify = true;
-    }
 
     spec module {
         /// Checks whether currency is registered. Mirrors `Self::is_currency<CoinType>`.
@@ -1156,20 +1205,18 @@ module Libra {
         /// required. MintCapability must be only granted to a TreasuryCompliance account [B11].
         /// Only `register_SCS_currency` creates MintCapability, which must abort if the account
         /// does not have the TreasuryCompliance role [B17].
-        // TODO(jkpark): This kind of spec needs to be rewritten later. The problem of this spec is
-        // that it is in the form of the schema application, so verified against all the functions
-        // only in this module. Even though this is verified, there might be a function in an other
-        // module that violates this property (by obtaining a MintCapability from `register_currency`
-        // and publishing it somewhere inappropriate).
+        // TODO(jkpark): this spec does not cover the following two scenarios:
+        // a function (possibly in an other module) obtains a MintCapability from `register_currency`, and
+        // (1) uses the MintCapability for minting without publishing it, and/or
+        // (2) stashes the MintCapability inside of an other struct in the global memory.
         apply PreserveMintCapAbsence<CoinType> to *<CoinType> except register_SCS_currency<CoinType>;
         apply Roles::AbortsIfNotTreasuryCompliance{account: tc_account} to register_SCS_currency<CoinType>;
 
         /// Only TreasuryCompliance can have MintCapability [B11].
         /// If an account has MintCapability, it is a TreasuryCompliance account.
         invariant [global] forall coin_type: type:
-            forall addr: address:
-                exists<MintCapability<coin_type>>(addr) ==>
-                    Roles::spec_has_treasury_compliance_role_addr(addr);
+            forall mint_cap_owner: address where exists<MintCapability<coin_type>>(mint_cap_owner):
+                Roles::spec_has_treasury_compliance_role_addr(mint_cap_owner);
 
         /// MintCapability is not transferrable [D11].
         apply PreserveMintCapExistence<CoinType> to *<CoinType>;
@@ -1178,9 +1225,10 @@ module Libra {
         /// At most one address has a mint capability for SCS CoinType
         invariant [global, isolated]
             forall coin_type: type where spec_is_SCS_currency<coin_type>():
-                forall addr1: address, addr2: address
-                     where exists<MintCapability<coin_type>>(addr1) && exists<MintCapability<coin_type>>(addr2):
-                          addr1 == addr2;
+                forall mint_cap_owner1: address, mint_cap_owner2: address
+                     where exists<MintCapability<coin_type>>(mint_cap_owner1)
+                                && exists<MintCapability<coin_type>>(mint_cap_owner2):
+                          mint_cap_owner1 == mint_cap_owner2;
         /// If an address has a mint capability, it is an SCS currency.
         invariant [global]
             forall coin_type: type, addr3: address where spec_has_mint_capability<coin_type>(addr3):

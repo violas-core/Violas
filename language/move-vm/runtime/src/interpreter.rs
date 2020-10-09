@@ -45,6 +45,13 @@ macro_rules! debug_writeln {
     };
 }
 
+macro_rules! set_err_info {
+    ($frame:ident, $e:expr) => {{
+        $e.at_code_offset($frame.function.index(), $frame.pc)
+            .finish($frame.location())
+    }};
+}
+
 /// `Interpreter` instances can execute Move functions.
 ///
 /// An `Interpreter` instance is a stand alone execution context for a function.
@@ -114,7 +121,7 @@ impl Interpreter {
         ty_args: Vec<Type>,
         args: Vec<Value>,
     ) -> VMResult<()> {
-        verify_args(function.parameters(), &ty_args, &args).map_err(|e| self.set_location(e))?;
+        verify_args(function.parameters(), &args).map_err(|e| self.set_location(e))?;
         let mut locals = Locals::new(function.local_count());
         for (i, value) in args.into_iter().enumerate() {
             locals
@@ -124,12 +131,6 @@ impl Interpreter {
 
         let mut current_frame = Frame::new(function, ty_args, locals);
         loop {
-            macro_rules! set_err_info {
-                ($frame:ident, $e:expr) => {{
-                    self.set_location($e.at_code_offset($frame.function.index(), $frame.pc))
-                }};
-            }
-
             let resolver = current_frame.resolver(loader);
             let exit_code =
                 current_frame //self
@@ -1138,8 +1139,7 @@ impl Frame {
 
 // Verify the the type of the arguments in input from the outside is restricted (`is_valid_arg()`)
 // and it honors the signature of the function invoked.
-// TODO: we need to check the instantiation, once we expose signatures with generic argument
-fn verify_args(signature: &Signature, _ty_args: &[Type], args: &[Value]) -> PartialVMResult<()> {
+fn verify_args(signature: &Signature, args: &[Value]) -> PartialVMResult<()> {
     if signature.len() != args.len() {
         return Err(
             PartialVMError::new(StatusCode::TYPE_MISMATCH).with_message(format!(

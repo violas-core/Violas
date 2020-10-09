@@ -1,10 +1,15 @@
 // Copyright (c) The Libra Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::{counters, SynchronizerState};
+use crate::{
+    counters,
+    logging::{LogEntry, LogEvent, LogSchema},
+    SynchronizerState,
+};
 use anyhow::{format_err, Result};
 use executor_types::{ChunkExecutor, ExecutedTrees};
 use itertools::Itertools;
+use libra_logger::prelude::*;
 use libra_types::{
     account_state::AccountState,
     contract_event::ContractEvent,
@@ -125,7 +130,7 @@ impl ExecutorProxyTrait for ExecutorProxy {
         let storage_info = self
             .storage
             .get_startup_info()?
-            .ok_or_else(|| format_err!("[state sync] Failed to access storage info"))?;
+            .ok_or_else(|| format_err!("[state sync] Missing storage info"))?;
 
         let current_epoch_state = storage_info.get_epoch_state().clone();
 
@@ -156,7 +161,16 @@ impl ExecutorProxyTrait for ExecutorProxy {
             intermediate_end_of_epoch_li,
         )?;
         timer.stop_and_record();
-        self.publish_on_chain_config_updates(reconfig_events)
+        if let Err(e) = self.publish_on_chain_config_updates(reconfig_events) {
+            error!(
+                LogSchema::event_log(LogEntry::Reconfig, LogEvent::Fail).error(&e),
+                "Failed to publish reconfig updates in execute_chunk"
+            );
+            counters::RECONFIG_PUBLISH_COUNT
+                .with_label_values(&[counters::RECONFIG_FAIL_LABEL])
+                .inc();
+        }
+        Ok(())
     }
 
     fn get_chunk(
@@ -190,6 +204,10 @@ impl ExecutorProxyTrait for ExecutorProxy {
         if events.is_empty() {
             return Ok(());
         }
+        info!(LogSchema::new(LogEntry::Reconfig)
+            .count(events.len())
+            .reconfig_events(events.clone()));
+
         let event_keys = events
             .iter()
             .map(|event| *event.key())
@@ -212,6 +230,7 @@ impl ExecutorProxyTrait for ExecutorProxy {
             .collect::<HashSet<_>>();
 
         // notify subscribers
+        let mut publish_success = true;
         for subscription in self.reconfig_subscriptions.iter_mut() {
             // publish updates if *any* of the subscribed configs changed
             // or any of the subscribed events were emitted
@@ -219,11 +238,34 @@ impl ExecutorProxyTrait for ExecutorProxy {
             if !changed_configs.is_disjoint(&subscribed_items.configs)
                 || !event_keys.is_disjoint(&subscribed_items.events)
             {
-                subscription.publish(new_configs.clone())?;
+                if let Err(e) = subscription.publish(new_configs.clone()) {
+                    publish_success = false;
+                    error!(
+                        LogSchema::event_log(LogEntry::Reconfig, LogEvent::PublishError)
+                            .subscription_name(subscription.name.clone())
+                            .error(&e),
+                        "Failed to publish reconfig notification to subscription {}",
+                        subscription.name
+                    );
+                } else {
+                    debug!(
+                        LogSchema::event_log(LogEntry::Reconfig, LogEvent::Success)
+                            .subscription_name(subscription.name.clone()),
+                        "Successfully published reconfig notification to subscription {}",
+                        subscription.name
+                    );
+                }
             }
         }
 
         self.on_chain_configs = new_configs;
-        Ok(())
+        if publish_success {
+            counters::RECONFIG_PUBLISH_COUNT
+                .with_label_values(&[counters::RECONFIG_SUCCESS_LABEL])
+                .inc();
+            Ok(())
+        } else {
+            Err(format_err!("failed to publish at least one subscription"))
+        }
     }
 }

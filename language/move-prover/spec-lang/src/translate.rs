@@ -44,15 +44,17 @@ use crate::{
         SpecVarDecl, Value,
     },
     env::{
-        FieldId, FunId, FunctionData, GlobalEnv, Loc, ModuleEnv, ModuleId, MoveIrLoc,
-        NamedConstantData, NamedConstantId, NodeId, QualifiedId, SchemaId, SpecFunId, SpecVarId,
-        StructData, StructId, TypeConstraint, TypeParameter, CONDITION_DEACTIVATED,
-        CONDITION_GLOBAL_PROP, CONDITION_INJECTED_PROP, SCRIPT_BYTECODE_FUN_NAME,
+        is_pragma_valid_for_block, is_property_valid_for_condition, FieldId, FunId, FunctionData,
+        GlobalEnv, Loc, ModuleEnv, ModuleId, MoveIrLoc, NamedConstantData, NamedConstantId, NodeId,
+        QualifiedId, SchemaId, SpecFunId, SpecVarId, StructData, StructId, TypeConstraint,
+        TypeParameter, CONDITION_DEACTIVATED_PROP, CONDITION_GLOBAL_PROP, CONDITION_INJECTED_PROP,
+        SCRIPT_BYTECODE_FUN_NAME,
     },
     project_1st, project_2nd,
     symbol::{Symbol, SymbolPool},
     ty::{PrimitiveType, Substitution, Type, TypeDisplayContext, BOOL_TYPE},
 };
+use move_lang::expansion::ast::PragmaProperty;
 
 // =================================================================================================
 /// # Translator
@@ -935,7 +937,7 @@ impl<'env, 'translator> ModuleTranslator<'env, 'translator> {
 /// A value which we pass in to spec block analyzers, describing the resolved target of the spec
 /// block.
 #[derive(Debug)]
-enum SpecBlockContext<'a> {
+pub enum SpecBlockContext<'a> {
     Module,
     Struct(QualifiedSymbol),
     Function(QualifiedSymbol),
@@ -1427,10 +1429,16 @@ impl<'env, 'translator> ModuleTranslator<'env, 'translator> {
                                 qsym.clone(),
                                 &fun_spec_info[spec_id],
                             );
-                            let properties = self.translate_properties(properties);
                             if let Some((kind, exp)) =
                                 self.extract_condition_kind(&context, kind, exp)
                             {
+                                let properties = self.translate_properties(properties, &|prop| {
+                                    if !is_property_valid_for_condition(&kind, prop) {
+                                        Some(loc.clone())
+                                    } else {
+                                        None
+                                    }
+                                });
                                 self.def_ana_condition(
                                     loc,
                                     &context,
@@ -1648,7 +1656,13 @@ impl<'env, 'translator> ModuleTranslator<'env, 'translator> {
                     additional_exps,
                 } => {
                     if let Some((kind, exp)) = self.extract_condition_kind(context, kind, exp) {
-                        let properties = self.translate_properties(properties);
+                        let properties = self.translate_properties(properties, &|prop| {
+                            if !is_property_valid_for_condition(&kind, prop) {
+                                Some(loc.clone())
+                            } else {
+                                None
+                            }
+                        });
                         self.def_ana_condition(loc, context, kind, properties, exp, additional_exps)
                     }
                 }
@@ -1656,19 +1670,18 @@ impl<'env, 'translator> ModuleTranslator<'env, 'translator> {
                     signature, body, ..
                 } => self.def_ana_spec_fun(signature, body),
                 Let { name, def } => self.def_ana_let(context, loc, name, def),
-                Include { exp } => self.def_ana_schema_inclusion_outside_schema(
-                    loc,
-                    context,
-                    None,
-                    PropertyBag::default(),
-                    exp,
-                ),
+                Include { properties, exp } => {
+                    let properties = self.translate_properties(properties, &|_| None);
+                    self.def_ana_schema_inclusion_outside_schema(
+                        loc, context, None, properties, exp,
+                    )
+                }
                 Apply {
                     exp,
                     patterns,
                     exclusion_patterns,
                 } => self.def_ana_schema_apply(loc, context, exp, patterns, exclusion_patterns),
-                Pragma { properties } => self.def_ana_pragma(context, properties),
+                Pragma { properties } => self.def_ana_pragma(loc, context, properties),
                 Variable { .. } => { /* nothing to do right now */ }
             }
         }
@@ -1786,18 +1799,46 @@ impl<'env, 'translator> ModuleTranslator<'env, 'translator> {
 
 impl<'env, 'translator> ModuleTranslator<'env, 'translator> {
     /// Definition analysis for a pragma.
-    fn def_ana_pragma(&mut self, context: &SpecBlockContext, properties: &[EA::PragmaProperty]) {
-        let properties = self.translate_properties(properties);
+    fn def_ana_pragma(
+        &mut self,
+        loc: &Loc,
+        context: &SpecBlockContext,
+        properties: &[EA::PragmaProperty],
+    ) {
+        let properties = self.translate_properties(properties, &|prop| {
+            if !is_pragma_valid_for_block(context, prop) {
+                Some(loc.clone())
+            } else {
+                None
+            }
+        });
         self.update_spec(context, move |spec| {
             spec.properties.extend(properties);
         });
     }
 
-    fn translate_properties(&mut self, properties: &[EA::PragmaProperty]) -> PropertyBag {
+    /// Translate properties (of conditions or in pragmas), using the provided function
+    /// to check their validness.
+    fn translate_properties<F>(
+        &mut self,
+        properties: &[EA::PragmaProperty],
+        check_prop: &F,
+    ) -> PropertyBag
+    where
+        // Returns the location if not valid
+        F: Fn(&str) -> Option<Loc>,
+    {
         // For now we pass properties just on. We may want to check against a set of known
         // property names and types in the future.
         let mut props = PropertyBag::default();
         for prop in properties {
+            let prop_str = prop.value.name.value.as_str();
+            if let Some(loc) = check_prop(prop_str) {
+                self.parent.error(
+                    &loc,
+                    &format!("property `{}` is not valid in this context", prop_str),
+                );
+            }
             let prop_name = self.symbol_pool().make(&prop.value.name.value);
             let value = if let Some(pv) = &prop.value.value {
                 let mut et = ExpTranslator::new(self);
@@ -2146,7 +2187,7 @@ impl<'env, 'translator> ModuleTranslator<'env, 'translator> {
                     && !self
                         .parent
                         .env
-                        .is_property_true(&derived_cond.properties, CONDITION_DEACTIVATED)
+                        .is_property_true(&derived_cond.properties, CONDITION_DEACTIVATED_PROP)
                         .unwrap_or(false)
                 {
                     self.update_spec(context, |spec| spec.conditions.push(derived_cond));
@@ -2397,7 +2438,7 @@ impl<'env, 'translator> ModuleTranslator<'env, 'translator> {
         // First recursively visit all schema includes and ensure they are analyzed.
         for included_name in self
             .iter_schema_includes(&block.value.members)
-            .map(|(_, exp)| {
+            .map(|(_, _, exp)| {
                 let mut res = vec![];
                 extract_schema_access(exp, &mut res);
                 res
@@ -2496,12 +2537,14 @@ impl<'env, 'translator> ModuleTranslator<'env, 'translator> {
 
         // Process all schema includes. We need to do this before we type check expressions to have
         // all variables from includes in the environment.
-        for (_, included_exp) in self.iter_schema_includes(&block.value.members) {
+        for (_, included_props, included_exp) in self.iter_schema_includes(&block.value.members) {
+            let included_props = self.translate_properties(included_props, &|_| None);
             self.def_ana_schema_exp(
                 &type_params,
                 &mut all_vars,
                 &mut included_spec,
                 true,
+                &included_props,
                 included_exp,
             );
         }
@@ -2533,7 +2576,13 @@ impl<'env, 'translator> ModuleTranslator<'env, 'translator> {
                 } => {
                     let context = SpecBlockContext::Schema(name.clone());
                     if let Some((kind, exp)) = self.extract_condition_kind(&context, kind, exp) {
-                        let properties = self.translate_properties(properties);
+                        let properties = self.translate_properties(properties, &|prop| {
+                            if !is_property_valid_for_condition(&kind, prop) {
+                                Some(member_loc.clone())
+                            } else {
+                                None
+                            }
+                        });
                         self.def_ana_condition(
                             &member_loc,
                             &context,
@@ -2558,10 +2607,10 @@ impl<'env, 'translator> ModuleTranslator<'env, 'translator> {
     fn iter_schema_includes<'a>(
         &self,
         members: &'a [EA::SpecBlockMember],
-    ) -> impl Iterator<Item = (&'a MoveIrLoc, &'a EA::Exp)> {
+    ) -> impl Iterator<Item = (&'a MoveIrLoc, &'a Vec<PragmaProperty>, &'a EA::Exp)> {
         members.iter().filter_map(|m| {
-            if let EA::SpecBlockMember_::Include { exp } = &m.value {
-                Some((&m.loc, exp))
+            if let EA::SpecBlockMember_::Include { properties, exp } = &m.value {
+                Some((&m.loc, properties, exp))
             } else {
                 None
             }
@@ -2592,9 +2641,18 @@ impl<'env, 'translator> ModuleTranslator<'env, 'translator> {
         vars: &mut BTreeMap<Symbol, LocalVarEntry>,
         spec: &mut Spec,
         allow_new_vars: bool,
+        properties: &PropertyBag,
         exp: &EA::Exp,
     ) {
-        self.def_ana_schema_exp_oper(context_type_params, vars, spec, allow_new_vars, None, exp)
+        self.def_ana_schema_exp_oper(
+            context_type_params,
+            vars,
+            spec,
+            allow_new_vars,
+            None,
+            properties,
+            exp,
+        )
     }
 
     /// Analyzes operations in schema expressions. This extends the path condition as needed
@@ -2606,6 +2664,7 @@ impl<'env, 'translator> ModuleTranslator<'env, 'translator> {
         spec: &mut Spec,
         allow_new_vars: bool,
         path_cond: Option<Exp>,
+        properties: &PropertyBag,
         exp: &EA::Exp,
     ) {
         let loc = self.parent.to_loc(&exp.loc);
@@ -2628,6 +2687,7 @@ impl<'env, 'translator> ModuleTranslator<'env, 'translator> {
                     spec,
                     allow_new_vars,
                     path_cond,
+                    properties,
                     rhs,
                 );
             }
@@ -2644,6 +2704,7 @@ impl<'env, 'translator> ModuleTranslator<'env, 'translator> {
                     spec,
                     allow_new_vars,
                     path_cond.clone(),
+                    properties,
                     lhs,
                 );
                 self.def_ana_schema_exp_oper(
@@ -2652,6 +2713,7 @@ impl<'env, 'translator> ModuleTranslator<'env, 'translator> {
                     spec,
                     allow_new_vars,
                     path_cond,
+                    properties,
                     rhs,
                 );
             }
@@ -2667,6 +2729,7 @@ impl<'env, 'translator> ModuleTranslator<'env, 'translator> {
                     spec,
                     allow_new_vars,
                     t_path_cond,
+                    properties,
                     t,
                 );
                 let node_id = self.new_node_id_with_type_loc(&BOOL_TYPE, &loc);
@@ -2678,6 +2741,7 @@ impl<'env, 'translator> ModuleTranslator<'env, 'translator> {
                     spec,
                     allow_new_vars,
                     e_path_cond,
+                    properties,
                     e,
                 );
             }
@@ -2687,6 +2751,7 @@ impl<'env, 'translator> ModuleTranslator<'env, 'translator> {
                 spec,
                 allow_new_vars,
                 path_cond,
+                properties,
                 &loc,
                 maccess,
                 type_args_opt,
@@ -2698,6 +2763,7 @@ impl<'env, 'translator> ModuleTranslator<'env, 'translator> {
                 spec,
                 allow_new_vars,
                 path_cond,
+                properties,
                 &loc,
                 maccess,
                 type_args_opt,
@@ -2717,6 +2783,7 @@ impl<'env, 'translator> ModuleTranslator<'env, 'translator> {
         spec: &mut Spec,
         allow_new_vars: bool,
         path_cond: Option<Exp>,
+        schema_properties: &PropertyBag,
         loc: &Loc,
         maccess: &EA::ModuleAccess,
         type_args_opt: &Option<Vec<EA::Type>>,
@@ -2877,10 +2944,12 @@ impl<'env, 'translator> ModuleTranslator<'env, 'translator> {
                     );
                 }
             }
+            let mut effective_properties = schema_properties.clone();
+            effective_properties.extend(properties.clone());
             spec.conditions.push(Condition {
                 loc: loc.clone(),
                 kind: kind.clone(),
-                properties: properties.clone(),
+                properties: effective_properties,
                 exp,
             });
         }
@@ -3004,11 +3073,11 @@ impl<'env, 'translator> ModuleTranslator<'env, 'translator> {
             &mut vars,
             &mut spec,
             false,
+            &PropertyBag::default(),
             exp,
         );
 
         // Write the conditions to the context item.
-        // TODO: merge pragma properties as well?
         self.add_conditions_to_context(
             context,
             loc,

@@ -2,18 +2,25 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{
-    backup_types::state_snapshot::manifest::StateSnapshotBackup,
+    backup_types::{
+        epoch_ending::restore::EpochHistory, state_snapshot::manifest::StateSnapshotBackup,
+    },
     metrics::restore::{
         STATE_SNAPSHOT_LEAF_INDEX, STATE_SNAPSHOT_TARGET_LEAF_INDEX, STATE_SNAPSHOT_VERSION,
     },
     storage::{BackupStorage, FileHandle},
-    utils::{read_record_bytes::ReadRecordBytes, storage_ext::BackupStorageExt, GlobalRestoreOpt},
+    utils::{
+        read_record_bytes::ReadRecordBytes, storage_ext::BackupStorageExt, GlobalRestoreOptions,
+        RestoreRunMode,
+    },
 };
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, ensure, Result};
 use libra_crypto::HashValue;
 use libra_logger::prelude::*;
-use libra_types::{account_state_blob::AccountStateBlob, transaction::Version};
-use libradb::backup::restore_handler::RestoreHandler;
+use libra_types::{
+    account_state_blob::AccountStateBlob, ledger_info::LedgerInfoWithSignatures,
+    proof::TransactionInfoWithProof, transaction::Version,
+};
 use std::sync::Arc;
 use structopt::StructOpt;
 
@@ -27,45 +34,49 @@ pub struct StateSnapshotRestoreOpt {
 
 pub struct StateSnapshotRestoreController {
     storage: Arc<dyn BackupStorage>,
-    restore_handler: Arc<RestoreHandler>,
+    run_mode: Arc<RestoreRunMode>,
     /// State snapshot restores to this version.
     version: Version,
     manifest_handle: FileHandle,
     /// Global "target_version" for the entire restore process, if `version` is newer than this,
     /// nothing will be done, otherwise, this has no effect.
     target_version: Version,
+    epoch_history: Option<Arc<EpochHistory>>,
 }
 
 impl StateSnapshotRestoreController {
     pub fn new(
         opt: StateSnapshotRestoreOpt,
-        global_opt: GlobalRestoreOpt,
+        global_opt: GlobalRestoreOptions,
         storage: Arc<dyn BackupStorage>,
-        restore_handler: Arc<RestoreHandler>,
+        epoch_history: Option<Arc<EpochHistory>>,
     ) -> Self {
         Self {
             storage,
-            restore_handler,
+            run_mode: global_opt.run_mode,
             version: opt.version,
             manifest_handle: opt.manifest_handle,
-            target_version: global_opt.target_version(),
+            target_version: global_opt.target_version,
+            epoch_history,
         }
     }
 
     pub async fn run(self) -> Result<()> {
-        info!(
-            "State snapshot restore started. Manifest: {}",
-            self.manifest_handle
-        );
+        let name = self.name();
+        info!("{} started. Manifest: {}", name, self.manifest_handle);
         self.run_impl()
             .await
-            .map_err(|e| anyhow!("State snapshot restore failed: {}", e))?;
-        info!("State snapshot restore succeeded.");
+            .map_err(|e| anyhow!("{} failed: {}", name, e))?;
+        info!("{} succeeded.", name);
         Ok(())
     }
 }
 
 impl StateSnapshotRestoreController {
+    fn name(&self) -> String {
+        format!("state snapshot {}", self.run_mode.name())
+    }
+
     async fn run_impl(self) -> Result<()> {
         if self.version > self.target_version {
             warn!(
@@ -78,11 +89,24 @@ impl StateSnapshotRestoreController {
 
         let manifest: StateSnapshotBackup =
             self.storage.load_json_file(&self.manifest_handle).await?;
+        let (txn_info_with_proof, li): (TransactionInfoWithProof, LedgerInfoWithSignatures) =
+            self.storage.load_lcs_file(&manifest.proof).await?;
+        txn_info_with_proof.verify(li.ledger_info(), manifest.version)?;
+        ensure!(
+            txn_info_with_proof.transaction_info().state_root_hash() == manifest.root_hash,
+            "Root hash mismatch with that in proof. root hash: {}, expected: {}",
+            manifest.root_hash,
+            txn_info_with_proof.transaction_info().state_root_hash(),
+        );
+        if let Some(epoch_history) = self.epoch_history.as_ref() {
+            epoch_history.verify_ledger_info(&li)?;
+        }
 
         let mut receiver = self
-            .restore_handler
+            .run_mode
             .get_state_restore_receiver(self.version, manifest.root_hash)?;
 
+        // FIXME update counters
         STATE_SNAPSHOT_VERSION.set(self.version as i64);
         STATE_SNAPSHOT_TARGET_LEAF_INDEX
             .set(manifest.chunks.last().map_or(0, |c| c.last_idx as i64));
@@ -91,6 +115,7 @@ impl StateSnapshotRestoreController {
             let proof = self.storage.load_lcs_file(&chunk.proof).await?;
 
             receiver.add_chunk(blobs, proof)?;
+            // FIXME update counters
             STATE_SNAPSHOT_LEAF_INDEX.set(chunk.last_idx as i64);
         }
 

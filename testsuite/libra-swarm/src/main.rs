@@ -17,11 +17,8 @@ struct Args {
     /// Number of nodes to start (1 by default)
     #[structopt(short = "n", long, default_value = "1")]
     pub num_nodes: usize,
-    /// Enable logging, by default spawned nodes will not perform logging
-    #[structopt(short = "l", long)]
-    pub enable_logging: bool,
     /// Start client
-    #[structopt(short = "s", long)]
+    #[structopt(short = "s", long, requires("cli-path"))]
     pub start_client: bool,
     /// Directory used by launch_swarm to output LibraNodes' config files, logs, libradb, etc,
     /// such that user can still inspect them after exit.
@@ -34,8 +31,18 @@ struct Args {
     pub num_full_nodes: usize,
     /// Start with faucet service for minting coins, this flag disables cli's dev commands.
     /// Used for manual testing faucet service integration.
-    #[structopt(short = "m", long)]
+    #[structopt(short = "m", long, requires("faucet-path"))]
     pub start_faucet: bool,
+    /// Path to the libra-node binary
+    #[structopt(long)]
+    pub libra_node: String,
+
+    /// Path to the cli binary
+    #[structopt(long)]
+    pub cli_path: Option<String>,
+    /// Path to the faucet binary
+    #[structopt(long)]
+    pub faucet_path: Option<String>,
 }
 
 fn main() {
@@ -45,13 +52,18 @@ fn main() {
 
     libra_logger::Logger::new().init();
 
-    let mut validator_swarm =
-        LibraSwarm::configure_validator_swarm(num_nodes, args.config_dir.clone(), None)
-            .expect("Failed to configure validator swarm");
+    let mut validator_swarm = LibraSwarm::configure_validator_swarm(
+        args.libra_node.as_ref(),
+        num_nodes,
+        args.config_dir.clone(),
+        None,
+    )
+    .expect("Failed to configure validator swarm");
 
     let mut full_node_swarm = if num_full_nodes > 0 {
         Some(
             LibraSwarm::configure_fn_swarm(
+                args.libra_node.as_ref(),
                 None, /* config dir */
                 None,
                 &validator_swarm.config,
@@ -63,11 +75,11 @@ fn main() {
         None
     };
     validator_swarm
-        .launch_attempt(!args.enable_logging)
+        .launch_attempt()
         .expect("Failed to launch validator swarm");
     if let Some(ref mut swarm) = full_node_swarm {
         swarm
-            .launch_attempt(!args.enable_logging)
+            .launch_attempt()
             .expect("Failed to launch full node swarm");
     }
 
@@ -78,7 +90,7 @@ fn main() {
     println!("To run the Libra CLI client in a separate process and connect to the validator nodes you just spawned, use this command:");
 
     println!(
-        "\tcargo run --bin cli -- -u {} -m {:?} --waypoint {} --chain-id {:?}",
+        "\tcli -u {} -m {:?} --waypoint {} --chain-id {:?}",
         format!("http://localhost:{}", validator_config.rpc.address.port()),
         libra_root_key_path,
         waypoint,
@@ -102,7 +114,7 @@ fn main() {
 
     println!("To run transaction generator run:");
     println!(
-        "\tcargo run -p cluster-test -- --mint-file {:?} --swarm --peers {:?} --emit-tx --workers-per-ac 1",
+        "\tcluster-test --mint-file {:?} --swarm --peers {:?} --emit-tx --workers-per-ac 1",
         libra_root_key_path, node_address_list,
     );
 
@@ -113,7 +125,7 @@ fn main() {
 
     println!("To run health check:");
     println!(
-        "\tcargo run -p cluster-test -- --mint-file {:?} --swarm --peers {:?} --health-check --duration 30",
+        "\tcluster-test --mint-file {:?} --swarm --peers {:?} --health-check --duration 30",
         libra_root_key_path, node_address_list,
     );
 
@@ -121,7 +133,7 @@ fn main() {
         let full_node_config = NodeConfig::load(&swarm.config.config_files[0]).unwrap();
         println!("To connect to the full nodes you just spawned, use this command:");
         println!(
-            "\tcargo run --bin cli -- -u {} -m {:?} --waypoint {} --chain-id {}",
+            "\tcli -u {} -m {:?} --waypoint {} --chain-id {}",
             format!("http://localhost:{}", full_node_config.rpc.address.port()),
             libra_root_key_path,
             waypoint,
@@ -133,8 +145,12 @@ fn main() {
         let faucet_port = libra_config::utils::get_available_port();
         let server_port = validator_swarm.get_client_port(0);
         println!("Starting faucet service at port: {}", faucet_port);
-        let process =
-            faucet::Process::start(faucet_port, server_port, Path::new(&libra_root_key_path));
+        let process = faucet::Process::start(
+            args.faucet_path.as_ref().unwrap().as_ref(),
+            faucet_port,
+            server_port,
+            Path::new(&libra_root_key_path),
+        );
         println!("Waiting for faucet connectivity");
         process
             .wait_for_connectivity()
@@ -150,9 +166,15 @@ fn main() {
 
         let port = validator_swarm.get_client_port(0);
         let client = if let Some(ref f) = faucet {
-            client::InteractiveClient::new_with_inherit_io_faucet(port, f.mint_url(), waypoint)
+            client::InteractiveClient::new_with_inherit_io_faucet(
+                args.cli_path.as_ref().unwrap().as_ref(),
+                port,
+                f.mint_url(),
+                waypoint,
+            )
         } else {
             client::InteractiveClient::new_with_inherit_io(
+                args.cli_path.as_ref().unwrap().as_ref(),
                 port,
                 Path::new(&libra_root_key_path),
                 &tmp_mnemonic_file.path(),

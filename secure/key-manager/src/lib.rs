@@ -20,6 +20,11 @@
 #![forbid(unsafe_code)]
 
 use crate::{
+    counters::{
+        KEYS_STILL_FRESH, LIVENESS_ERROR_ENCOUNTERED, NO_ACTION, ROTATED_IN_STORAGE,
+        SUBMITTED_ROTATION_TRANSACTION, UNEXPECTED_ERROR_ENCOUNTERED, WAITING_ON_RECONFIGURATION,
+        WAITING_ON_TRANSACTION_EXECUTION,
+    },
     libra_interface::LibraInterface,
     logging::{LogEntry, LogEvent, LogSchema},
 };
@@ -60,18 +65,20 @@ pub enum Action {
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Error, PartialEq)]
 pub enum Error {
-    #[error("Key mismatch, config: {0}, info: {0}")]
+    #[error("Key mismatch, config: {0}, info: {1}")]
     ConfigInfoKeyMismatch(Ed25519PublicKey, Ed25519PublicKey),
-    #[error("Key mismatch, config: {0}, storage: {0}")]
+    #[error("Key mismatch, config: {0}, storage: {1}")]
     ConfigStorageKeyMismatch(Ed25519PublicKey, Ed25519PublicKey),
     #[error("Data does not exist: {0}")]
     DataDoesNotExist(String),
     #[error(
-        "The libra_timestamp value on-chain isn't increasing. Last value: {0}, Current value: {0}"
+        "The libra_timestamp value on-chain isn't increasing. Last value: {0}, Current value: {1}"
     )]
     LivenessError(u64, u64),
-    #[error("Unable to retrieve the operator account address. Storage error: {0}")]
-    MissingAccountAddress(#[from] libra_secure_storage::Error),
+    #[error("Unable to retrieve the account address: {0}, storage error: {1}")]
+    MissingAccountAddress(String, String),
+    #[error("Storage error: {0}")]
+    StorageError(String),
     #[error("ValidatorInfo not found in ValidatorConfig: {0}")]
     ValidatorInfoNotFound(AccountAddress),
     #[error("Unknown error: {0}")]
@@ -82,6 +89,12 @@ pub enum Error {
 impl From<anyhow::Error> for Error {
     fn from(error: anyhow::Error) -> Self {
         Error::UnknownError(format!("{}", error))
+    }
+}
+
+impl From<libra_secure_storage::Error> for Error {
+    fn from(error: libra_secure_storage::Error) -> Self {
+        Error::StorageError(error.to_string())
     }
 }
 
@@ -139,15 +152,17 @@ where
                 Err(Error::LivenessError(last_value, current_value)) => {
                     // Log the liveness error and continue to execute.
                     let error = Error::LivenessError(last_value, current_value);
-                    info!(LogSchema::new(LogEntry::CheckKeyStatus)
+                    error!(LogSchema::new(LogEntry::CheckKeyStatus)
                         .event(LogEvent::Error)
                         .liveness_error(&error));
+                    counters::increment_metric_counter(LIVENESS_ERROR_ENCOUNTERED);
                 }
                 Err(e) => {
                     // Log the unexpected error and continue to execute.
-                    info!(LogSchema::new(LogEntry::CheckKeyStatus)
+                    error!(LogSchema::new(LogEntry::CheckKeyStatus)
                         .event(LogEvent::Error)
                         .unexpected_error(&e));
+                    counters::increment_metric_counter(UNEXPECTED_ERROR_ENCOUNTERED);
                 }
             };
 
@@ -214,7 +229,7 @@ where
 
     pub fn resubmit_consensus_key_transaction(&mut self) -> Result<(), Error> {
         let consensus_key = self.storage.get_public_key(CONSENSUS_KEY)?.public_key;
-        counters::increment_state("consensus_key", "submit_tx");
+        counters::increment_metric_counter(SUBMITTED_ROTATION_TRANSACTION);
         self.submit_key_rotation_transaction(consensus_key)
             .map(|_| ())
     }
@@ -224,7 +239,7 @@ where
         info!(LogSchema::new(LogEntry::KeyRotatedInStorage)
             .event(LogEvent::Success)
             .consensus_key(&consensus_key));
-        counters::increment_state("consensus_key", "complete");
+        counters::increment_metric_counter(ROTATED_IN_STORAGE);
         self.submit_key_rotation_transaction(consensus_key)
     }
 
@@ -289,8 +304,8 @@ where
 
         // If this is inconsistent, then we are waiting on a reconfiguration...
         if let Err(Error::ConfigInfoKeyMismatch(..)) = self.compare_info_to_config() {
-            info!(LogSchema::new(LogEntry::WaitForReconfiguration));
-            counters::increment_state("consensus_key", "waiting_on_reconfiguration");
+            warn!(LogSchema::new(LogEntry::WaitForReconfiguration));
+            counters::increment_metric_counter(WAITING_ON_RECONFIGURATION);
             return Ok(Action::NoAction);
         }
 
@@ -301,6 +316,8 @@ where
             return if last_rotation + self.txn_expiration_secs <= self.time_service.now() {
                 Ok(Action::SubmitKeyRotationTransaction)
             } else {
+                warn!(LogSchema::new(LogEntry::WaitForTransactionExecution));
+                counters::increment_metric_counter(WAITING_ON_TRANSACTION_EXECUTION);
                 Ok(Action::NoAction)
             };
         }
@@ -308,6 +325,8 @@ where
         if last_rotation + self.rotation_period_secs <= self.time_service.now() {
             Ok(Action::FullKeyRotation)
         } else {
+            info!(LogSchema::new(LogEntry::KeyStillFresh));
+            counters::increment_metric_counter(KEYS_STILL_FRESH);
             Ok(Action::NoAction)
         }
     }
@@ -324,7 +343,7 @@ where
             }
             Action::NoAction => {
                 info!(LogSchema::new(LogEntry::NoAction));
-                counters::increment_state("consensus_key", "no_action");
+                counters::increment_metric_counter(NO_ACTION);
                 Ok(())
             }
         }
@@ -334,7 +353,7 @@ where
         self.storage
             .get::<AccountAddress>(account_name)
             .map(|v| v.value)
-            .map_err(Error::MissingAccountAddress)
+            .map_err(|e| Error::MissingAccountAddress(account_name.into(), e.to_string()))
     }
 }
 

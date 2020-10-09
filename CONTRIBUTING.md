@@ -1,4 +1,7 @@
-# Contributing to Libra
+---
+id: contributing
+title: Contributing to Libra
+---
 
 Our goal is to make contributing to the Libra project easy and transparent.
 
@@ -34,12 +37,12 @@ detailed guidance about how to contribute to the project.
 
 #### Documentation
 
-Libra's website is also open source (the code can be found in this
-[repository](https://github.com/libra/website/)).  It is built using
+Libra's developer website is also open source (the code can be found in this
+[repository](https://github.com/libra/libra/developers.libra.org/website/)).  It is built using
 [Docusaurus](https://docusaurus.io/):
 
-If you know Markdown, you can already contribute! This lives in the [website
-repo](https://github.com/libra/website).
+If you know Markdown, you can already contribute! How to contribute can be found in the [website
+repo](https://github.com/libra/developers.libra.org/website/CONTRIBUTING.md).
 
 ## Developer Workflow
 
@@ -167,10 +170,10 @@ able to be built and passes all checks performed by CI.
 For pull request to be accepted by any Libra projects, a CLA must be signed.
 You will only need to do this once to work on any of Libra's open source
 projects. Individuals contributing on their own behalf can sign the [Individual
-CLA](https://github.com/libra/libra/blob/master/contributing/individual-cla.pdf).
+CLA](https://github.com/libra/libra/blob/master/documentation/contributing/individual-cla.pdf).
 If you are contributing on behalf of your employer, please ask them to sign the
 [Corporate
-CLA](https://github.com/libra/libra/blob/master/contributing/corporate-cla.pdf).
+CLA](https://github.com/libra/libra/blob/master/documentation/contributing/corporate-cla.pdf).
 
 ## Issues
 

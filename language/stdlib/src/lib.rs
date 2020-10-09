@@ -33,10 +33,15 @@ pub const DEBUG_MODULE_FILE_NAME: &str = "debug.move";
 pub const STD_LIB_DOC_DIR: &str = "modules/doc";
 /// The output path for transaction script documentation.
 pub const TRANSACTION_SCRIPTS_DOC_DIR: &str = "transaction_scripts/doc";
+/// The documentation root template for stdlib.
+pub const STD_LIB_DOC_TEMPLATE: &str = "modules/overview_template.md";
+/// The documentation root template for scripts.
+pub const TRANSACTION_SCRIPT_DOC_TEMPLATE: &str = "transaction_scripts/overview_template.md";
 
 pub const ERROR_DESC_DIR: &str = "error_descriptions";
 pub const ERROR_DESC_FILENAME: &str = "error_descriptions";
 
+pub const PACKED_TYPES_DIR: &str = "packed_types";
 pub const PACKED_TYPES_FILENAME: &str = "packed_types";
 pub const PACKED_TYPES_EXTENSION: &str = "txt";
 
@@ -71,9 +76,17 @@ pub fn filter_move_bytecode_files(
     })
 }
 
-pub fn stdlib_files() -> Vec<String> {
+pub fn path_in_crate<S>(relative: S) -> PathBuf
+where
+    S: Into<String>,
+{
     let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    path.push(STD_LIB_DIR);
+    path.push(relative.into());
+    path
+}
+
+pub fn stdlib_files() -> Vec<String> {
+    let path = path_in_crate(STD_LIB_DIR);
     let dirfiles = datatest_stable::utils::iterate_directory(&path);
     filter_move_files(dirfiles)
         .flat_map(|path| path.into_os_string().into_string())
@@ -81,8 +94,7 @@ pub fn stdlib_files() -> Vec<String> {
 }
 
 pub fn stdlib_bytecode_files() -> Vec<String> {
-    let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    path.push(COMPILED_OUTPUT_PATH);
+    let path = path_in_crate(COMPILED_OUTPUT_PATH);
     let names = stdlib_files();
     let dirfiles = datatest_stable::utils::iterate_directory(&path);
     let res: Vec<String> = filter_move_bytecode_files(dirfiles)
@@ -116,8 +128,7 @@ pub fn stdlib_bytecode_files() -> Vec<String> {
 }
 
 pub fn script_files() -> Vec<String> {
-    let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    path.push(TRANSACTION_SCRIPTS);
+    let path = path_in_crate(TRANSACTION_SCRIPTS);
     let dirfiles = datatest_stable::utils::iterate_directory(&path);
     filter_move_files(dirfiles)
         .flat_map(|path| path.into_os_string().into_string())
@@ -126,7 +137,7 @@ pub fn script_files() -> Vec<String> {
 
 pub fn build_stdlib() -> BTreeMap<String, CompiledModule> {
     let (_, compiled_units) =
-        move_compile(&stdlib_files(), &[], Some(Address::LIBRA_CORE)).unwrap();
+        move_compile(&stdlib_files(), &[], Some(Address::LIBRA_CORE), None).unwrap();
     let mut modules = BTreeMap::new();
     for (i, compiled_unit) in compiled_units.into_iter().enumerate() {
         let name = compiled_unit.name();
@@ -150,6 +161,7 @@ pub fn compile_script(source_file_str: String) -> Vec<u8> {
         &[source_file_str],
         &stdlib_files(),
         Some(Address::LIBRA_CORE),
+        None,
     )
     .unwrap();
     let mut script_bytes = vec![];
@@ -174,14 +186,29 @@ pub fn save_binary(path: &Path, binary: &[u8]) -> bool {
 }
 
 pub fn build_stdlib_doc() {
-    build_doc(STD_LIB_DOC_DIR, "", stdlib_files().as_slice(), "")
+    build_doc(
+        STD_LIB_DOC_DIR,
+        "",
+        Some(
+            path_in_crate(STD_LIB_DOC_TEMPLATE)
+                .to_string_lossy()
+                .to_string(),
+        ),
+        stdlib_files().as_slice(),
+        "",
+    )
 }
 
-pub fn build_transaction_script_doc(script_file_str: String) {
+pub fn build_transaction_script_doc(script_files: &[String]) {
     build_doc(
         TRANSACTION_SCRIPTS_DOC_DIR,
         STD_LIB_DOC_DIR,
-        &[script_file_str],
+        Some(
+            path_in_crate(TRANSACTION_SCRIPT_DOC_TEMPLATE)
+                .to_string_lossy()
+                .to_string(),
+        ),
+        script_files,
         STD_LIB_DIR,
     )
 }
@@ -204,7 +231,13 @@ pub fn build_stdlib_error_code_map() {
     build_error_code_map(path.to_str().unwrap(), stdlib_files().as_slice(), "")
 }
 
-fn build_doc(output_path: &str, doc_path: &str, sources: &[String], dep_path: &str) {
+fn build_doc(
+    output_path: &str,
+    doc_path: &str,
+    template: Option<String>,
+    sources: &[String],
+    dep_path: &str,
+) {
     let mut options = move_prover::cli::Options::default();
     options.move_sources = sources.to_vec();
     if !dep_path.is_empty() {
@@ -212,9 +245,11 @@ fn build_doc(output_path: &str, doc_path: &str, sources: &[String], dep_path: &s
     }
     options.verbosity_level = LevelFilter::Warn;
     options.run_docgen = true;
-    options.docgen.include_impl = true;
-    options.docgen.include_private_fun = true;
-    options.docgen.specs_inlined = false;
+    // Take the defaults here for docgen. Changes in options should be applied there so
+    // command line and invocation here have same output.
+    if template.is_some() {
+        options.docgen.root_doc_template = template;
+    }
     if !doc_path.is_empty() {
         options.docgen.doc_path = vec![doc_path.to_string()];
     }
@@ -237,9 +272,19 @@ fn build_abi(output_path: &str, sources: &[String], dep_path: &str, compiled_scr
     move_prover::run_move_prover_errors_to_stderr(options).unwrap();
 }
 
+pub fn get_packed_types_path() -> PathBuf {
+    let mut path = PathBuf::from(COMPILED_OUTPUT_PATH);
+    path.push(PACKED_TYPES_DIR);
+    path.push(PACKED_TYPES_FILENAME);
+    path.set_extension(PACKED_TYPES_EXTENSION);
+    path
+}
+
 pub fn build_packed_types_map() {
     let mut options = move_prover::cli::Options::default();
     let mut path = PathBuf::from(COMPILED_OUTPUT_PATH);
+    path.push(PACKED_TYPES_DIR);
+    fs::create_dir_all(&path).unwrap();
     path.push(PACKED_TYPES_FILENAME);
     path.set_extension(PACKED_TYPES_EXTENSION);
     options.output_path = path.to_str().unwrap().to_string();

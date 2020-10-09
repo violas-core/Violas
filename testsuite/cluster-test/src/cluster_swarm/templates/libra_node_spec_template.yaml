@@ -24,7 +24,7 @@ spec:
     - mountPath: /opt/libra/data
       name: data
   - name: debug
-    image: 853397791086.dkr.ecr.us-west-2.amazonaws.com/libra_e2e:{image_tag}
+    image: 853397791086.dkr.ecr.us-west-2.amazonaws.com/libra/validator:{image_tag}
     imagePullPolicy: Always
     volumeMounts:
       - mountPath: /opt/libra/data
@@ -38,11 +38,12 @@ spec:
         set -x;
         while true; do sleep 10; done
   - name: main
-    image: 853397791086.dkr.ecr.us-west-2.amazonaws.com/libra_e2e:{image_tag}
+    image: 853397791086.dkr.ecr.us-west-2.amazonaws.com/libra/validator:{image_tag}
     imagePullPolicy: Always
     resources:
       requests:
         cpu: 7800m
+    command: ["/opt/libra/bin/libra-node", "-f", "/opt/libra/etc/node.yaml"]
     ports:
     - containerPort: 6180
     - containerPort: 6181
@@ -56,11 +57,9 @@ spec:
       name: config
     env:
     - name: RUST_LOG
-      value: "warn"
+      value: "debug"
     - name: STRUCT_LOG_TCP_ADDR
       value: "127.0.0.1:5044"
-    - name: STRUCT_LOG_LEVEL
-      value: "debug"
     - name: RUST_BACKTRACE
       value: "1"
     - name: MY_POD_IP

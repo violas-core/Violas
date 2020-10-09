@@ -26,6 +26,7 @@ use libra_types::{
     transaction::Version,
 };
 use mirai_annotations::*;
+use std::sync::Arc;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum ChildInfo {
@@ -97,9 +98,9 @@ impl InternalInfo {
     }
 }
 
-pub struct JellyfishMerkleRestore<'a, S> {
+pub struct JellyfishMerkleRestore {
     /// The underlying storage.
-    store: &'a S,
+    store: Arc<dyn TreeWriter>,
 
     /// The version of the tree we are restoring.
     version: Version,
@@ -150,29 +151,28 @@ pub struct JellyfishMerkleRestore<'a, S> {
     expected_root_hash: HashValue,
 }
 
-impl<'a, S> JellyfishMerkleRestore<'a, S>
-where
-    S: 'a + TreeReader + TreeWriter,
-{
-    pub fn new(store: &'a S, version: Version, expected_root_hash: HashValue) -> Result<Self> {
-        let (partial_nodes, previous_leaf) = match store.get_rightmost_leaf()? {
-            Some((node_key, leaf_node)) => {
+impl JellyfishMerkleRestore {
+    pub fn new<D: 'static + TreeReader + TreeWriter>(
+        store: Arc<D>,
+        version: Version,
+        expected_root_hash: HashValue,
+    ) -> Result<Self> {
+        let tree_reader = Arc::clone(&store);
+        let (partial_nodes, previous_leaf) =
+            if let Some((node_key, leaf_node)) = tree_reader.get_rightmost_leaf()? {
+                // TODO: confirm rightmost leaf is at the desired version
                 // If the system crashed in the middle of the previous restoration attempt, we need
                 // to recover the partial nodes to the state right before the crash.
                 (
-                    Self::recover_partial_nodes(store, version, node_key)?,
+                    Self::recover_partial_nodes(tree_reader.as_ref(), version, node_key)?,
                     Some(leaf_node),
                 )
-            }
-            None => {
-                // If no rightmost leaf exists, it means this is the first time we start and
-                // storage is still empty. We use a single root node in this case.
+            } else {
                 (
                     vec![InternalInfo::new_empty(NodeKey::new_empty_path(version))],
                     None,
                 )
-            }
-        };
+            };
 
         Ok(Self {
             store,
@@ -185,10 +185,26 @@ where
         })
     }
 
+    pub fn new_overwrite<D: 'static + TreeWriter>(
+        store: Arc<D>,
+        version: Version,
+        expected_root_hash: HashValue,
+    ) -> Result<Self> {
+        Ok(Self {
+            store,
+            version,
+            partial_nodes: vec![InternalInfo::new_empty(NodeKey::new_empty_path(version))],
+            frozen_nodes: NodeBatch::new(),
+            previous_leaf: None,
+            num_keys_received: 0,
+            expected_root_hash,
+        })
+    }
+
     /// Recovers partial nodes from storage. We do this by looking at all the ancestors of the
     /// rightmost leaf. The ones do not exist in storage are the partial nodes.
     fn recover_partial_nodes(
-        store: &'a S,
+        store: &dyn TreeReader,
         version: Version,
         rightmost_leaf_node_key: NodeKey,
     ) -> Result<Vec<InternalInfo>> {

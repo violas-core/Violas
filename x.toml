@@ -1,3 +1,8 @@
+tools = [
+   ["sccache", "0.2.13"],
+   ["grcov", "0.5.15"],
+]
+
 [system-tests]
 smoke-test = { path = "smoke-test" }
 
@@ -14,6 +19,7 @@ allowed = [
     # Known to have false positive at the moment,
     "clippy::mutable_key_type",
     "clippy::eval-order-dependence",
+    "clippy::new-without-default",
 ]
 warn = [
     "clippy::wildcard_dependencies",
@@ -76,7 +82,6 @@ members = [
     "common/libradoc",
     "common/proptest-helpers",
     "common/retrier",
-    "common/workspace-builder",
     "devtools/x",
     "devtools/x-core",
     "devtools/x-lint",
@@ -93,9 +98,13 @@ members = [
     "language/ir-testsuite",
     "language/move-lang/functional-tests",
     "language/move-prover/test-utils",
+    "language/move-vm/integration-tests",
+    "language/move-vm/test-utils",
     "language/vm/serializer-tests",
     "network/memsocket",
     "network/socket-bench-server",
+    "testsuite/cli",
+    "testsuite/cli/libra-wallet",
     "testsuite/cluster-test",
     "testsuite/generate-format",
     "testsuite/libra-fuzzer",
@@ -122,7 +131,6 @@ members = [
 [workspace.subsets.release]
 # The Libra release binaries
 members = [
-    "config/config-builder",
     "config/management/genesis",
     "consensus/safety-rules",
     "execution/db-bootstrapper",

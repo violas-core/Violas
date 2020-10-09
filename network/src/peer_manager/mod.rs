@@ -11,7 +11,7 @@
 //!  notification about new/lost Peers to the rest of the network stack.
 //!  * An actor responsible for dialing and listening for new connections.
 use crate::{
-    counters,
+    counters::{self, FAILED_LABEL, SUCCEEDED_LABEL},
     interface::{NetworkNotification, NetworkProvider, NetworkRequest},
     logging::*,
     peer::DisconnectReason,
@@ -23,6 +23,7 @@ use crate::{
     transport::{Connection, ConnectionId, ConnectionMetadata},
     ProtocolId,
 };
+use anyhow::format_err;
 use bytes::Bytes;
 use channel::{self, libra_channel};
 use futures::{
@@ -43,7 +44,7 @@ use std::{
     fmt::Debug,
     marker::PhantomData,
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::runtime::Handle;
 
@@ -371,6 +372,25 @@ where
             .set(outbound as i64);
     }
 
+    fn sample_connected_peers(&self) {
+        // Sample final state at most once a minute, ensuring consistent ordering
+        sample!(
+            SampleRate::Duration(Duration::from_secs(60)),
+            info!(
+                NetworkSchema::new(&self.network_context),
+                peers = (&self.active_peers)
+                    .iter()
+                    .map(|(_, (conn_metadata, _))| (
+                        conn_metadata.remote_peer_id,
+                        conn_metadata.origin
+                    ))
+                    .collect::<Vec<(PeerId, ConnectionOrigin)>>()
+                    .sort_by(|(a_addr, _), (b_addr, _)| a_addr.cmp(b_addr)),
+                "Current connected peers"
+            )
+        );
+    }
+
     /// Get the [`NetworkAddress`] we're listening for incoming connections on
     pub fn listen_addr(&self) -> &NetworkAddress {
         &self.listen_addr
@@ -403,7 +423,7 @@ where
 
         warn!(
             NetworkSchema::new(&self.network_context),
-            "PeerManager loop terminated"
+            "PeerManager actor terminated"
         );
     }
 
@@ -415,6 +435,7 @@ where
             self.network_context,
             event
         );
+        self.sample_connected_peers();
         match event {
             TransportNotification::NewConnection(conn) => {
                 info!(
@@ -458,7 +479,8 @@ where
                     // The client explicitly closed the connection and it should be notified.
                     if let Err(send_err) = oneshot_tx.send(Ok(())) {
                         info!(
-                            NetworkSchema::new(&self.network_context).debug_error(&send_err),
+                            NetworkSchema::new(&self.network_context),
+                            error = ?send_err,
                             "{} Failed to send connection close error. Error: {:?}",
                             self.network_context,
                             send_err
@@ -489,6 +511,7 @@ where
             self.network_context,
             request
         );
+        self.sample_connected_peers();
         match request {
             ConnectionRequest::DialPeer(requested_peer_id, addr, response_tx) => {
                 // Only dial peers which we aren't already connected with
@@ -507,7 +530,7 @@ where
                         warn!(
                             NetworkSchema::new(&self.network_context)
                                 .remote_peer(&requested_peer_id),
-                            "{} Receiver for DialPeer {} dropped",
+                            "{} Receiver for DialPeer {} dropped sending error message",
                             self.network_context,
                             requested_peer_id.short_str()
                         );
@@ -535,7 +558,8 @@ where
                     );
                     if let Err(err) = resp_tx.send(Err(PeerManagerError::NotConnected(peer_id))) {
                         info!(
-                            NetworkSchema::new(&self.network_context).debug_error(&err),
+                            NetworkSchema::new(&self.network_context),
+                            error = ?err,
                             "{} Failed to indicate that connection is already closed. Error: {:?}",
                             self.network_context,
                             err
@@ -554,13 +578,15 @@ where
             self.network_context,
             request
         );
+        self.sample_connected_peers();
         match request {
             PeerManagerRequest::SendMessage(peer_id, msg) => {
-                if let Some((_, sender)) = self.active_peers.get_mut(&peer_id) {
+                if let Some((conn_metadata, sender)) = self.active_peers.get_mut(&peer_id) {
                     if let Err(err) = sender.push(msg.protocol_id, NetworkRequest::SendMessage(msg))
                     {
                         info!(
-                            NetworkSchema::new(&self.network_context).debug_error(&err),
+                            NetworkSchema::new(&self.network_context).connection_metadata(conn_metadata),
+                            error = ?err,
                             "{} Failed to forward outbound message to downstream actor. Error: {:?}",
                             self.network_context, err
                         );
@@ -575,10 +601,11 @@ where
                 }
             }
             PeerManagerRequest::SendRpc(peer_id, req) => {
-                if let Some((_, sender)) = self.active_peers.get_mut(&peer_id) {
+                if let Some((conn_metadata, sender)) = self.active_peers.get_mut(&peer_id) {
                     if let Err(err) = sender.push(req.protocol_id, NetworkRequest::SendRpc(req)) {
                         info!(
-                            NetworkSchema::new(&self.network_context),
+                            NetworkSchema::new(&self.network_context)
+                                .connection_metadata(conn_metadata),
                             "{} Failed to forward outbound rpc to downstream actor. Error: {:?}",
                             self.network_context,
                             err
@@ -673,8 +700,8 @@ where
                     {
                         error!(
                             NetworkSchema::new(&network_context)
-                                .remote_peer(&peer_id)
-                                .error(e.to_string()),
+                                .remote_peer(&peer_id),
+                            error = %e,
                             "{} Closing connection with Peer {} failed with error: {}",
                             network_context,
                             peer_id.short_str(),
@@ -722,8 +749,8 @@ where
             if let Err(e) = handler.push(peer_id, notification.clone()) {
                 warn!(
                     NetworkSchema::new(&self.network_context)
-                        .remote_peer(&peer_id)
-                        .debug_error(&e),
+                        .remote_peer(&peer_id),
+                    error = ?e,
                     connection_notification = notification,
                     "{} Failed to send notification {} to handler for peer: {}. Error: {:?}",
                     self.network_context,
@@ -775,7 +802,8 @@ where
                         PeerManagerNotification::RecvMessage(peer_id, msg),
                     ) {
                         warn!(
-                            NetworkSchema::new(&network_context).debug_error(&err),
+                            NetworkSchema::new(&network_context),
+                            error = ?err,
                             protocol_id = protocol_id,
                             "{} Upstream handler unable to handle messages for protocol: {}. Error: {:?}",
                             network_context, protocol_id, err
@@ -800,7 +828,8 @@ where
                         PeerManagerNotification::RecvRpc(peer_id, rpc_req),
                     ) {
                         warn!(
-                            NetworkSchema::new(&network_context).debug_error(&err),
+                            NetworkSchema::new(&network_context),
+                            error = ?err,
                             "{} Upstream handler unable to handle rpc for protocol: {}. Error: {:?}",
                             network_context, protocol_id, err
                         );
@@ -871,7 +900,7 @@ where
         debug!(
             NetworkSchema::new(&network_context),
             listen_address = listen_addr,
-            "{} listening on {:?}",
+            "{} listening on '{}'",
             network_context,
             listen_addr
         );
@@ -913,12 +942,20 @@ where
                                 self.network_context,
                                 addr
                             );
-                            pending_inbound_connections.push(upgrade.map(|out| (out, addr)));
+
+                            counters::pending_connection_upgrades(
+                                &self.network_context,
+                                ConnectionOrigin::Inbound,
+                            )
+                            .inc();
+
+                            let start_time = Instant::now();
+                            pending_inbound_connections.push(upgrade.map(move |out| (out, addr, start_time)));
                         }
                         Err(e) => {
                             warn!(
-                                NetworkSchema::new(&self.network_context)
-                                    .error(e.to_string()),
+                                NetworkSchema::new(&self.network_context),
+                                error = %e,
                                 "{} Incoming connection error {}",
                                 self.network_context,
                                 e
@@ -926,11 +963,11 @@ where
                         }
                     }
                 },
-                (upgrade, addr, peer_id, response_tx) = pending_outbound_connections.select_next_some() => {
-                    self.handle_completed_outbound_upgrade(upgrade, addr, peer_id, response_tx).await;
+                (upgrade, addr, peer_id, start_time, response_tx) = pending_outbound_connections.select_next_some() => {
+                    self.handle_completed_outbound_upgrade(upgrade, addr, peer_id, start_time, response_tx).await;
                 },
-                (upgrade, addr) = pending_inbound_connections.select_next_some() => {
-                    self.handle_completed_inbound_upgrade(upgrade, addr).await;
+                (upgrade, addr, start_time) = pending_inbound_connections.select_next_some() => {
+                    self.handle_completed_inbound_upgrade(upgrade, addr, start_time).await;
                 },
                 complete => break,
             }
@@ -952,6 +989,7 @@ where
                 Result<Connection<TSocket>, TTransport::Error>,
                 NetworkAddress,
                 PeerId,
+                Instant,
                 oneshot::Sender<Result<(), PeerManagerError>>,
             ),
         >,
@@ -959,11 +997,20 @@ where
         match dial_peer_request {
             TransportRequest::DialPeer(peer_id, addr, response_tx) => {
                 match self.transport.dial(peer_id, addr.clone()) {
-                    Ok(upgrade) => Some(
-                        upgrade
-                            .map(move |out| (out, addr, peer_id, response_tx))
-                            .boxed(),
-                    ),
+                    Ok(upgrade) => {
+                        counters::pending_connection_upgrades(
+                            &self.network_context,
+                            ConnectionOrigin::Outbound,
+                        )
+                        .inc();
+
+                        let start_time = Instant::now();
+                        Some(
+                            upgrade
+                                .map(move |out| (out, addr, peer_id, start_time, response_tx))
+                                .boxed(),
+                        )
+                    }
                     Err(error) => {
                         if response_tx
                             .send(Err(PeerManagerError::from_transport_error(error)))
@@ -988,76 +1035,86 @@ where
         upgrade: Result<Connection<TSocket>, TTransport::Error>,
         addr: NetworkAddress,
         peer_id: PeerId,
+        start_time: Instant,
         response_tx: oneshot::Sender<Result<(), PeerManagerError>>,
     ) {
-        match upgrade {
+        counters::pending_connection_upgrades(&self.network_context, ConnectionOrigin::Outbound)
+            .dec();
+
+        let elapsed_time = start_time.elapsed().as_secs_f64();
+        let upgrade = match upgrade {
             Ok(connection) => {
                 let dialed_peer_id = connection.metadata.remote_peer_id;
-                let response = if dialed_peer_id == peer_id {
-                    debug!(
-                        NetworkSchema::new(&self.network_context)
-                            .connection_metadata(&connection.metadata)
-                            .network_address(&addr),
-                        "{} Peer '{}' successfully dialed at '{}'",
-                        self.network_context,
-                        peer_id.short_str(),
-                        addr
-                    );
-                    let event = TransportNotification::NewConnection(connection);
-                    // Send the new connection to PeerManager
-                    self.transport_notifs_tx.send(event).await.unwrap();
-                    Ok(())
+                if dialed_peer_id == peer_id {
+                    Ok(connection)
                 } else {
-                    let e = ::anyhow::format_err!(
-                        "Dialed PeerId ({}) differs from expected PeerId ({})",
+                    Err(PeerManagerError::from_transport_error(format_err!(
+                        "Dialed PeerId '{}' differs from expected PeerId '{}'",
                         dialed_peer_id.short_str(),
                         peer_id.short_str()
-                    );
-
-                    warn!(
-                        NetworkSchema::new(&self.network_context)
-                            .remote_peer(&peer_id)
-                            .error(e.to_string()),
-                        "{} {}", self.network_context, e
-                    );
-
-                    Err(PeerManagerError::from_transport_error(e))
-                };
-
-                if response_tx.send(response).is_err() {
-                    warn!(
-                        NetworkSchema::new(&self.network_context).remote_peer(&peer_id),
-                        "{} Receiver for DialPeer {} request dropped",
-                        self.network_context,
-                        peer_id.short_str()
-                    );
+                    )))
                 }
             }
-            Err(error) => {
+            Err(err) => Err(PeerManagerError::from_transport_error(err)),
+        };
+
+        let response = match upgrade {
+            Ok(connection) => {
+                debug!(
+                    NetworkSchema::new(&self.network_context)
+                        .connection_metadata(&connection.metadata)
+                        .network_address(&addr),
+                    "{} Peer '{}' successfully dialed at '{}' after {:.3} secs",
+                    self.network_context,
+                    peer_id.short_str(),
+                    addr,
+                    elapsed_time,
+                );
+
+                counters::connection_upgrade_time(
+                    &self.network_context,
+                    ConnectionOrigin::Outbound,
+                    SUCCEEDED_LABEL,
+                )
+                .observe(elapsed_time);
+
+                // Send the new connection to PeerManager
+                let event = TransportNotification::NewConnection(connection);
+                self.transport_notifs_tx.send(event).await.unwrap();
+
+                Ok(())
+            }
+            Err(err) => {
                 error!(
                     NetworkSchema::new(&self.network_context)
                         .remote_peer(&peer_id)
-                        .network_address(&addr)
-                        .error(error.to_string()),
+                        .network_address(&addr),
+                    error = %err,
                     "{} Error dialing Peer {} at {}: {}",
                     self.network_context,
                     peer_id.short_str(),
                     addr,
-                    error
+                    err
                 );
 
-                if response_tx
-                    .send(Err(PeerManagerError::from_transport_error(error)))
-                    .is_err()
-                {
-                    warn!(
-                        NetworkSchema::new(&self.network_context).remote_peer(&peer_id),
-                        "{} Receiver for DialPeer {} request dropped",
-                        self.network_context,
-                        peer_id.short_str()
-                    );
-                }
+                counters::connection_upgrade_time(
+                    &self.network_context,
+                    ConnectionOrigin::Outbound,
+                    FAILED_LABEL,
+                )
+                .observe(elapsed_time);
+
+                Err(err)
             }
+        };
+
+        if response_tx.send(response).is_err() {
+            warn!(
+                NetworkSchema::new(&self.network_context).remote_peer(&peer_id),
+                "{} Receiver for DialPeer {} request dropped",
+                self.network_context,
+                peer_id.short_str()
+            );
         }
     }
 
@@ -1065,28 +1122,53 @@ where
         &mut self,
         upgrade: Result<Connection<TSocket>, TTransport::Error>,
         addr: NetworkAddress,
+        start_time: Instant,
     ) {
+        counters::pending_connection_upgrades(&self.network_context, ConnectionOrigin::Inbound)
+            .dec();
+
+        let elapsed_time = start_time.elapsed().as_secs_f64();
         match upgrade {
             Ok(connection) => {
                 debug!(
                     NetworkSchema::new(&self.network_context)
                         .connection_metadata_with_address(&connection.metadata),
-                    "{} Connection from {} at {} successfully upgraded",
+                    "{} Connection from {} at {} successfully upgraded after {:.3} secs",
                     self.network_context,
                     connection.metadata.remote_peer_id.short_str(),
-                    addr
+                    addr,
+                    elapsed_time,
                 );
-                let event = TransportNotification::NewConnection(connection);
+
+                counters::connection_upgrade_time(
+                    &self.network_context,
+                    ConnectionOrigin::Inbound,
+                    SUCCEEDED_LABEL,
+                )
+                .observe(elapsed_time);
+
                 // Send the new connection to PeerManager
+                let event = TransportNotification::NewConnection(connection);
                 self.transport_notifs_tx.send(event).await.unwrap();
             }
-            Err(e) => {
+            Err(err) => {
                 warn!(
                     NetworkSchema::new(&self.network_context)
-                        .network_address(&addr)
-                        .error(e.to_string()),
-                    "{} Connection from {} failed to upgrade {}", self.network_context, addr, e
+                        .network_address(&addr),
+                    error = %err,
+                    "{} Connection from {} failed to upgrade after {:.3} secs: {}",
+                    self.network_context,
+                    addr,
+                    elapsed_time,
+                    err,
                 );
+
+                counters::connection_upgrade_time(
+                    &self.network_context,
+                    ConnectionOrigin::Inbound,
+                    FAILED_LABEL,
+                )
+                .observe(elapsed_time);
             }
         }
     }

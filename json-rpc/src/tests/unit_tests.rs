@@ -29,10 +29,7 @@ use libra_metrics::get_all_metrics;
 use libra_proptest_helpers::ValueGenerator;
 use libra_types::{
     account_address::AccountAddress,
-    account_config::{
-        from_currency_code_string, libra_root_address, testnet_dd_account_address, AccountResource,
-        FreezingBit, LBR_NAME,
-    },
+    account_config::{from_currency_code_string, AccountResource, FreezingBit, LBR_NAME},
     account_state::AccountState,
     account_state_blob::{AccountStateBlob, AccountStateWithProof},
     chain_id::ChainId,
@@ -281,6 +278,22 @@ fn test_json_rpc_protocol_invalid_requests() {
             }),
         ),
         (
+            "get_metadata invalid arguments: version is too large",
+            json!({"jsonrpc": "2.0", "method": "get_metadata", "params": [version+1], "id": 1}),
+            json!({
+                "error": {
+                    "code": -32602,
+                    "message": format!("Invalid param version(params[0]): should be <= known latest version {}", version),
+                    "data": null
+                },
+                "id": 1,
+                "jsonrpc": "2.0",
+                "libra_chain_id": ChainId::test().id(),
+                "libra_ledger_timestampusec": timestamp,
+                "libra_ledger_version": version
+            }),
+        ),
+        (
             "get_account invalid param data type",
             json!({"jsonrpc": "2.0", "method": "get_account", "params": [false], "id": 1}),
             json!({
@@ -342,6 +355,18 @@ fn test_json_rpc_protocol_invalid_requests() {
                 "libra_chain_id": ChainId::test().id(),
                 "libra_ledger_timestampusec": timestamp,
                 "libra_ledger_version": version
+            }),
+        ),
+        (
+            "get_transactions: start_version is too big, returns empty array",
+            json!({"jsonrpc": "2.0", "method": "get_transactions", "params": [version+1, 1, true], "id": 1}),
+            json!({
+                "id": 1,
+                "jsonrpc": "2.0",
+                "libra_chain_id": ChainId::test().id(),
+                "libra_ledger_timestampusec": timestamp,
+                "libra_ledger_version": version,
+                "result": []
             }),
         ),
         (
@@ -425,6 +450,18 @@ fn test_json_rpc_protocol_invalid_requests() {
             }),
         ),
         (
+            "get_events: start param is too big",
+            json!({"jsonrpc": "2.0", "method": "get_events", "params": ["13000000000000000000000000000000000000000a550c18", version+1, 1], "id": 1}),
+            json!({
+                "id": 1,
+                "jsonrpc": "2.0",
+                "libra_chain_id": ChainId::test().id(),
+                "libra_ledger_timestampusec": timestamp,
+                "libra_ledger_version": version,
+                "result": []
+            }),
+        ),
+        (
             "get_events: invalid limit param",
             json!({"jsonrpc": "2.0", "method": "get_events", "params": ["13000000000000000000000000000000000000000a550c18", 1, "invalid"], "id": 1}),
             json!({
@@ -489,6 +526,18 @@ fn test_json_rpc_protocol_invalid_requests() {
             }),
         ),
         (
+            "get_account_transaction: seq number is too big",
+            json!({"jsonrpc": "2.0", "method": "get_account_transaction", "params": ["e1b3d22871989e9fd9dc6814b2f4fc41", version+1, false], "id": 1}),
+            json!({
+                "id": 1,
+                "jsonrpc": "2.0",
+                "libra_chain_id": ChainId::test().id(),
+                "libra_ledger_timestampusec": timestamp,
+                "libra_ledger_version": version,
+                "result": null
+            }),
+        ),
+        (
             "get_account_transactions: invalid account",
             json!({"jsonrpc": "2.0", "method": "get_account_transactions", "params": ["invalid", 1, 2, false], "id": 1}),
             json!({
@@ -518,6 +567,18 @@ fn test_json_rpc_protocol_invalid_requests() {
                 "libra_chain_id": ChainId::test().id(),
                 "libra_ledger_timestampusec": timestamp,
                 "libra_ledger_version": version
+            }),
+        ),
+        (
+            "get_account_transactions: start param is too big",
+            json!({"jsonrpc": "2.0", "method": "get_account_transactions", "params": ["0000000000000000000000000A550C18", version+1, 2, false], "id": 1}),
+            json!({
+                "id": 1,
+                "jsonrpc": "2.0",
+                "libra_chain_id": ChainId::test().id(),
+                "libra_ledger_timestampusec": timestamp,
+                "libra_ledger_version": version,
+                "result": []
             }),
         ),
         (
@@ -558,7 +619,23 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid param known version(params[0]): should be unsigned int64",
+                    "message": "Invalid param version(params[0]): should be unsigned int64",
+                    "data": null
+                },
+                "id": 1,
+                "jsonrpc": "2.0",
+                "libra_chain_id": ChainId::test().id(),
+                "libra_ledger_timestampusec": timestamp,
+                "libra_ledger_version": version
+            }),
+        ),
+        (
+            "get_state_proof: version is too large",
+            json!({"jsonrpc": "2.0", "method": "get_state_proof", "params": [version+1], "id": 1}),
+            json!({
+                "error": {
+                    "code": -32602,
+                    "message": format!("Invalid param version(params[0]): should be <= known latest version {}", version),
                     "data": null
                 },
                 "id": 1,
@@ -584,186 +661,75 @@ fn test_json_rpc_protocol_invalid_requests() {
                 "libra_ledger_version": version
             }),
         ),
+        (
+            "get_account_state_with_proof: invalid version",
+            json!({"jsonrpc": "2.0", "method": "get_account_state_with_proof", "params": ["e1b3d22871989e9fd9dc6814b2f4fc41", "invalid", null], "id": 1}),
+            json!({
+                "error": {
+                    "code": -32602,
+                    "message": "Invalid param version(params[1]): should be unsigned int64",
+                    "data": null
+                },
+                "id": 1,
+                "jsonrpc": "2.0",
+                "libra_chain_id": ChainId::test().id(),
+                "libra_ledger_timestampusec": timestamp,
+                "libra_ledger_version": version
+            }),
+        ),
+        (
+            "get_account_state_with_proof: invalid ledger version",
+            json!({"jsonrpc": "2.0", "method": "get_account_state_with_proof", "params": ["e1b3d22871989e9fd9dc6814b2f4fc41", version, "invalid"], "id": 1}),
+            json!({
+                "error": {
+                    "code": -32602,
+                    "message": "Invalid param ledger version for proof(params[2]): should be unsigned int64",
+                    "data": null
+                },
+                "id": 1,
+                "jsonrpc": "2.0",
+                "libra_chain_id": ChainId::test().id(),
+                "libra_ledger_timestampusec": timestamp,
+                "libra_ledger_version": version
+            }),
+        ),
+        (
+            "get_account_state_with_proof: version is too large",
+            json!({"jsonrpc": "2.0", "method": "get_account_state_with_proof", "params": ["e1b3d22871989e9fd9dc6814b2f4fc41", version+1, null], "id": 1}),
+            json!({
+                "error": {
+                    "code": -32602,
+                    "message": format!("Invalid param version(params[1]): should be <= known latest version {}", version),
+                    "data": null
+                },
+                "id": 1,
+                "jsonrpc": "2.0",
+                "libra_chain_id": ChainId::test().id(),
+                "libra_ledger_timestampusec": timestamp,
+                "libra_ledger_version": version
+            }),
+        ),
+        (
+            "get_account_state_with_proof: ledger version is too large",
+            json!({"jsonrpc": "2.0", "method": "get_account_state_with_proof", "params": ["e1b3d22871989e9fd9dc6814b2f4fc41", null, version+1], "id": 1}),
+            json!({
+                "error": {
+                    "code": -32602,
+                    "message": format!("Invalid param ledger version for proof(params[2]): should be <= known latest version {}", version),
+                    "data": null
+                },
+                "id": 1,
+                "jsonrpc": "2.0",
+                "libra_chain_id": ChainId::test().id(),
+                "libra_ledger_timestampusec": timestamp,
+                "libra_ledger_version": version
+            }),
+        ),
     ];
     for (name, request, expected) in calls {
         let resp = client.post(&url).json(&request).send().unwrap();
         assert_eq!(resp.status(), 200);
 
-        let resp_json: serde_json::Value = resp.json().unwrap();
-        assert_eq!(expected, resp_json, "test: {}", name);
-    }
-}
-
-#[test]
-fn test_json_rpc_protocol() {
-    let (mock_db, _runtime, url, _) = create_db_and_runtime();
-
-    let version = mock_db.version;
-    let timestamp = mock_db.get_block_timestamp(version).unwrap();
-
-    let calls = vec![
-        (
-            "get_currencies",
-            json!({"jsonrpc": "2.0", "method": "get_currencies", "params": [], "id": 1}),
-            json!({
-              "id": 1,
-              "jsonrpc": "2.0",
-              "libra_chain_id": ChainId::test().id(),
-              "libra_ledger_timestampusec": timestamp,
-              "libra_ledger_version": version,
-              "result": [
-                {
-                  "burn_events_key": "02000000000000000000000000000000000000000a550c18",
-                  "cancel_burn_events_key": "04000000000000000000000000000000000000000a550c18",
-                  "code": "Coin1",
-                  "exchange_rate_update_events_key": "05000000000000000000000000000000000000000a550c18",
-                  "fractional_part": 100,
-                  "mint_events_key": "01000000000000000000000000000000000000000a550c18",
-                  "preburn_events_key": "03000000000000000000000000000000000000000a550c18",
-                  "scaling_factor": 1000000,
-                  "to_lbr_exchange_rate": 0.5
-                },
-                {
-                  "burn_events_key": "07000000000000000000000000000000000000000a550c18",
-                  "cancel_burn_events_key": "09000000000000000000000000000000000000000a550c18",
-                  "code": "Coin2",
-                  "exchange_rate_update_events_key": "0a000000000000000000000000000000000000000a550c18",
-                  "fractional_part": 100,
-                  "mint_events_key": "06000000000000000000000000000000000000000a550c18",
-                  "preburn_events_key": "08000000000000000000000000000000000000000a550c18",
-                  "scaling_factor": 1000000,
-                  "to_lbr_exchange_rate": 0.5
-                },
-                {
-                  "burn_events_key": "0c000000000000000000000000000000000000000a550c18",
-                  "cancel_burn_events_key": "0e000000000000000000000000000000000000000a550c18",
-                  "code": "LBR",
-                  "exchange_rate_update_events_key": "0f000000000000000000000000000000000000000a550c18",
-                  "fractional_part": 1000,
-                  "mint_events_key": "0b000000000000000000000000000000000000000a550c18",
-                  "preburn_events_key": "0d000000000000000000000000000000000000000a550c18",
-                  "scaling_factor": 1000000,
-                  "to_lbr_exchange_rate": 1.0
-                }
-              ]
-            }),
-        ),
-        (
-            "get_metadata without version parameter",
-            json!({"jsonrpc": "2.0", "method": "get_metadata", "params": [], "id": 1}),
-            json!({
-              "id": 1,
-              "jsonrpc": "2.0",
-              "libra_chain_id": ChainId::test().id(),
-              "libra_ledger_timestampusec": timestamp,
-              "libra_ledger_version": version,
-              "result": {
-                "timestamp": timestamp,
-                "version": version,
-                "chain_id": ChainId::test().id(),
-              }
-            }),
-        ),
-        (
-            "get_metadata with version",
-            json!({"jsonrpc": "2.0", "method": "get_metadata", "params": [0], "id": 1}),
-            json!({
-              "id": 1,
-              "jsonrpc": "2.0",
-              "libra_chain_id": ChainId::test().id(),
-              "libra_ledger_timestampusec": timestamp,
-              "libra_ledger_version": version,
-              "result": {
-                "timestamp": 0,
-                "version": 0,
-                "chain_id": ChainId::test().id(),
-              }
-            }),
-        ),
-        (
-            "get_account: root account",
-            json!({"jsonrpc": "2.0", "method": "get_account", "params": [libra_root_address().to_string()], "id": 1}),
-            json!({
-                "id": 1,
-                "jsonrpc": "2.0",
-                "libra_chain_id": ChainId::test().id(),
-                "libra_ledger_timestampusec": timestamp,
-                "libra_ledger_version": version,
-                "result": {
-                    "address": libra_root_address().to_string(),
-                    "authentication_key": "1304972f9242cbc3528a1e286323471ab891baa37e0053b85651693a79854a00",
-                    "balances": [],
-                    "delegated_key_rotation_capability": false,
-                    "delegated_withdrawal_capability": false,
-                    "is_frozen": false,
-                    "received_events_key": "12000000000000000000000000000000000000000a550c18",
-                    "role": { "type": "unknown" },
-                    "sent_events_key": "13000000000000000000000000000000000000000a550c18",
-                    "sequence_number": 1
-                }
-            }),
-        ),
-        (
-            "get_account: testnet dd account",
-            json!({"jsonrpc": "2.0", "method": "get_account", "params": [testnet_dd_account_address().to_string()], "id": 1}),
-            json!({
-                "id": 1,
-                "jsonrpc": "2.0",
-                "libra_chain_id": ChainId::test().id(),
-                "libra_ledger_timestampusec": timestamp,
-                "libra_ledger_version": version,
-                "result": {
-                    "address": testnet_dd_account_address().to_string(),
-                    "authentication_key": "1304972f9242cbc3528a1e286323471ab891baa37e0053b85651693a79854a00",
-                    "balances": [
-                        {
-                            "amount": 4611686018427387903 as u64,
-                            "currency": "Coin1"
-                        },
-                        {
-                            "amount": 4611686018427387903 as u64,
-                            "currency": "Coin2"
-                        },
-                        {
-                            "amount": 9223372036854775807 as u64,
-                            "currency": "LBR"
-                        }
-                    ],
-                    "delegated_key_rotation_capability": false,
-                    "delegated_withdrawal_capability": false,
-                    "is_frozen": false,
-                    "received_events_key": "0300000000000000000000000000000000000000000000dd",
-                    "role": {
-                        "type": "designated_dealer",
-                        "base_url": "",
-                        "compliance_key": "",
-                        "expiration_time": 18446744073709551615 as u64,
-                        "human_name": "moneybags",
-                        "preburn_balances": [
-                            {
-                                "amount": 0,
-                                "currency": "Coin1"
-                            },
-                            {
-                                "amount": 0,
-                                "currency": "Coin2"
-                            }
-                        ],
-                        "received_mint_events_key": "0000000000000000000000000000000000000000000000dd",
-                        "compliance_key_rotation_events_key": "0100000000000000000000000000000000000000000000dd",
-                        "base_url_rotation_events_key": "0200000000000000000000000000000000000000000000dd",
-                    },
-                    "sent_events_key": "0400000000000000000000000000000000000000000000dd",
-                    "sequence_number": 0
-                }
-            }),
-        ),
-    ];
-
-    let client = reqwest::blocking::Client::new();
-    for (name, request, expected) in calls {
-        let resp = client.post(&url).json(&request).send().unwrap();
-        assert_eq!(resp.status(), 200);
         let resp_json: serde_json::Value = resp.json().unwrap();
         assert_eq!(expected, resp_json, "test: {}", name);
     }

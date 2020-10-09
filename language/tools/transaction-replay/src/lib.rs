@@ -169,7 +169,7 @@ impl LibraDebugger {
                     predicate.clone(),
                     vec![],
                     vec![],
-                    vec![sender, libra_root_address()],
+                    vec![libra_root_address(), sender],
                     &mut cost_strategy,
                 )
             })
@@ -223,7 +223,7 @@ fn compile_move_script(file_path: &str, sender: AccountAddress) -> Result<Vec<u8
     let targets = &vec![cur_path];
     let sender_opt = Some(sender_addr);
     let (files, units_or_errors) =
-        move_compile_no_report(targets, &stdlib::stdlib_files(), sender_opt)?;
+        move_compile_no_report(targets, &stdlib::stdlib_files(), sender_opt, None)?;
     let unit = match units_or_errors {
         Err(errors) => {
             let error_buffer = move_lang::errors::report_errors_to_color_buffer(files, errors);

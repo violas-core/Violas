@@ -59,7 +59,7 @@ impl StartupInfo {
         }
     }
 
-    #[cfg(any(test, feature = "fuzzing"))]
+    #[cfg(any(feature = "fuzzing"))]
     pub fn new_for_testing() -> Self {
         use libra_types::on_chain_config::ValidatorSet;
 
@@ -113,24 +113,13 @@ impl TreeState {
         }
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.num_transactions == 0
-            && self.account_state_root_hash == *SPARSE_MERKLE_PLACEHOLDER_HASH
-    }
-
-    pub fn describe(&self) -> String {
+    pub fn describe(&self) -> &'static str {
         if self.num_transactions != 0 {
-            format!(
-                "DB has {} transactions in it, state root hash is {}.",
-                self.num_transactions, self.account_state_root_hash
-            )
+            "DB has been bootstrapped."
         } else if self.account_state_root_hash != *SPARSE_MERKLE_PLACEHOLDER_HASH {
-            format!(
-                "DB has no transactions in it, but has pre-genesis state, state root hash is {}.",
-                self.account_state_root_hash
-            )
+            "DB has no transaction, but a non-empty pre-genesis state."
         } else {
-            "DB is empty, has no transactions or state.".into()
+            "DB is empty, has no transaction or state."
         }
     }
 }

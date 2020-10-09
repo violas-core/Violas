@@ -4,7 +4,14 @@
 #![forbid(unsafe_code)]
 
 //! Provides an mpsc (multi-producer single-consumer) channel wrapped in an
-//! [`IntGauge`](libra_metrics::IntGauge)
+//! [`IntGauge`](libra_metrics::IntGauge) that counts the number of currently
+//! queued items. While there is only one [`channel::Receiver`], there can be
+//! many [`channel::Sender`]s, which are also cheap to clone.
+//!
+//! This channel differs from our other channel implementation, [`channel::libra_channel`],
+//! in that it is just a single queue (vs. different queues for different keys)
+//! with backpressure (senders will block if the queue is full instead of evicting
+//! another item in the queue) that only implements FIFO (vs. LIFO or KLAST).
 
 use futures::{
     channel::mpsc,
@@ -12,13 +19,8 @@ use futures::{
     stream::{FusedStream, Stream},
     task::{Context, Poll},
 };
-use libra_logger::prelude::*;
 use libra_metrics::IntGauge;
-use once_cell::sync::Lazy;
-use std::{
-    pin::Pin,
-    time::{Duration, Instant},
-};
+use std::pin::Pin;
 
 #[cfg(test)]
 mod test;
@@ -31,44 +33,27 @@ pub mod message_queues;
 #[cfg(test)]
 mod message_queues_test;
 
-const MAX_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
-
-/// Wrapper around a value with an entry timestamp
-/// It is used to measure the time waiting in the `mpsc::channel`.
-pub struct WithEntryTimestamp<T> {
-    entry_time: Instant,
-    value: T,
-}
-
-impl<T> WithEntryTimestamp<T> {
-    fn new(value: T) -> Self {
-        Self {
-            entry_time: Instant::now(),
-            value,
-        }
-    }
-}
-
-/// Similar to `mpsc::Sender`, but with an `IntGauge`
+/// An [`mpsc::Sender`](futures::channel::mpsc::Sender) with an [`IntGauge`]
+/// counting the number of currently queued items.
 pub struct Sender<T> {
-    inner: mpsc::Sender<WithEntryTimestamp<T>>,
+    inner: mpsc::Sender<T>,
+    gauge: IntGauge,
+}
+
+/// An [`mpsc::Receiver`](futures::channel::mpsc::Receiver) with an [`IntGauge`]
+/// counting the number of currently queued items.
+pub struct Receiver<T> {
+    inner: mpsc::Receiver<T>,
     gauge: IntGauge,
 }
 
 impl<T> Clone for Sender<T> {
     fn clone(&self) -> Self {
-        Sender {
+        Self {
             inner: self.inner.clone(),
             gauge: self.gauge.clone(),
         }
     }
-}
-
-/// Similar to `mpsc::Receiver`, but with an `IntGauge`
-pub struct Receiver<T> {
-    inner: mpsc::Receiver<WithEntryTimestamp<T>>,
-    gauge: IntGauge,
-    timeout: Duration,
 }
 
 /// `Sender` implements `Sink` in the same way as `mpsc::Sender`, but it increments the
@@ -81,15 +66,7 @@ impl<T> Sink<T> for Sender<T> {
     }
 
     fn start_send(mut self: Pin<&mut Self>, msg: T) -> Result<(), Self::Error> {
-        self.gauge.inc();
-        (*self)
-            .inner
-            .start_send(WithEntryTimestamp::new(msg))
-            .map_err(|e| {
-                self.gauge.dec();
-                e
-            })?;
-        Ok(())
+        (*self).inner.start_send(msg).map(|_| self.gauge.inc())
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -103,14 +80,11 @@ impl<T> Sink<T> for Sender<T> {
 
 impl<T> Sender<T> {
     pub fn try_send(&mut self, msg: T) -> Result<(), mpsc::SendError> {
-        self.gauge.inc();
         (*self)
             .inner
-            .try_send(WithEntryTimestamp::new(msg))
-            .map_err(|e| {
-                self.gauge.dec();
-                e.into_send_error()
-            })
+            .try_send(msg)
+            .map(|_| self.gauge.inc())
+            .map_err(mpsc::TrySendError::into_send_error)
     }
 }
 
@@ -125,46 +99,20 @@ where
 
 /// `Receiver` implements `Stream` in the same way as `mpsc::Stream`, but it decrements the
 /// associated `IntGauge` when it gets polled successfully.
-impl<T> Stream for Receiver<T>
-where
-    T: std::fmt::Debug,
-{
+impl<T> Stream for Receiver<T> {
     type Item = T;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        loop {
-            match Pin::new(&mut self.inner).poll_next(cx) {
-                Poll::Ready(Some(msg)) => {
-                    self.gauge.dec();
-                    // If the message times out, it gets dropped
-                    if Instant::now().duration_since(msg.entry_time) > self.timeout {
-                        warn!("Message dropped due to timeout: {:?}", msg.value);
-                        continue;
-                    } else {
-                        return Poll::Ready(Some(msg.value));
-                    }
-                }
-                Poll::Ready(None) => {
-                    return Poll::Ready(None);
-                }
-                Poll::Pending => {
-                    return Poll::Pending;
-                }
-            }
+        let next = Pin::new(&mut self.inner).poll_next(cx);
+        if let Poll::Ready(Some(_)) = next {
+            self.gauge.dec();
         }
+        next
     }
 }
 
 /// Similar to `mpsc::channel`, `new` creates a pair of `Sender` and `Receiver`
 pub fn new<T>(size: usize, gauge: &IntGauge) -> (Sender<T>, Receiver<T>) {
-    new_with_timeout(size, gauge, MAX_TIMEOUT)
-}
-
-pub fn new_with_timeout<T>(
-    size: usize,
-    gauge: &IntGauge,
-    timeout: Duration,
-) -> (Sender<T>, Receiver<T>) {
     gauge.set(0);
     let (sender, receiver) = mpsc::channel(size);
     (
@@ -175,18 +123,11 @@ pub fn new_with_timeout<T>(
         Receiver {
             inner: receiver,
             gauge: gauge.clone(),
-            timeout,
         },
     )
 }
 
-pub static TEST_COUNTER: Lazy<IntGauge> =
-    Lazy::new(|| IntGauge::new("TEST_COUNTER", "Counter of network tests").unwrap());
-
 pub fn new_test<T>(size: usize) -> (Sender<T>, Receiver<T>) {
-    new(size, &TEST_COUNTER)
-}
-
-pub fn new_test_with_timeout<T>(size: usize, timeout: Duration) -> (Sender<T>, Receiver<T>) {
-    new_with_timeout(size, &TEST_COUNTER, timeout)
+    let gauge = IntGauge::new("TEST_COUNTER", "test").unwrap();
+    new(size, &gauge)
 }

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 use crate::config::RoleType;
 use libra_types::PeerId;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 use std::fmt;
 
 /// A grouping of common information between all networking code for logging.
@@ -10,13 +10,10 @@ use std::fmt;
 /// for logging accordingly.
 #[derive(Clone, Eq, PartialEq, Serialize)]
 pub struct NetworkContext {
+    #[serde(serialize_with = "NetworkId::serialize_str")]
     network_id: NetworkId,
     role: RoleType,
     peer_id: PeerId,
-
-    /// Cache rendering the short PeerId String
-    #[serde(skip)]
-    peer_id_short_str: String,
 }
 
 impl fmt::Debug for NetworkContext {
@@ -26,11 +23,13 @@ impl fmt::Debug for NetworkContext {
 }
 
 impl fmt::Display for NetworkContext {
-    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
-            formatter,
+            f,
             "[{},{},{}]",
-            self.network_id, self.role, self.peer_id_short_str,
+            self.network_id.as_str(),
+            self.role,
+            self.peer_id.short_str(),
         )
     }
 }
@@ -41,7 +40,6 @@ impl NetworkContext {
             network_id,
             role,
             peer_id,
-            peer_id_short_str: peer_id.short_str(),
         }
     }
 
@@ -55,10 +53,6 @@ impl NetworkContext {
 
     pub fn peer_id(&self) -> PeerId {
         self.peer_id
-    }
-
-    pub fn peer_id_short_str(&self) -> &str {
-        self.peer_id_short_str.as_str()
     }
 
     #[cfg(any(test, feature = "testing", feature = "fuzzing"))]
@@ -160,6 +154,13 @@ impl NetworkId {
             NetworkId::Private(info) => info.as_ref(),
         }
     }
+
+    fn serialize_str<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.as_str().serialize(serializer)
+    }
 }
 
 #[cfg(test)]
@@ -183,5 +184,18 @@ mod test {
         let encoded = serde_yaml::to_vec(&id).unwrap();
         let decoded: NetworkId = serde_yaml::from_slice(encoded.as_slice()).unwrap();
         assert_eq!(id, decoded);
+    }
+
+    #[test]
+    fn test_network_context_serialization() {
+        let network_name = "Awesome".to_string();
+        let role = RoleType::Validator;
+        let peer_id = PeerId::random();
+        let context = NetworkContext::new(NetworkId::Private(network_name.clone()), role, peer_id);
+        let expected = format!(
+            "---\nnetwork_id: {}\nrole: {}\npeer_id: {}",
+            network_name, role, peer_id
+        );
+        assert_eq!(expected, serde_yaml::to_string(&context).unwrap());
     }
 }

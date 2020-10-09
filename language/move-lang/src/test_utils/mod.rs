@@ -8,6 +8,7 @@ pub struct StringError(String);
 pub const SENDER: &str = "0x8675309";
 
 pub const STD_LIB_DIR: &str = "../stdlib/modules";
+pub const STD_LIB_COMPILED_DIR: &str = "../stdlib/compiled/stdlib";
 pub const FUNCTIONAL_TEST_DIR: &str = "functional-tests/tests";
 pub const MOVE_CHECK_DIR: &str = "tests/move_check";
 pub const STD_LIB_TRANSACTION_SCRIPTS_DIR: &str = "../stdlib/transaction_scripts";
@@ -21,28 +22,12 @@ pub const IR_EXTENSION: &str = "mvir";
 pub const DEBUG_MODULE_FILE_NAME: &str = "debug.move";
 
 pub const COMPLETED_DIRECTORIES: &[&str; 5] = &[
-    "borrow_tests",
-    "commands",
-    "generics/instantiation_loops",
-    "signer",
-    "operators",
+    "move/borrow_tests",
+    "move/commands",
+    "move/generics/instantiation_loops",
+    "move/signer",
+    "move/operators",
 ];
-
-/// We need to replicate the specification of the (non-compiled) stdlib files here since we can't
-/// import the stdlib crate: it will create a circular dependency since the stdlib needs the
-/// compiler to compile the stdlib and scripts.
-pub fn stdlib_files(stdlib_dir: impl AsRef<Path>) -> Vec<String> {
-    let dirfiles = datatest_stable::utils::iterate_directory(stdlib_dir.as_ref());
-    dirfiles
-        .flat_map(|path| {
-            if path.extension()?.to_str()? == MOVE_EXTENSION {
-                path.into_os_string().into_string().ok()
-            } else {
-                None
-            }
-        })
-        .collect()
-}
 
 impl std::fmt::Display for StringError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -117,17 +102,30 @@ pub fn ir_tests() -> impl Iterator<Item = (String, String)> {
 }
 
 pub fn translated_ir_test_name(has_main: bool, subdir: &str, name: &str) -> Option<String> {
-    let fmt = |dir, subdir, basename, ext| {
-        format!(
+    let fmt = |dir, migration_subdir, subdir, basename, ext| match migration_subdir {
+        Some(migration_subdir) => format!(
             "{}/{}/{}/{}.{}",
-            dir, MIGRATION_SUB_DIR, subdir, basename, ext
-        )
+            dir, migration_subdir, subdir, basename, ext
+        ),
+        None => format!("{}/{}/{}.{}", dir, subdir, basename, ext),
     };
     let check = |x| Path::new(x).is_file();
-    let ft = fmt(FUNCTIONAL_TEST_DIR, subdir, name, MOVE_EXTENSION);
-    let ft_todo = fmt(FUNCTIONAL_TEST_DIR, subdir, name, TODO_EXTENSION);
-    let mc = fmt(MOVE_CHECK_DIR, subdir, name, MOVE_EXTENSION);
-    let mc_todo = fmt(MOVE_CHECK_DIR, subdir, name, TODO_EXTENSION);
+    let ft = fmt(FUNCTIONAL_TEST_DIR, None, subdir, name, MOVE_EXTENSION);
+    let ft_todo = fmt(FUNCTIONAL_TEST_DIR, None, subdir, name, TODO_EXTENSION);
+    let mc = fmt(
+        MOVE_CHECK_DIR,
+        Some(MIGRATION_SUB_DIR),
+        subdir,
+        name,
+        MOVE_EXTENSION,
+    );
+    let mc_todo = fmt(
+        MOVE_CHECK_DIR,
+        Some(MIGRATION_SUB_DIR),
+        subdir,
+        name,
+        TODO_EXTENSION,
+    );
     if check(&ft) || check(&ft_todo) || check(&mc) || check(&mc_todo) {
         None
     } else if has_main {

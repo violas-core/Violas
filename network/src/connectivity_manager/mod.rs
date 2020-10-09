@@ -256,7 +256,7 @@ where
 
         info!(
             NetworkSchema::new(&self.network_context),
-            "{} Starting ConnectivityManager loop", self.network_context
+            "{} Starting ConnectivityManager actor", self.network_context
         );
 
         loop {
@@ -282,15 +282,15 @@ where
                     self.dial_queue.remove(&peer_id);
                 },
                 complete => {
-                    warn!(
-                        NetworkSchema::new(&self.network_context),
-                        "{} ConnectivityManager loop terminated",
-                        self.network_context
-                    );
                     break;
                 }
             }
         }
+
+        warn!(
+            NetworkSchema::new(&self.network_context),
+            "{} ConnectivityManager actor terminated", self.network_context
+        );
     }
 
     /// Disconnect from all peers that are no longer eligible.
@@ -318,9 +318,9 @@ where
             if let Err(e) = self.connection_reqs_tx.disconnect_peer(p).await {
                 info!(
                     NetworkSchema::new(&self.network_context)
-                        .remote_peer(&p)
-                        .error(e.to_string()),
-                    "{} Failed to close stale connection to peer {} : {:?}",
+                        .remote_peer(&p),
+                    error = %e,
+                    "{} Failed to close stale connection to peer {} : {}",
                     self.network_context,
                     p.short_str(),
                     e
@@ -431,7 +431,7 @@ where
             // delay or on cancellation.
             let f = async move {
                 let delay = f_delay.deadline().duration_since(now);
-                info!(
+                debug!(
                     NetworkSchema::new(&network_context)
                         .remote_peer(&peer_id)
                         .network_address(&addr),
@@ -698,7 +698,7 @@ where
                     );
                     self.connected.remove(&peer_id);
                 } else {
-                    debug!(
+                    info!(
                         NetworkSchema::new(&self.network_context)
                             .remote_peer(&peer_id)
                             .network_address(&addr),
@@ -755,8 +755,8 @@ fn log_dial_result(
                 info!(
                     NetworkSchema::new(&network_context)
                         .remote_peer(&peer_id)
-                        .network_address(&addr)
-                        .error(e.to_string()),
+                        .network_address(&addr),
+                    error = %e,
                     "{} Failed to connect to peer: {} at address: {}; error: {}",
                     network_context,
                     peer_id.short_str(),

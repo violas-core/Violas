@@ -25,11 +25,13 @@ RUN ./docker/build-common.sh
 ### Production Image ###
 FROM debian:buster-20200803-slim@sha256:e0a33348ac8cace6b4294885e6e0bb57ecdfe4b6e415f1a7f4c5da5fe3116e02 AS prod
 
+RUN apt-get update && apt-get install -y libssl1.1 ca-certificates && apt-get clean && rm -r /var/lib/apt/lists/*
+
 RUN mkdir -p /opt/libra/bin /opt/libra/etc
 COPY --from=builder /libra/target/release/cli /opt/libra/bin/libra_client
 
 ENTRYPOINT ["/opt/libra/bin/libra_client"]
-CMD ["--url", "https://client.testnet.libra.org", "--waypoint_url",  "https://developers.libra.org/testnet_waypoint.txt", "--chain-id", "TESTNET"]
+CMD ["--url", "https://testnet.libra.org/v1", "--waypoint_url",  "https://testnet.libra.org/waypoint.txt", "--chain-id", "TESTNET"]
 
 ARG BUILD_DATE
 ARG GIT_REV

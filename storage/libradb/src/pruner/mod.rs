@@ -12,7 +12,6 @@ use crate::{
     schema::{
         jellyfish_merkle_node::JellyfishMerkleNodeSchema, stale_node_index::StaleNodeIndexSchema,
     },
-    OP_COUNTER,
 };
 use anyhow::Result;
 use libra_jellyfish_merkle::StaleNodeIndex;
@@ -184,23 +183,22 @@ impl Worker {
                     // Log the progress.
                     self.least_readable_version
                         .store(least_readable_version, Ordering::Relaxed);
-                    OP_COUNTER.set(
-                        "pruner.least_readable_state_version",
-                        least_readable_version as usize,
-                    );
                     LIBRA_STORAGE_PRUNER_LEAST_READABLE_STATE_VERSION
                         .set(least_readable_version as i64);
 
                     // Try to purge the log.
                     if let Err(e) = self.maybe_purge_index() {
-                        error!(
-                            "Failed purging state state node index, ignored. Err: {}",
-                            error = e
+                        warn!(
+                            error = ?e,
+                            "Failed purging state node index, ignored.",
                         );
                     }
                 }
                 Err(e) => {
-                    error!("Error pruning stale state nodes. {:?}", error = e);
+                    error!(
+                        error = ?e,
+                        "Error pruning stale state nodes.",
+                    );
                     // On error, stop retrying vigorously by making next recv() blocking.
                     self.blocking_recv = true;
                 }

@@ -27,7 +27,7 @@ impl ContentLinter for EofNewline {
             Some(text) => text,
             None => return Ok(RunStatus::Skipped(SkipReason::NonUtf8)),
         };
-        if !content.ends_with('\n') {
+        if !content.is_empty() && !content.ends_with('\n') {
             out.write(LintLevel::Error, "missing newline at EOF");
         }
         Ok(RunStatus::Executed)
@@ -83,7 +83,8 @@ impl ContentLinter for TrailingWhitespace {
 
 fn skip_whitespace_checks<'l>(file: &FileContext<'l>) -> RunStatus<'l> {
     // glob based opt outs
-    let patterns = [".github/actions/*/dist/*"];
+    // TODO Reevaluate skipping whitespace checks in .md files for the website
+    let patterns = [".github/actions/*/dist/*", "developers.libra.org/**/*.md"];
 
     if let Some(pattern) = patterns
         .iter()

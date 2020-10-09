@@ -10,8 +10,7 @@ use crate::{
     },
     BlockExecutor, Executor,
 };
-use libra_config::{config::NodeConfig, utils::get_genesis_txn};
-use libra_crypto::{ed25519::Ed25519PrivateKey, HashValue};
+use libra_crypto::HashValue;
 use libra_types::{
     account_address::AccountAddress,
     block_info::BlockInfo,
@@ -22,22 +21,6 @@ use libradb::LibraDB;
 use proptest::prelude::*;
 use rand::Rng;
 use std::collections::BTreeMap;
-
-fn build_test_config() -> (NodeConfig, Ed25519PrivateKey) {
-    let mut validator_config = config_builder::ValidatorConfig::new();
-    validator_config.build_waypoint = false;
-    let (mut configs, key) = validator_config.build_common(false).unwrap();
-    (configs.swap_remove(0), key)
-}
-
-fn create_storage(config: &NodeConfig) -> DbReaderWriter {
-    let db = DbReaderWriter::new(LibraDB::new_for_test(config.storage.dir()));
-    // can't use executor-test-helper because the static op_counter conflict
-    let waypoint = generate_waypoint::<MockVM>(&db, get_genesis_txn(&config).unwrap()).unwrap();
-    maybe_bootstrap::<MockVM>(&db, get_genesis_txn(&config).unwrap(), waypoint)
-        .expect("Db-bootstrapper should not fail.");
-    db
-}
 
 fn execute_and_commit_block(
     executor: &mut TestExecutor,
@@ -58,19 +41,24 @@ fn execute_and_commit_block(
 }
 
 struct TestExecutor {
-    // The config is kept around because it owns the temp dir used in the test.
-    _config: NodeConfig,
+    _path: libra_temppath::TempPath,
+    db: DbReaderWriter,
     executor: Executor<MockVM>,
 }
 
 impl TestExecutor {
     fn new() -> TestExecutor {
-        let (config, _) = build_test_config();
-        let db = create_storage(&config);
-        let executor = Executor::<MockVM>::new(db);
+        let path = libra_temppath::TempPath::new();
+        path.create_as_dir().unwrap();
+        let db = DbReaderWriter::new(LibraDB::new_for_test(path.path()));
+        let genesis = vm_genesis::test_genesis_transaction();
+        let waypoint = generate_waypoint::<MockVM>(&db, &genesis).unwrap();
+        maybe_bootstrap::<MockVM>(&db, &genesis, waypoint).unwrap();
+        let executor = Executor::<MockVM>::new(db.clone());
 
         TestExecutor {
-            _config: config,
+            _path: path,
+            db,
             executor,
         }
     }
@@ -272,9 +260,11 @@ fn create_transaction_chunks(
 
     // To obtain the batches of transactions, we first execute and save all these transactions in a
     // separate DB. Then we call get_transactions to retrieve them.
-    let (config, _) = build_test_config();
-    let db = create_storage(&config);
-    let mut executor = Executor::<MockVM>::new(db.clone());
+    let TestExecutor {
+        _path,
+        db: _,
+        mut executor,
+    } = TestExecutor::new();
 
     let mut txns = vec![];
     for i in 1..chunk_ranges.last().unwrap().end {
@@ -295,7 +285,9 @@ fn create_transaction_chunks(
     let batches: Vec<_> = chunk_ranges
         .into_iter()
         .map(|range| {
-            db.reader
+            executor
+                .db
+                .reader
                 .get_transactions(
                     range.start,
                     range.end - range.start,
@@ -328,9 +320,11 @@ fn test_executor_execute_and_commit_chunk() {
     };
 
     // Now we execute these two chunks of transactions.
-    let (config, _) = build_test_config();
-    let db = create_storage(&config);
-    let mut executor = Executor::<MockVM>::new(db.clone());
+    let TestExecutor {
+        _path,
+        db,
+        mut executor,
+    } = TestExecutor::new();
 
     // Execute the first chunk. After that we should still get the genesis ledger info from DB.
     executor
@@ -390,13 +384,14 @@ fn test_executor_execute_and_commit_chunk_restart() {
         ])
     };
 
-    let (config, _) = build_test_config();
-    let db = create_storage(&config);
+    let TestExecutor {
+        _path,
+        db,
+        mut executor,
+    } = TestExecutor::new();
 
     // First we simulate syncing the first chunk of transactions.
     {
-        let mut executor = Executor::<MockVM>::new(db.clone());
-
         executor
             .execute_and_commit_chunk(chunks[0].clone(), ledger_info.clone(), None)
             .unwrap();
@@ -431,9 +426,11 @@ fn test_executor_execute_and_commit_chunk_local_result_mismatch() {
         ])
     };
 
-    let (config, _) = build_test_config();
-    let db = create_storage(&config);
-    let mut executor = Executor::<MockVM>::new(db);
+    let TestExecutor {
+        _path,
+        db: _,
+        mut executor,
+    } = TestExecutor::new();
     // commit 5 txns first.
     {
         let parent_block_id = executor.committed_block_id();
@@ -584,17 +581,50 @@ proptest! {
                 0..num_txns
             )
         })) {
-            let mut block = TestBlock::new(0..num_txns, 10, gen_block_id(1));
+            let block_id = gen_block_id(1);
+            let mut block = TestBlock::new(0..num_txns, 10, block_id);
             block.txns[reconfig_txn_index as usize] = encode_reconfiguration_transaction(gen_address(reconfig_txn_index));
             let mut executor = TestExecutor::new();
-            let parent_block_id = executor.committed_block_id();
 
+            let parent_block_id = executor.committed_block_id();
             let output = executor.execute_block(
-                (block.id, block.txns), parent_block_id
+                (block_id, block.txns.clone()), parent_block_id
             ).unwrap();
+
+            // assert: txns after the reconfiguration are with status "Retry"
             let retry_iter = output.compute_status().iter()
             .skip_while(|status| matches!(*status, TransactionStatus::Keep(_)));
             prop_assert_eq!(retry_iter.take_while(|status| matches!(*status,TransactionStatus::Retry)).count() as u64, num_txns - reconfig_txn_index - 1);
+
+            // commit
+            let ledger_info = gen_ledger_info(reconfig_txn_index + 1 /* version */, output.root_hash(), block_id, 1 /* timestamp */);
+            executor.commit_blocks(vec![block_id], ledger_info).unwrap();
+            let parent_block_id = executor.committed_block_id();
+
+            // retry txns after reconfiguration
+            let retry_block_id = gen_block_id(2);
+            let retry_output = executor.execute_block(
+                (retry_block_id, block.txns.iter().skip(reconfig_txn_index as usize + 1).cloned().collect()), parent_block_id
+            ).unwrap();
+            prop_assert!(retry_output.compute_status().iter().all(|s| matches!(*s, TransactionStatus::Keep(_))));
+
+            // commit
+            let ledger_info = gen_ledger_info(num_txns  /* version */, retry_output.root_hash(), retry_block_id, 12345 /* timestamp */);
+            executor.commit_blocks(vec![retry_block_id], ledger_info).unwrap();
+
+            // get txn_infos from db
+            let db = executor.db.reader.clone();
+            prop_assert_eq!(db.get_latest_version().unwrap(), num_txns as Version);
+            let txn_list = db.get_transactions(1 /* start version */, num_txns, num_txns as Version /* ledger version */, false /* fetch events */).unwrap();
+            prop_assert_eq!(&block.txns, &txn_list.transactions);
+            let (_, txn_infos) = txn_list.proof.unpack();
+
+            // replay txns in one batch across epoch boundary,
+            // and the replayer should deal with `Retry`s automatically
+            let mut replayer = TestExecutor::new();
+            replayer.replay_chunk(1 /* first version */, block.txns, txn_infos).unwrap();
+            let replayed_db = replayer.db.reader.clone();
+            prop_assert_eq!(replayed_db.get_latest_state_root().unwrap(), db.get_latest_state_root().unwrap())
         }
 
     #[test]
@@ -602,14 +632,12 @@ proptest! {
         let block_a = TestBlock::new(0..a_size, amount, gen_block_id(1));
         let block_b = TestBlock::new(0..b_size, amount, gen_block_id(2));
 
-        let (config, _) = build_test_config();
-        let db = create_storage(&config);
+        let TestExecutor { _path, db, mut executor } = TestExecutor::new();
         let mut parent_block_id;
         let mut root_hash;
 
         // First execute and commit one block, then destroy executor.
         {
-            let mut executor = Executor::<MockVM>::new(db.clone());
             parent_block_id = executor.committed_block_id();
             let output_a = executor.execute_block(
                 (block_a.id, block_a.txns.clone()), parent_block_id
@@ -653,9 +681,7 @@ proptest! {
                 overlap_start..overlap_end
             ]);
 
-        let (config, _) = build_test_config();
-        let db = create_storage(&config);
-        let mut executor = Executor::<MockVM>::new(db);
+        let TestExecutor { _path, db: _, mut executor } = TestExecutor::new();
         let parent_block_id = executor.committed_block_id();
 
         let overlap_txn_list_with_proof = chunks.pop().unwrap();

@@ -11,11 +11,12 @@ use executor_types::ExecutedTrees;
 use libra_types::{epoch_state::EpochState, ledger_info::LedgerInfoWithSignatures};
 pub use synchronizer::{StateSyncClient, StateSynchronizer};
 
-mod chunk_request;
-mod chunk_response;
+pub mod chunk_request;
+pub mod chunk_response;
 pub mod coordinator;
 mod counters;
 mod executor_proxy;
+mod logging;
 pub mod network;
 mod request_manager;
 mod synchronizer;
