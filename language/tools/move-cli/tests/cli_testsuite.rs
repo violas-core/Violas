@@ -5,11 +5,9 @@ use move_cli::test;
 
 use std::path::Path;
 
-pub const CLI_BINARY: &str = "../../../target/debug/move-cli";
-pub const CLI_TESTSUITE_DIR: &str = "tests/testsuite";
-
 fn run_all(args_path: &Path) -> datatest_stable::Result<()> {
-    Ok(test::run_one(args_path, CLI_BINARY)?)
+    Ok(test::run_one(args_path, "../../../target/debug/move-cli")?)
 }
 
-datatest_stable::harness!(run_all, CLI_TESTSUITE_DIR, r"args.txt$");
+// runs all the tests
+datatest_stable::harness!(run_all, "tests/testsuite", r"args.txt$");

@@ -27,7 +27,7 @@ use cluster_test::{
     report::SuiteReport,
     slack::SlackClient,
     suite::ExperimentSuite,
-    tx_emitter::{AccountData, EmitJobRequest, EmitThreadParams, TxEmitter, TxStats},
+    tx_emitter::{AccountData, EmitJobRequest, EmitThreadParams, TxEmitter},
 };
 use futures::{
     future::{join_all, FutureExt},
@@ -317,27 +317,19 @@ async fn emit_tx(cluster: &Cluster, args: &Args) -> Result<()> {
     };
     let duration = Duration::from_secs(args.duration);
     let mut emitter = TxEmitter::new(cluster, args.premainnet);
-    let job = emitter
-        .start_job(EmitJobRequest {
-            instances: cluster.validator_instances().to_vec(),
-            accounts_per_client,
-            workers_per_ac,
-            thread_params,
-            gas_price: 0,
-        })
-        .await
-        .map_err(|e| format_err!("Failed to start emit job: {}", e))?;
-    let deadline = Instant::now() + duration;
-    let mut prev_stats: Option<TxStats> = None;
-    while Instant::now() < deadline {
-        let window = Duration::from_secs(10);
-        tokio::time::delay_for(window).await;
-        let stats = emitter.peek_job_stats(&job);
-        let delta = &stats - &prev_stats.unwrap_or_default();
-        prev_stats = Some(stats);
-        println!("{}", delta.rate(window));
-    }
-    let stats = emitter.stop_job(job).await;
+    let stats = emitter
+        .emit_txn_for_with_stats(
+            duration,
+            EmitJobRequest {
+                instances: cluster.validator_instances().to_vec(),
+                accounts_per_client,
+                workers_per_ac,
+                thread_params,
+                gas_price: 0,
+            },
+            10,
+        )
+        .await?;
     println!("Total stats: {}", stats);
     println!("Average rate: {}", stats.rate(duration));
     Ok(())
@@ -420,17 +412,13 @@ impl BasicSwarmUtil {
         let faucet_account_address = faucet_account.address;
         for instance in &instances {
             print!("Submitting txn through {}...", instance);
-            let receiver_address = if premainnet {
-                faucet_account_address
-            } else {
-                let tc_account = emitter
-                    .load_vasp_account(&instance.json_rpc_client())
-                    .await
-                    .map_err(|e| format_err!("Failed to load vasp account: {}", e))?;
-                tc_account.address
-            };
             let deadline = emitter
-                .submit_single_transaction(instance, &mut faucet_account, &receiver_address, 10)
+                .submit_single_transaction(
+                    instance,
+                    &mut faucet_account,
+                    &faucet_account_address,
+                    10,
+                )
                 .await
                 .map_err(|e| format_err!("Failed to submit txn through {}: {}", instance, e))?;
             println!("seq={}", faucet_account.sequence_number);

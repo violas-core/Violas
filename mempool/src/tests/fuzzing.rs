@@ -6,16 +6,14 @@ use crate::{
     shared_mempool::{peer_manager::PeerManager, tasks, types::SharedMempool},
 };
 use libra_config::config::NodeConfig;
+use libra_infallible::{Mutex, RwLock};
 use libra_types::transaction::SignedTransaction;
 use proptest::{
     arbitrary::any,
     prelude::*,
     strategy::{Just, Strategy},
 };
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex, RwLock},
-};
+use std::{collections::HashMap, sync::Arc};
 use storage_interface::mock::MockDbReader;
 use vm_validator::mocks::mock_vm_validator::MockVMValidator;
 
@@ -42,11 +40,11 @@ pub fn test_mempool_process_incoming_transactions_impl(
     let vm_validator = Arc::new(RwLock::new(MockVMValidator));
     let smp = SharedMempool {
         mempool: Arc::new(Mutex::new(CoreMempool::new(&config))),
-        config: config.mempool,
+        config: config.mempool.clone(),
         network_senders: HashMap::new(),
         db: Arc::new(mock_db),
         validator: vm_validator,
-        peer_manager: Arc::new(PeerManager::new(config.upstream)),
+        peer_manager: Arc::new(PeerManager::new(config.mempool, config.upstream)),
         subscribers: vec![],
     };
 

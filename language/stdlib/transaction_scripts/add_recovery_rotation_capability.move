@@ -51,6 +51,7 @@ spec fun add_recovery_rotation_capability {
     use 0x1::Signer;
     use 0x1::Errors;
 
+    include LibraAccount::TransactionChecks{sender: to_recover_account}; // properties checked by the prologue.
     include LibraAccount::ExtractKeyRotationCapabilityAbortsIf{account: to_recover_account};
     include LibraAccount::ExtractKeyRotationCapabilityEnsures{account: to_recover_account};
 
@@ -61,11 +62,6 @@ spec fun add_recovery_rotation_capability {
         to_recover: rotation_cap
     };
 
-    // TODO: Commented out due to the unsupported feature below.
-    // include RecoveryAddress::AddRotationCapabilityEnsures{
-    //     to_recover: old(rotation_cap) //! error: `old(..)` expression not allowed in this context
-    // };
-    // Instead, the postconditions in RecoveryAddress::AddRotationCapabilityEnsures are expanded here.
     ensures RecoveryAddress::spec_get_rotation_caps(recovery_address)[
         len(RecoveryAddress::spec_get_rotation_caps(recovery_address)) - 1] == old(rotation_cap);
 

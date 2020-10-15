@@ -63,13 +63,17 @@ impl BlockMetadata {
         ))
     }
 
+    pub fn timestamp_usec(&self) -> u64 {
+        self.timestamp_usecs
+    }
+
     pub fn proposer(&self) -> AccountAddress {
         self.proposer
     }
 }
 
 pub fn new_block_event_key() -> EventKey {
-    EventKey::new_from_address(&libra_root_address(), 22)
+    EventKey::new_from_address(&libra_root_address(), 17)
 }
 
 /// The path to the new block event handle under a LibraBlock::BlockMetadata resource.

@@ -3,12 +3,26 @@
 
 # Module `0x1::LibraVersion`
 
+Maintains the version number for the Libra blockchain. The version is stored in a
+LibraConfig, and may be updated by Libra root.
 
 
--  [Struct <code><a href="LibraVersion.md#0x1_LibraVersion">LibraVersion</a></code>](#0x1_LibraVersion_LibraVersion)
--  [Const <code><a href="LibraVersion.md#0x1_LibraVersion_EINVALID_MAJOR_VERSION_NUMBER">EINVALID_MAJOR_VERSION_NUMBER</a></code>](#0x1_LibraVersion_EINVALID_MAJOR_VERSION_NUMBER)
--  [Function <code>initialize</code>](#0x1_LibraVersion_initialize)
--  [Function <code>set</code>](#0x1_LibraVersion_set)
+-  [Struct `LibraVersion`](#0x1_LibraVersion_LibraVersion)
+-  [Constants](#@Constants_0)
+-  [Function `initialize`](#0x1_LibraVersion_initialize)
+-  [Function `set`](#0x1_LibraVersion_set)
+-  [Module Specification](#@Module_Specification_1)
+    -  [Initialization](#@Initialization_2)
+    -  [Access Control](#@Access_Control_3)
+    -  [Other Invariants](#@Other_Invariants_4)
+
+
+<pre><code><b>use</b> <a href="Errors.md#0x1_Errors">0x1::Errors</a>;
+<b>use</b> <a href="LibraConfig.md#0x1_LibraConfig">0x1::LibraConfig</a>;
+<b>use</b> <a href="LibraTimestamp.md#0x1_LibraTimestamp">0x1::LibraTimestamp</a>;
+<b>use</b> <a href="Roles.md#0x1_Roles">0x1::Roles</a>;
+</code></pre>
+
 
 
 <a name="0x1_LibraVersion_LibraVersion"></a>
@@ -38,9 +52,12 @@
 
 </details>
 
-<a name="0x1_LibraVersion_EINVALID_MAJOR_VERSION_NUMBER"></a>
+<a name="@Constants_0"></a>
 
-## Const `EINVALID_MAJOR_VERSION_NUMBER`
+## Constants
+
+
+<a name="0x1_LibraVersion_EINVALID_MAJOR_VERSION_NUMBER"></a>
 
 Tried to set an invalid major version for the VM. Major versions must be strictly increasing
 
@@ -54,6 +71,7 @@ Tried to set an invalid major version for the VM. Major versions must be strictl
 
 ## Function `initialize`
 
+Publishes the LibraVersion config. Must be called during Genesis.
 
 
 <pre><code><b>public</b> <b>fun</b> <a href="LibraVersion.md#0x1_LibraVersion_initialize">initialize</a>(lr_account: &signer)
@@ -85,7 +103,7 @@ Tried to set an invalid major version for the VM. Major versions must be strictl
 <summary>Specification</summary>
 
 
-Must abort if the signer does not have the LibraRoot role [B19].
+Must abort if the signer does not have the LibraRoot role [[H10]][PERMISSION].
 
 
 <pre><code><b>include</b> <a href="Roles.md#0x1_Roles_AbortsIfNotLibraRoot">Roles::AbortsIfNotLibraRoot</a>{account: lr_account};
@@ -102,6 +120,7 @@ Must abort if the signer does not have the LibraRoot role [B19].
 
 ## Function `set`
 
+Allows Libra root to update the major version to a larger version.
 
 
 <pre><code><b>public</b> <b>fun</b> <a href="LibraVersion.md#0x1_LibraVersion_set">set</a>(lr_account: &signer, major: u64)
@@ -140,7 +159,7 @@ Must abort if the signer does not have the LibraRoot role [B19].
 <summary>Specification</summary>
 
 
-Must abort if the signer does not have the LibraRoot role [B19].
+Must abort if the signer does not have the LibraRoot role [[H10]][PERMISSION].
 
 
 <pre><code><b>include</b> <a href="Roles.md#0x1_Roles_AbortsIfNotLibraRoot">Roles::AbortsIfNotLibraRoot</a>{account: lr_account};
@@ -152,6 +171,19 @@ Must abort if the signer does not have the LibraRoot role [B19].
 
 
 
+</details>
+
+<a name="@Module_Specification_1"></a>
+
+## Module Specification
+
+
+
+<a name="@Initialization_2"></a>
+
+### Initialization
+
+
 After genesis, version is published.
 
 
@@ -159,15 +191,12 @@ After genesis, version is published.
 </code></pre>
 
 
-The permission "UpdateLibraProtocolVersion" is granted to LibraRoot [B19].
 
+<a name="@Access_Control_3"></a>
 
-<pre><code><b>invariant</b> [<b>global</b>, isolated] <b>forall</b> addr: address <b>where</b> <b>exists</b>&lt;<a href="LibraConfig.md#0x1_LibraConfig">LibraConfig</a>&lt;<a href="LibraVersion.md#0x1_LibraVersion">LibraVersion</a>&gt;&gt;(addr):
-    addr == <a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>();
-</code></pre>
+### Access Control
 
-
-Only "set" can modify the LibraVersion config [B19]
+Only "set" can modify the LibraVersion config [[H10]][PERMISSION]
 
 
 <a name="0x1_LibraVersion_LibraVersionRemainsSame"></a>
@@ -188,4 +217,29 @@ Only "set" can modify the LibraVersion config [B19]
 
 
 
-</details>
+The permission "UpdateLibraProtocolVersion" is granted to LibraRoot [[H10]][PERMISSION].
+
+
+<pre><code><b>invariant</b> [<b>global</b>, isolated] <b>forall</b> addr: address <b>where</b> <b>exists</b>&lt;<a href="LibraConfig.md#0x1_LibraConfig">LibraConfig</a>&lt;<a href="LibraVersion.md#0x1_LibraVersion">LibraVersion</a>&gt;&gt;(addr):
+    addr == <a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>();
+</code></pre>
+
+
+
+<a name="@Other_Invariants_4"></a>
+
+### Other Invariants
+
+
+Version number never decreases
+
+
+<pre><code><b>invariant</b> <b>update</b> [<b>global</b>, isolated]
+    <b>old</b>(<a href="LibraConfig.md#0x1_LibraConfig_get">LibraConfig::get</a>&lt;<a href="LibraVersion.md#0x1_LibraVersion">LibraVersion</a>&gt;().major) &lt;= <a href="LibraConfig.md#0x1_LibraConfig_get">LibraConfig::get</a>&lt;<a href="LibraVersion.md#0x1_LibraVersion">LibraVersion</a>&gt;().major;
+</code></pre>
+
+
+[//]: # ("File containing references which can be used from documentation")
+[ACCESS_CONTROL]: https://github.com/libra/lip/blob/master/lips/lip-2.md
+[ROLE]: https://github.com/libra/lip/blob/master/lips/lip-2.md#roles
+[PERMISSION]: https://github.com/libra/lip/blob/master/lips/lip-2.md#permissions

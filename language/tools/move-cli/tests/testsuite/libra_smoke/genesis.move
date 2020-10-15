@@ -2,7 +2,6 @@ script {
     use 0x1::AccountFreezing;
     use 0x1::ChainId;
     use 0x1::Coin1;
-    use 0x1::Coin2;
     use 0x1::DualAttestation;
     use 0x1::LBR;
     use 0x1::Libra;
@@ -26,10 +25,10 @@ script {
         let tc_auth_key = dummy_auth_key;
 
         // no script allowlist + allow open publishing
-        let initial_script_allow_list = Vector::empty<vector<u8>>();
+        let initial_script_allow_list = Vector::empty();
         let is_open_module = true;
-        let instruction_schedule = Vector::empty<u8>();
-        let native_schedule = Vector::empty<u8>();
+        let instruction_schedule = Vector::empty();
+        let native_schedule = Vector::empty();
         let chain_id = 0;
 
         LibraAccount::initialize(lr_account, x"00000000000000000000000000000000");
@@ -44,7 +43,6 @@ script {
 
         // Currency setup
         Coin1::initialize(lr_account, tc_account);
-        Coin2::initialize(lr_account, tc_account);
 
         LBR::initialize(
             lr_account,
@@ -53,11 +51,7 @@ script {
 
         AccountFreezing::initialize(lr_account);
 
-        // Register transaction fee resource
-        TransactionFee::initialize(
-            lr_account,
-            tc_account,
-        );
+        TransactionFee::initialize(tc_account);
 
         LibraSystem::initialize_validator_set(
             lr_account,

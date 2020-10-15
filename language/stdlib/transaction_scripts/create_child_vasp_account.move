@@ -39,6 +39,7 @@ use 0x1::LibraAccount;
 /// # Common Abort Conditions
 /// | Error Category              | Error Reason                                             | Description                                                                              |
 /// | ----------------            | --------------                                           | -------------                                                                            |
+/// | `Errors::INVALID_ARGUMENT`  | `LibraAccount::EMALFORMED_AUTHENTICATION_KEY`            | The `auth_key_prefix` was not of length 32.                                              |
 /// | `Errors::REQUIRES_ROLE`     | `Roles::EPARENT_VASP`                                    | The sending account wasn't a Parent VASP account.                                        |
 /// | `Errors::ALREADY_PUBLISHED` | `Roles::EROLE_ID`                                        | The `child_address` address is already taken.                                            |
 /// | `Errors::LIMIT_EXCEEDED`    | `VASP::ETOO_MANY_CHILDREN`                               | The sending account has reached the maximum number of allowed child accounts.            |
@@ -46,6 +47,7 @@ use 0x1::LibraAccount;
 /// | `Errors::INVALID_STATE`     | `LibraAccount::EWITHDRAWAL_CAPABILITY_ALREADY_EXTRACTED` | The withdrawal capability for the sending account has already been extracted.            |
 /// | `Errors::NOT_PUBLISHED`     | `LibraAccount::EPAYER_DOESNT_HOLD_CURRENCY`              | The sending account doesn't have a balance in `CoinType`.                                |
 /// | `Errors::LIMIT_EXCEEDED`    | `LibraAccount::EINSUFFICIENT_BALANCE`                    | The sending account doesn't have at least `child_initial_balance` of `CoinType` balance. |
+/// | `Errors::INVALID_ARGUMENT`  | `LibraAccount::ECANNOT_CREATE_AT_VM_RESERVED`            | The `child_address` is the reserved address 0x0.                                         |
 ///
 /// # Related Scripts
 /// * `Script::create_parent_vasp_account`
@@ -80,7 +82,9 @@ fun create_child_vasp_account<CoinType>(
 spec fun create_child_vasp_account {
     use 0x1::Signer;
     use 0x1::Errors;
+    use 0x1::Roles;
 
+    include LibraAccount::TransactionChecks{sender: parent_vasp}; // properties checked by the prologue.
     let parent_addr = Signer::spec_address_of(parent_vasp);
     let parent_cap = LibraAccount::spec_get_withdraw_cap(parent_addr);
     include LibraAccount::CreateChildVASPAccountAbortsIf<CoinType>{
@@ -110,6 +114,10 @@ spec fun create_child_vasp_account {
         Errors::LIMIT_EXCEEDED,
         Errors::NOT_PUBLISHED,
         Errors::INVALID_STATE,
-        Errors::INVALID_ARGUMENT; // TODO: Undocumented error code. This script can abort with the error code due to `LibraAccount::make_account`.
+        Errors::INVALID_ARGUMENT;
+
+    /// Access Control
+    /// Only Parent VASP accounts can create Child VASP accounts [[A7]][ROLE].
+    include Roles::AbortsIfNotParentVasp{account: parent_vasp};
 }
 }

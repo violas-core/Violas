@@ -36,7 +36,12 @@ pub const TRANSACTION_SCRIPTS_DOC_DIR: &str = "transaction_scripts/doc";
 /// The documentation root template for stdlib.
 pub const STD_LIB_DOC_TEMPLATE: &str = "modules/overview_template.md";
 /// The documentation root template for scripts.
-pub const TRANSACTION_SCRIPT_DOC_TEMPLATE: &str = "transaction_scripts/overview_template.md";
+pub const TRANSACTION_SCRIPT_DOC_TEMPLATE: &str =
+    "transaction_scripts/transaction_script_documentation_template.md";
+/// The specification root template for scripts and stdlib.
+pub const SPEC_DOC_TEMPLATE: &str = "transaction_scripts/spec_documentation_template.md";
+/// Path to the references template.
+pub const REFERENCES_DOC_TEMPLATE: &str = "modules/references_template.md";
 
 pub const ERROR_DESC_DIR: &str = "error_descriptions";
 pub const ERROR_DESC_FILENAME: &str = "error_descriptions";
@@ -189,8 +194,11 @@ pub fn build_stdlib_doc() {
     build_doc(
         STD_LIB_DOC_DIR,
         "",
+        vec![path_in_crate(STD_LIB_DOC_TEMPLATE)
+            .to_string_lossy()
+            .to_string()],
         Some(
-            path_in_crate(STD_LIB_DOC_TEMPLATE)
+            path_in_crate(REFERENCES_DOC_TEMPLATE)
                 .to_string_lossy()
                 .to_string(),
         ),
@@ -203,8 +211,16 @@ pub fn build_transaction_script_doc(script_files: &[String]) {
     build_doc(
         TRANSACTION_SCRIPTS_DOC_DIR,
         STD_LIB_DOC_DIR,
-        Some(
+        vec![
             path_in_crate(TRANSACTION_SCRIPT_DOC_TEMPLATE)
+                .to_string_lossy()
+                .to_string(),
+            path_in_crate(SPEC_DOC_TEMPLATE)
+                .to_string_lossy()
+                .to_string(),
+        ],
+        Some(
+            path_in_crate(REFERENCES_DOC_TEMPLATE)
                 .to_string_lossy()
                 .to_string(),
         ),
@@ -234,7 +250,8 @@ pub fn build_stdlib_error_code_map() {
 fn build_doc(
     output_path: &str,
     doc_path: &str,
-    template: Option<String>,
+    templates: Vec<String>,
+    references_file: Option<String>,
     sources: &[String],
     dep_path: &str,
 ) {
@@ -247,8 +264,9 @@ fn build_doc(
     options.run_docgen = true;
     // Take the defaults here for docgen. Changes in options should be applied there so
     // command line and invocation here have same output.
-    if template.is_some() {
-        options.docgen.root_doc_template = template;
+    options.docgen.root_doc_templates = templates;
+    if references_file.is_some() {
+        options.docgen.references_file = references_file;
     }
     if !doc_path.is_empty() {
         options.docgen.doc_path = vec![doc_path.to_string()];

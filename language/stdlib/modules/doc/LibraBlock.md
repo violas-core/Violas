@@ -3,17 +3,27 @@
 
 # Module `0x1::LibraBlock`
 
+This module defines a struct storing the metadata of the block and new block events.
 
 
--  [Resource <code><a href="LibraBlock.md#0x1_LibraBlock_BlockMetadata">BlockMetadata</a></code>](#0x1_LibraBlock_BlockMetadata)
--  [Struct <code><a href="LibraBlock.md#0x1_LibraBlock_NewBlockEvent">NewBlockEvent</a></code>](#0x1_LibraBlock_NewBlockEvent)
--  [Const <code><a href="LibraBlock.md#0x1_LibraBlock_EBLOCK_METADATA">EBLOCK_METADATA</a></code>](#0x1_LibraBlock_EBLOCK_METADATA)
--  [Const <code><a href="LibraBlock.md#0x1_LibraBlock_EVM_OR_VALIDATOR">EVM_OR_VALIDATOR</a></code>](#0x1_LibraBlock_EVM_OR_VALIDATOR)
--  [Function <code>initialize_block_metadata</code>](#0x1_LibraBlock_initialize_block_metadata)
--  [Function <code>is_initialized</code>](#0x1_LibraBlock_is_initialized)
--  [Function <code>block_prologue</code>](#0x1_LibraBlock_block_prologue)
--  [Function <code>get_current_block_height</code>](#0x1_LibraBlock_get_current_block_height)
--  [Module Specification](#@Module_Specification_0)
+-  [Resource `BlockMetadata`](#0x1_LibraBlock_BlockMetadata)
+-  [Struct `NewBlockEvent`](#0x1_LibraBlock_NewBlockEvent)
+-  [Constants](#@Constants_0)
+-  [Function `initialize_block_metadata`](#0x1_LibraBlock_initialize_block_metadata)
+-  [Function `is_initialized`](#0x1_LibraBlock_is_initialized)
+-  [Function `block_prologue`](#0x1_LibraBlock_block_prologue)
+-  [Function `get_current_block_height`](#0x1_LibraBlock_get_current_block_height)
+-  [Module Specification](#@Module_Specification_1)
+    -  [Initialization](#@Initialization_2)
+
+
+<pre><code><b>use</b> <a href="CoreAddresses.md#0x1_CoreAddresses">0x1::CoreAddresses</a>;
+<b>use</b> <a href="Errors.md#0x1_Errors">0x1::Errors</a>;
+<b>use</b> <a href="Event.md#0x1_Event">0x1::Event</a>;
+<b>use</b> <a href="LibraSystem.md#0x1_LibraSystem">0x1::LibraSystem</a>;
+<b>use</b> <a href="LibraTimestamp.md#0x1_LibraTimestamp">0x1::LibraTimestamp</a>;
+</code></pre>
+
 
 
 <a name="0x1_LibraBlock_BlockMetadata"></a>
@@ -94,9 +104,12 @@
 
 </details>
 
-<a name="0x1_LibraBlock_EBLOCK_METADATA"></a>
+<a name="@Constants_0"></a>
 
-## Const `EBLOCK_METADATA`
+## Constants
+
+
+<a name="0x1_LibraBlock_EBLOCK_METADATA"></a>
 
 The <code><a href="LibraBlock.md#0x1_LibraBlock_BlockMetadata">BlockMetadata</a></code> resource is in an invalid state
 
@@ -107,8 +120,6 @@ The <code><a href="LibraBlock.md#0x1_LibraBlock_BlockMetadata">BlockMetadata</a>
 
 
 <a name="0x1_LibraBlock_EVM_OR_VALIDATOR"></a>
-
-## Const `EVM_OR_VALIDATOR`
 
 An invalid signer was provided. Expected the signer to be the VM or a Validator.
 
@@ -290,6 +301,7 @@ Get the current block height
 
 
 <pre><code><b>public</b> <b>fun</b> <a href="LibraBlock.md#0x1_LibraBlock_get_current_block_height">get_current_block_height</a>(): u64 <b>acquires</b> <a href="LibraBlock.md#0x1_LibraBlock_BlockMetadata">BlockMetadata</a> {
+    <b>assert</b>(<a href="LibraBlock.md#0x1_LibraBlock_is_initialized">is_initialized</a>(), <a href="Errors.md#0x1_Errors_not_published">Errors::not_published</a>(<a href="LibraBlock.md#0x1_LibraBlock_EBLOCK_METADATA">EBLOCK_METADATA</a>));
     borrow_global&lt;<a href="LibraBlock.md#0x1_LibraBlock_BlockMetadata">BlockMetadata</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>()).height
 }
 </code></pre>
@@ -298,11 +310,23 @@ Get the current block height
 
 </details>
 
-<a name="@Module_Specification_0"></a>
+<a name="@Module_Specification_1"></a>
 
 ## Module Specification
 
 
 
+<a name="@Initialization_2"></a>
+
+### Initialization
+
+
+
 <pre><code><b>invariant</b> [<b>global</b>] <a href="LibraTimestamp.md#0x1_LibraTimestamp_is_operating">LibraTimestamp::is_operating</a>() ==&gt; <a href="LibraBlock.md#0x1_LibraBlock_is_initialized">is_initialized</a>();
 </code></pre>
+
+
+[//]: # ("File containing references which can be used from documentation")
+[ACCESS_CONTROL]: https://github.com/libra/lip/blob/master/lips/lip-2.md
+[ROLE]: https://github.com/libra/lip/blob/master/lips/lip-2.md#roles
+[PERMISSION]: https://github.com/libra/lip/blob/master/lips/lip-2.md#permissions

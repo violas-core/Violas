@@ -3,25 +3,47 @@
 
 # Module `0x1::CoreAddresses`
 
+Module providing well-known addresses and related logic.
+
+> Note: this module currently defines zero-argument functions like <code><a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">Self::LIBRA_ROOT_ADDRESS</a>()</code> using capitalization
+> in the name, as usually reserved for constants. Eventually, those functions are planned to become actually
+> global constants, once the Move language supports this feature.
 
 
--  [Const <code><a href="CoreAddresses.md#0x1_CoreAddresses_ELIBRA_ROOT">ELIBRA_ROOT</a></code>](#0x1_CoreAddresses_ELIBRA_ROOT)
--  [Const <code><a href="CoreAddresses.md#0x1_CoreAddresses_ETREASURY_COMPLIANCE">ETREASURY_COMPLIANCE</a></code>](#0x1_CoreAddresses_ETREASURY_COMPLIANCE)
--  [Const <code><a href="CoreAddresses.md#0x1_CoreAddresses_EVM">EVM</a></code>](#0x1_CoreAddresses_EVM)
--  [Const <code><a href="CoreAddresses.md#0x1_CoreAddresses_ECURRENCY_INFO">ECURRENCY_INFO</a></code>](#0x1_CoreAddresses_ECURRENCY_INFO)
--  [Function <code>LIBRA_ROOT_ADDRESS</code>](#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS)
--  [Function <code>CURRENCY_INFO_ADDRESS</code>](#0x1_CoreAddresses_CURRENCY_INFO_ADDRESS)
--  [Function <code>TREASURY_COMPLIANCE_ADDRESS</code>](#0x1_CoreAddresses_TREASURY_COMPLIANCE_ADDRESS)
--  [Function <code>VM_RESERVED_ADDRESS</code>](#0x1_CoreAddresses_VM_RESERVED_ADDRESS)
--  [Function <code>assert_libra_root</code>](#0x1_CoreAddresses_assert_libra_root)
--  [Function <code>assert_treasury_compliance</code>](#0x1_CoreAddresses_assert_treasury_compliance)
--  [Function <code>assert_vm</code>](#0x1_CoreAddresses_assert_vm)
--  [Function <code>assert_currency_info</code>](#0x1_CoreAddresses_assert_currency_info)
+-  [Constants](#@Constants_0)
+-  [Function `LIBRA_ROOT_ADDRESS`](#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS)
+-  [Function `CURRENCY_INFO_ADDRESS`](#0x1_CoreAddresses_CURRENCY_INFO_ADDRESS)
+-  [Function `TREASURY_COMPLIANCE_ADDRESS`](#0x1_CoreAddresses_TREASURY_COMPLIANCE_ADDRESS)
+-  [Function `VM_RESERVED_ADDRESS`](#0x1_CoreAddresses_VM_RESERVED_ADDRESS)
+-  [Function `CORE_CODE_ADDRESS`](#0x1_CoreAddresses_CORE_CODE_ADDRESS)
+-  [Function `assert_libra_root`](#0x1_CoreAddresses_assert_libra_root)
+-  [Function `assert_treasury_compliance`](#0x1_CoreAddresses_assert_treasury_compliance)
+-  [Function `assert_vm`](#0x1_CoreAddresses_assert_vm)
+-  [Function `assert_currency_info`](#0x1_CoreAddresses_assert_currency_info)
+
+
+<pre><code><b>use</b> <a href="Errors.md#0x1_Errors">0x1::Errors</a>;
+<b>use</b> <a href="Signer.md#0x1_Signer">0x1::Signer</a>;
+</code></pre>
+
+
+
+<a name="@Constants_0"></a>
+
+## Constants
+
+
+<a name="0x1_CoreAddresses_ECURRENCY_INFO"></a>
+
+The operation can only be performed by the account where currencies are registered
+
+
+<pre><code><b>const</b> <a href="CoreAddresses.md#0x1_CoreAddresses_ECURRENCY_INFO">ECURRENCY_INFO</a>: u64 = 4;
+</code></pre>
+
 
 
 <a name="0x1_CoreAddresses_ELIBRA_ROOT"></a>
-
-## Const `ELIBRA_ROOT`
 
 The operation can only be performed by the account at 0xA550C18 (Libra Root)
 
@@ -33,8 +55,6 @@ The operation can only be performed by the account at 0xA550C18 (Libra Root)
 
 <a name="0x1_CoreAddresses_ETREASURY_COMPLIANCE"></a>
 
-## Const `ETREASURY_COMPLIANCE`
-
 The operation can only be performed by the account at 0xB1E55ED (Treasury & Compliance)
 
 
@@ -45,24 +65,10 @@ The operation can only be performed by the account at 0xB1E55ED (Treasury & Comp
 
 <a name="0x1_CoreAddresses_EVM"></a>
 
-## Const `EVM`
-
 The operation can only be performed by the VM
 
 
 <pre><code><b>const</b> <a href="CoreAddresses.md#0x1_CoreAddresses_EVM">EVM</a>: u64 = 2;
-</code></pre>
-
-
-
-<a name="0x1_CoreAddresses_ECURRENCY_INFO"></a>
-
-## Const `ECURRENCY_INFO`
-
-The operation can only be performed by the account where currencies are registered
-
-
-<pre><code><b>const</b> <a href="CoreAddresses.md#0x1_CoreAddresses_ECURRENCY_INFO">ECURRENCY_INFO</a>: u64 = 4;
 </code></pre>
 
 
@@ -178,6 +184,32 @@ is no signer for the transaction.
 
 </details>
 
+<a name="0x1_CoreAddresses_CORE_CODE_ADDRESS"></a>
+
+## Function `CORE_CODE_ADDRESS`
+
+The reserved address where all core modules are published. No
+account can be created at this address.
+
+
+<pre><code><b>public</b> <b>fun</b> <a href="CoreAddresses.md#0x1_CoreAddresses_CORE_CODE_ADDRESS">CORE_CODE_ADDRESS</a>(): address
+</code></pre>
+
+
+
+<details>
+<summary>Implementation</summary>
+
+
+<pre><code><b>public</b> <b>fun</b> <a href="CoreAddresses.md#0x1_CoreAddresses_CORE_CODE_ADDRESS">CORE_CODE_ADDRESS</a>(): address {
+    0x1
+}
+</code></pre>
+
+
+
+</details>
+
 <a name="0x1_CoreAddresses_assert_libra_root"></a>
 
 ## Function `assert_libra_root`
@@ -208,7 +240,7 @@ Assert that the account is the libra root address.
 
 
 
-<pre><code>pragma opaque;
+<pre><code><b>pragma</b> opaque;
 <b>include</b> <a href="CoreAddresses.md#0x1_CoreAddresses_AbortsIfNotLibraRoot">AbortsIfNotLibraRoot</a>;
 </code></pre>
 
@@ -263,7 +295,7 @@ Assert that the signer has the treasury compliance address.
 
 
 
-<pre><code>pragma opaque;
+<pre><code><b>pragma</b> opaque;
 <b>include</b> <a href="CoreAddresses.md#0x1_CoreAddresses_AbortsIfNotTreasuryCompliance">AbortsIfNotTreasuryCompliance</a>;
 </code></pre>
 
@@ -315,7 +347,7 @@ Assert that the signer has the VM reserved address.
 
 
 
-<pre><code>pragma opaque;
+<pre><code><b>pragma</b> opaque;
 <b>include</b> <a href="CoreAddresses.md#0x1_CoreAddresses_AbortsIfNotVM">AbortsIfNotVM</a>;
 </code></pre>
 
@@ -367,7 +399,7 @@ Assert that the signer has the currency info address.
 
 
 
-<pre><code>pragma opaque;
+<pre><code><b>pragma</b> opaque;
 <b>include</b> <a href="CoreAddresses.md#0x1_CoreAddresses_AbortsIfNotCurrencyInfo">AbortsIfNotCurrencyInfo</a>;
 </code></pre>
 
@@ -388,3 +420,9 @@ Specifies that a function aborts if the account has not the currency info addres
 
 
 </details>
+
+
+[//]: # ("File containing references which can be used from documentation")
+[ACCESS_CONTROL]: https://github.com/libra/lip/blob/master/lips/lip-2.md
+[ROLE]: https://github.com/libra/lip/blob/master/lips/lip-2.md#roles
+[PERMISSION]: https://github.com/libra/lip/blob/master/lips/lip-2.md#permissions

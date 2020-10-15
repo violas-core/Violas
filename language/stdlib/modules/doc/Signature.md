@@ -6,8 +6,12 @@
 Contains functions for [ed25519](https://en.wikipedia.org/wiki/EdDSA) digital signatures.
 
 
--  [Function <code>ed25519_validate_pubkey</code>](#0x1_Signature_ed25519_validate_pubkey)
--  [Function <code>ed25519_verify</code>](#0x1_Signature_ed25519_verify)
+-  [Function `ed25519_validate_pubkey`](#0x1_Signature_ed25519_validate_pubkey)
+-  [Function `ed25519_verify`](#0x1_Signature_ed25519_verify)
+
+
+<pre><code></code></pre>
+
 
 
 <a name="0x1_Signature_ed25519_validate_pubkey"></a>
@@ -70,3 +74,9 @@ Does not abort.
 
 
 </details>
+
+
+[//]: # ("File containing references which can be used from documentation")
+[ACCESS_CONTROL]: https://github.com/libra/lip/blob/master/lips/lip-2.md
+[ROLE]: https://github.com/libra/lip/blob/master/lips/lip-2.md#roles
+[PERMISSION]: https://github.com/libra/lip/blob/master/lips/lip-2.md#permissions

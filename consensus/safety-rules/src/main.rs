@@ -30,6 +30,9 @@ fn main() {
         .read_env()
         .init();
 
+    libra_logger::info!(config = config, "Loaded SafetyRules config");
+
+    crash_handler::setup_panic_handler();
     let _mp = MetricsPusher::start();
 
     let mut service = Process::new(config);

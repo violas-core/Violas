@@ -13,12 +13,13 @@ use anyhow::{bail, Result};
 use channel::{libra_channel, message_queues::QueueStyle};
 use futures::{executor::block_on, future::FutureExt, StreamExt};
 use libra_config::{
-    config::{GossipConfig, RoleType},
+    config::RoleType,
     network_id::{NetworkContext, NetworkId, NodeNetworkId},
 };
 use libra_crypto::x25519;
+use libra_infallible::RwLock;
 use libra_mempool::mocks::MockSharedMempool;
-use libra_network_address::NetworkAddress;
+use libra_network_address::{parse_memory, NetworkAddress, Protocol};
 use libra_types::{
     chain_id::ChainId, ledger_info::LedgerInfoWithSignatures, on_chain_config::ValidatorSet,
     transaction::TransactionListWithProof, validator_info::ValidatorInfo,
@@ -27,7 +28,6 @@ use libra_types::{
 };
 use netcore::transport::{ConnectionOrigin, ConnectionOrigin::*};
 use network::{
-    constants,
     peer_manager::{
         builder::AuthenticationMode, conn_notifs_channel, ConnectionNotification,
         ConnectionRequestSender, PeerManagerNotification, PeerManagerRequest,
@@ -43,7 +43,7 @@ use std::{
     ops::DerefMut,
     sync::{
         atomic::{AtomicUsize, Ordering},
-        Arc, RwLock,
+        Arc,
     },
 };
 use tokio::runtime::Runtime;
@@ -55,10 +55,10 @@ struct SynchronizerEnv {
     storage_proxies: Vec<Arc<RwLock<MockStorage>>>, // to directly modify peers storage
     signers: Vec<ValidatorSigner>,
     network_keys: Vec<x25519::PrivateKey>,
+    network_addrs: Vec<NetworkAddress>,
     public_keys: Vec<ValidatorInfo>,
     network_id: NetworkId,
     peer_ids: Vec<PeerId>,
-    peer_addresses: Vec<NetworkAddress>,
     mempools: Vec<MockSharedMempool>,
     network_reqs_rxs:
         HashMap<PeerId, libra_channel::Receiver<(PeerId, ProtocolId), PeerManagerRequest>>,
@@ -90,14 +90,14 @@ impl SynchronizerEnv {
         let validator_set = ValidatorSet::new(new_keys);
         self.storage_proxies[0]
             .write()
-            .unwrap()
             .move_to_next_epoch(signers[0].clone(), validator_set);
     }
 
     fn new(num_peers: usize) -> Self {
         ::libra_logger::Logger::init_for_testing();
         let runtime = Runtime::new().unwrap();
-        let (signers, public_keys, network_keys) = SynchronizerEnvHelper::initial_setup(num_peers);
+        let (signers, public_keys, network_keys, network_addrs) =
+            SynchronizerEnvHelper::initial_setup(num_peers);
         let peer_ids = signers.iter().map(|s| s.author()).collect::<Vec<PeerId>>();
 
         Self {
@@ -108,9 +108,9 @@ impl SynchronizerEnv {
             signers,
             network_id: NetworkId::Validator,
             network_keys,
+            network_addrs,
             public_keys,
             peer_ids,
-            peer_addresses: vec![],
             mempools: vec![],
             network_reqs_rxs: HashMap::new(),
             network_notifs_txs: HashMap::new(),
@@ -149,22 +149,6 @@ impl SynchronizerEnv {
         upstream_networks: Option<Vec<NetworkId>>,
     ) {
         let new_peer_idx = self.synchronizers.len();
-        let seed_pubkeys: HashMap<_, _> = self
-            .public_keys
-            .iter()
-            .map(|public_keys| {
-                let peer_id = *public_keys.account_address();
-                let peer_idx = self
-                    .peer_ids
-                    .iter()
-                    .position(|pid| pid == &peer_id)
-                    .unwrap();
-                let pubkey = self.network_keys[peer_idx].public_key();
-                let pubkey_set: HashSet<_> = [pubkey].iter().copied().collect();
-                (peer_id, pubkey_set)
-            })
-            .collect();
-        let trusted_peers = Arc::new(RwLock::new(HashMap::new()));
 
         // set up config
         let mut config = libra_config::config::NodeConfig::default_for_validator();
@@ -235,53 +219,40 @@ impl SynchronizerEnv {
 
             self.multi_peer_ids.push(network_ids);
         } else {
-            let addr: NetworkAddress = "/memory/0".parse().unwrap();
-            let mut seed_addrs = HashMap::new();
-            if new_peer_idx > 0 {
-                seed_addrs.insert(
-                    self.peer_ids[new_peer_idx - 1],
-                    vec![self.peer_addresses[new_peer_idx - 1].clone()],
-                );
-            }
-            let key = self.network_keys[new_peer_idx].clone();
-            let pub_key = key.public_key();
-            let authentication_mode = AuthenticationMode::Mutual(key);
+            let auth_mode = AuthenticationMode::Mutual(self.network_keys[new_peer_idx].clone());
             let network_context = Arc::new(NetworkContext::new(
                 self.network_id.clone(),
                 RoleType::Validator,
                 self.peer_ids[new_peer_idx],
             ));
-            let mut network_builder = NetworkBuilder::new(
+
+            let seed_addrs: HashMap<_, _> = self
+                .network_addrs
+                .iter()
+                .enumerate()
+                .map(|(idx, addr)| (self.peer_ids[idx], vec![addr.clone()]))
+                .collect();
+            let seed_pubkeys = HashMap::new();
+            let trusted_peers = Arc::new(RwLock::new(HashMap::new()));
+
+            // Recover the base address we bound previously.
+            let addr_protos = self.network_addrs[new_peer_idx].as_slice();
+            let (port, _suffix) = parse_memory(addr_protos).unwrap();
+            let base_addr = NetworkAddress::from(Protocol::Memory(port));
+
+            let mut network_builder = NetworkBuilder::new_for_test(
                 ChainId::default(),
-                trusted_peers.clone(),
+                seed_addrs,
+                seed_pubkeys,
+                trusted_peers,
                 network_context,
-                addr.clone(),
-                authentication_mode,
-                constants::MAX_FRAME_SIZE,
+                base_addr,
+                auth_mode,
             );
-            network_builder
-                .add_connectivity_manager(
-                    seed_addrs,
-                    seed_pubkeys,
-                    trusted_peers,
-                    constants::MAX_FULLNODE_CONNECTIONS,
-                    constants::MAX_CONNECTION_DELAY_MS,
-                    constants::CONNECTIVITY_CHECK_INTERNAL_MS,
-                    constants::NETWORK_CHANNEL_SIZE,
-                )
-                .add_gossip_discovery(
-                    GossipConfig {
-                        advertised_address: addr,
-                        discovery_interval_ms: constants::DISCOVERY_INTERVAL_MS,
-                    },
-                    pub_key,
-                );
 
             let (sender, events) =
                 network_builder.add_protocol_handler(crate::network::network_endpoint_config());
             network_builder.build(self.runtime.handle().clone()).start();
-            let peer_addr = network_builder.listen_address();
-            self.peer_addresses.push(peer_addr);
             network_handles.push((NodeNetworkId::new(network_id, 0), sender, events));
         };
 
@@ -319,7 +290,7 @@ impl SynchronizerEnv {
 
     // commit new txns up to the given version
     fn commit(&self, peer_id: usize, version: u64) {
-        let mut storage = self.storage_proxies[peer_id].write().unwrap();
+        let mut storage = self.storage_proxies[peer_id].write();
         let num_txns = version - storage.version();
         assert!(num_txns > 0);
         let (committed_txns, signed_txns) = storage.commit_new_txns(num_txns);
@@ -340,10 +311,7 @@ impl SynchronizerEnv {
     }
 
     fn latest_li(&self, peer_id: usize) -> LedgerInfoWithSignatures {
-        self.storage_proxies[peer_id]
-            .read()
-            .unwrap()
-            .highest_local_li()
+        self.storage_proxies[peer_id].read().highest_local_li()
     }
 
     // Find LedgerInfo for a epoch boundary version
@@ -354,7 +322,6 @@ impl SynchronizerEnv {
     ) -> Result<LedgerInfoWithSignatures> {
         self.storage_proxies[peer_id]
             .read()
-            .unwrap()
             .get_epoch_ending_ledger_info(version)
     }
 
@@ -443,9 +410,9 @@ impl SynchronizerEnv {
     }
 
     fn clone_storage(&mut self, from_idx: usize, to_idx: usize) {
-        let storage_0_lock = self.storage_proxies[from_idx].read().unwrap();
+        let storage_0_lock = self.storage_proxies[from_idx].read();
         let storage_0 = storage_0_lock;
-        let mut storage_1_lock = self.storage_proxies[to_idx].write().unwrap();
+        let mut storage_1_lock = self.storage_proxies[to_idx].write();
         let storage_1 = storage_1_lock.deref_mut();
         *storage_1 = storage_0.clone();
     }

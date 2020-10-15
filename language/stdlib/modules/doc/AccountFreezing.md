@@ -3,23 +3,34 @@
 
 # Module `0x1::AccountFreezing`
 
+Module which manages freezing of accounts.
 
 
--  [Resource <code><a href="AccountFreezing.md#0x1_AccountFreezing_FreezingBit">FreezingBit</a></code>](#0x1_AccountFreezing_FreezingBit)
--  [Resource <code><a href="AccountFreezing.md#0x1_AccountFreezing_FreezeEventsHolder">FreezeEventsHolder</a></code>](#0x1_AccountFreezing_FreezeEventsHolder)
--  [Struct <code><a href="AccountFreezing.md#0x1_AccountFreezing_FreezeAccountEvent">FreezeAccountEvent</a></code>](#0x1_AccountFreezing_FreezeAccountEvent)
--  [Struct <code><a href="AccountFreezing.md#0x1_AccountFreezing_UnfreezeAccountEvent">UnfreezeAccountEvent</a></code>](#0x1_AccountFreezing_UnfreezeAccountEvent)
--  [Const <code><a href="AccountFreezing.md#0x1_AccountFreezing_EFREEZE_EVENTS_HOLDER">EFREEZE_EVENTS_HOLDER</a></code>](#0x1_AccountFreezing_EFREEZE_EVENTS_HOLDER)
--  [Const <code><a href="AccountFreezing.md#0x1_AccountFreezing_EFREEZING_BIT">EFREEZING_BIT</a></code>](#0x1_AccountFreezing_EFREEZING_BIT)
--  [Const <code><a href="AccountFreezing.md#0x1_AccountFreezing_ECANNOT_FREEZE_LIBRA_ROOT">ECANNOT_FREEZE_LIBRA_ROOT</a></code>](#0x1_AccountFreezing_ECANNOT_FREEZE_LIBRA_ROOT)
--  [Const <code><a href="AccountFreezing.md#0x1_AccountFreezing_ECANNOT_FREEZE_TC">ECANNOT_FREEZE_TC</a></code>](#0x1_AccountFreezing_ECANNOT_FREEZE_TC)
--  [Const <code><a href="AccountFreezing.md#0x1_AccountFreezing_EACCOUNT_FROZEN">EACCOUNT_FROZEN</a></code>](#0x1_AccountFreezing_EACCOUNT_FROZEN)
--  [Function <code>initialize</code>](#0x1_AccountFreezing_initialize)
--  [Function <code>create</code>](#0x1_AccountFreezing_create)
--  [Function <code>freeze_account</code>](#0x1_AccountFreezing_freeze_account)
--  [Function <code>unfreeze_account</code>](#0x1_AccountFreezing_unfreeze_account)
--  [Function <code>account_is_frozen</code>](#0x1_AccountFreezing_account_is_frozen)
--  [Function <code>assert_not_frozen</code>](#0x1_AccountFreezing_assert_not_frozen)
+-  [Resource `FreezingBit`](#0x1_AccountFreezing_FreezingBit)
+-  [Resource `FreezeEventsHolder`](#0x1_AccountFreezing_FreezeEventsHolder)
+-  [Struct `FreezeAccountEvent`](#0x1_AccountFreezing_FreezeAccountEvent)
+-  [Struct `UnfreezeAccountEvent`](#0x1_AccountFreezing_UnfreezeAccountEvent)
+-  [Constants](#@Constants_0)
+-  [Function `initialize`](#0x1_AccountFreezing_initialize)
+-  [Function `create`](#0x1_AccountFreezing_create)
+-  [Function `freeze_account`](#0x1_AccountFreezing_freeze_account)
+-  [Function `unfreeze_account`](#0x1_AccountFreezing_unfreeze_account)
+-  [Function `account_is_frozen`](#0x1_AccountFreezing_account_is_frozen)
+-  [Function `assert_not_frozen`](#0x1_AccountFreezing_assert_not_frozen)
+-  [Module Specification](#@Module_Specification_1)
+    -  [Initialization](#@Initialization_2)
+    -  [Access Control](#@Access_Control_3)
+    -  [Helper Functions](#@Helper_Functions_4)
+
+
+<pre><code><b>use</b> <a href="CoreAddresses.md#0x1_CoreAddresses">0x1::CoreAddresses</a>;
+<b>use</b> <a href="Errors.md#0x1_Errors">0x1::Errors</a>;
+<b>use</b> <a href="Event.md#0x1_Event">0x1::Event</a>;
+<b>use</b> <a href="LibraTimestamp.md#0x1_LibraTimestamp">0x1::LibraTimestamp</a>;
+<b>use</b> <a href="Roles.md#0x1_Roles">0x1::Roles</a>;
+<b>use</b> <a href="Signer.md#0x1_Signer">0x1::Signer</a>;
+</code></pre>
+
 
 
 <a name="0x1_AccountFreezing_FreezingBit"></a>
@@ -150,33 +161,22 @@ Message for unfreeze account events
 
 </details>
 
-<a name="0x1_AccountFreezing_EFREEZE_EVENTS_HOLDER"></a>
+<a name="@Constants_0"></a>
 
-## Const `EFREEZE_EVENTS_HOLDER`
-
-A property expected of the <code><a href="AccountFreezing.md#0x1_AccountFreezing_FreezeEventsHolder">FreezeEventsHolder</a></code> resource didn't hold
+## Constants
 
 
-<pre><code><b>const</b> <a href="AccountFreezing.md#0x1_AccountFreezing_EFREEZE_EVENTS_HOLDER">EFREEZE_EVENTS_HOLDER</a>: u64 = 1;
-</code></pre>
+<a name="0x1_AccountFreezing_EACCOUNT_FROZEN"></a>
+
+The account is frozen
 
 
-
-<a name="0x1_AccountFreezing_EFREEZING_BIT"></a>
-
-## Const `EFREEZING_BIT`
-
-The <code><a href="AccountFreezing.md#0x1_AccountFreezing_FreezingBit">FreezingBit</a></code> resource is in an invalid state
-
-
-<pre><code><b>const</b> <a href="AccountFreezing.md#0x1_AccountFreezing_EFREEZING_BIT">EFREEZING_BIT</a>: u64 = 2;
+<pre><code><b>const</b> <a href="AccountFreezing.md#0x1_AccountFreezing_EACCOUNT_FROZEN">EACCOUNT_FROZEN</a>: u64 = 5;
 </code></pre>
 
 
 
 <a name="0x1_AccountFreezing_ECANNOT_FREEZE_LIBRA_ROOT"></a>
-
-## Const `ECANNOT_FREEZE_LIBRA_ROOT`
 
 An attempt to freeze the Libra Root account was attempted
 
@@ -188,8 +188,6 @@ An attempt to freeze the Libra Root account was attempted
 
 <a name="0x1_AccountFreezing_ECANNOT_FREEZE_TC"></a>
 
-## Const `ECANNOT_FREEZE_TC`
-
 An attempt to freeze the Treasury & Compliance account was attempted
 
 
@@ -198,14 +196,22 @@ An attempt to freeze the Treasury & Compliance account was attempted
 
 
 
-<a name="0x1_AccountFreezing_EACCOUNT_FROZEN"></a>
+<a name="0x1_AccountFreezing_EFREEZE_EVENTS_HOLDER"></a>
 
-## Const `EACCOUNT_FROZEN`
-
-The account is frozen
+A property expected of the <code><a href="AccountFreezing.md#0x1_AccountFreezing_FreezeEventsHolder">FreezeEventsHolder</a></code> resource didn't hold
 
 
-<pre><code><b>const</b> <a href="AccountFreezing.md#0x1_AccountFreezing_EACCOUNT_FROZEN">EACCOUNT_FROZEN</a>: u64 = 5;
+<pre><code><b>const</b> <a href="AccountFreezing.md#0x1_AccountFreezing_EFREEZE_EVENTS_HOLDER">EFREEZE_EVENTS_HOLDER</a>: u64 = 1;
+</code></pre>
+
+
+
+<a name="0x1_AccountFreezing_EFREEZING_BIT"></a>
+
+The <code><a href="AccountFreezing.md#0x1_AccountFreezing_FreezingBit">FreezingBit</a></code> resource is in an invalid state
+
+
+<pre><code><b>const</b> <a href="AccountFreezing.md#0x1_AccountFreezing_EFREEZING_BIT">EFREEZING_BIT</a>: u64 = 2;
 </code></pre>
 
 
@@ -450,7 +456,7 @@ Returns if the account at <code>addr</code> is frozen.
 
 
 <pre><code><b>aborts_if</b> <b>false</b>;
-pragma opaque = <b>true</b>;
+<b>pragma</b> opaque = <b>true</b>;
 <b>ensures</b> result == <a href="AccountFreezing.md#0x1_AccountFreezing_spec_account_is_frozen">spec_account_is_frozen</a>(addr);
 </code></pre>
 
@@ -488,7 +494,7 @@ Assert that an account is not frozen.
 
 
 
-<pre><code>pragma opaque;
+<pre><code><b>pragma</b> opaque;
 <b>include</b> <a href="AccountFreezing.md#0x1_AccountFreezing_AbortsIfFrozen">AbortsIfFrozen</a>;
 </code></pre>
 
@@ -506,6 +512,83 @@ Assert that an account is not frozen.
 
 
 
+</details>
+
+<a name="@Module_Specification_1"></a>
+
+## Module Specification
+
+
+
+<a name="@Initialization_2"></a>
+
+### Initialization
+
+
+<code><a href="AccountFreezing.md#0x1_AccountFreezing_FreezeEventsHolder">FreezeEventsHolder</a></code> always exists after genesis.
+
+
+<pre><code><b>invariant</b> [<b>global</b>] <a href="LibraTimestamp.md#0x1_LibraTimestamp_is_operating">LibraTimestamp::is_operating</a>() ==&gt;
+    <b>exists</b>&lt;<a href="AccountFreezing.md#0x1_AccountFreezing_FreezeEventsHolder">FreezeEventsHolder</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>());
+</code></pre>
+
+
+
+<a name="@Access_Control_3"></a>
+
+### Access Control
+
+
+The account of LibraRoot is not freezable [[F1]][ROLE].
+After genesis, FreezingBit of LibraRoot is always false.
+
+
+<pre><code><b>invariant</b> [<b>global</b>] <a href="LibraTimestamp.md#0x1_LibraTimestamp_is_operating">LibraTimestamp::is_operating</a>() ==&gt;
+    <a href="AccountFreezing.md#0x1_AccountFreezing_spec_account_is_not_frozen">spec_account_is_not_frozen</a>(<a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>());
+</code></pre>
+
+
+The account of TreasuryCompliance is not freezable [[F2]][ROLE].
+After genesis, FreezingBit of TreasuryCompliance is always false.
+
+
+<pre><code><b>invariant</b> [<b>global</b>] <a href="LibraTimestamp.md#0x1_LibraTimestamp_is_operating">LibraTimestamp::is_operating</a>() ==&gt;
+    <a href="AccountFreezing.md#0x1_AccountFreezing_spec_account_is_not_frozen">spec_account_is_not_frozen</a>(<a href="CoreAddresses.md#0x1_CoreAddresses_TREASURY_COMPLIANCE_ADDRESS">CoreAddresses::TREASURY_COMPLIANCE_ADDRESS</a>());
+</code></pre>
+
+
+The permission "{Freeze,Unfreeze}Account" is granted to TreasuryCompliance only [[H7]][PERMISSION].
+
+
+<pre><code><b>apply</b> <a href="Roles.md#0x1_Roles_AbortsIfNotTreasuryCompliance">Roles::AbortsIfNotTreasuryCompliance</a> <b>to</b> freeze_account, unfreeze_account;
+</code></pre>
+
+
+Only (un)freeze functions can change the freezing bits of accounts [[H7]][PERMISSION].
+
+
+<pre><code><b>apply</b> <a href="AccountFreezing.md#0x1_AccountFreezing_FreezingBitRemainsSame">FreezingBitRemainsSame</a> <b>to</b> * <b>except</b> freeze_account, unfreeze_account;
+</code></pre>
+
+
+
+
+<a name="0x1_AccountFreezing_FreezingBitRemainsSame"></a>
+
+
+<pre><code><b>schema</b> <a href="AccountFreezing.md#0x1_AccountFreezing_FreezingBitRemainsSame">FreezingBitRemainsSame</a> {
+    <b>ensures</b> <b>forall</b> a: address <b>where</b> <b>old</b>(<b>exists</b>&lt;<a href="AccountFreezing.md#0x1_AccountFreezing_FreezingBit">FreezingBit</a>&gt;(a)):
+        <b>global</b>&lt;<a href="AccountFreezing.md#0x1_AccountFreezing_FreezingBit">FreezingBit</a>&gt;(a).is_frozen == <b>old</b>(<b>global</b>&lt;<a href="AccountFreezing.md#0x1_AccountFreezing_FreezingBit">FreezingBit</a>&gt;(a).is_frozen);
+}
+</code></pre>
+
+
+
+<a name="@Helper_Functions_4"></a>
+
+### Helper Functions
+
+
 
 <a name="0x1_AccountFreezing_spec_account_is_frozen"></a>
 
@@ -520,60 +603,7 @@ Assert that an account is not frozen.
 </code></pre>
 
 
-FreezeEventsHolder always exists after genesis.
-
-
-<pre><code><b>invariant</b> [<b>global</b>] <a href="LibraTimestamp.md#0x1_LibraTimestamp_is_operating">LibraTimestamp::is_operating</a>() ==&gt;
-    <b>exists</b>&lt;<a href="AccountFreezing.md#0x1_AccountFreezing_FreezeEventsHolder">FreezeEventsHolder</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>());
-</code></pre>
-
-
-The account of LibraRoot is not freezable [G2].
-After genesis, FreezingBit of LibraRoot is always false.
-
-
-<pre><code><b>invariant</b> [<b>global</b>] <a href="LibraTimestamp.md#0x1_LibraTimestamp_is_operating">LibraTimestamp::is_operating</a>() ==&gt;
-    <a href="AccountFreezing.md#0x1_AccountFreezing_spec_account_is_not_frozen">spec_account_is_not_frozen</a>(<a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>());
-</code></pre>
-
-
-The account of TreasuryCompliance is not freezable [G3].
-After genesis, FreezingBit of TreasuryCompliance is always false.
-
-
-<pre><code><b>invariant</b> [<b>global</b>] <a href="LibraTimestamp.md#0x1_LibraTimestamp_is_operating">LibraTimestamp::is_operating</a>() ==&gt;
-    <a href="AccountFreezing.md#0x1_AccountFreezing_spec_account_is_not_frozen">spec_account_is_not_frozen</a>(<a href="CoreAddresses.md#0x1_CoreAddresses_TREASURY_COMPLIANCE_ADDRESS">CoreAddresses::TREASURY_COMPLIANCE_ADDRESS</a>());
-</code></pre>
-
-
-The permission "{Freeze,Unfreeze}Account" is granted to TreasuryCompliance [B16].
-
-
-<pre><code><b>apply</b> <a href="Roles.md#0x1_Roles_AbortsIfNotTreasuryCompliance">Roles::AbortsIfNotTreasuryCompliance</a> <b>to</b> freeze_account, unfreeze_account;
-</code></pre>
-
-
-
-
-<a name="0x1_AccountFreezing_FreezingBitRemainsSame"></a>
-
-The freezing bit stays constant.
-
-
-<pre><code><b>schema</b> <a href="AccountFreezing.md#0x1_AccountFreezing_FreezingBitRemainsSame">FreezingBitRemainsSame</a> {
-    <b>ensures</b> <b>forall</b> a: address <b>where</b> <b>old</b>(<b>exists</b>&lt;<a href="AccountFreezing.md#0x1_AccountFreezing_FreezingBit">FreezingBit</a>&gt;(a)):
-        <b>global</b>&lt;<a href="AccountFreezing.md#0x1_AccountFreezing_FreezingBit">FreezingBit</a>&gt;(a).is_frozen == <b>old</b>(<b>global</b>&lt;<a href="AccountFreezing.md#0x1_AccountFreezing_FreezingBit">FreezingBit</a>&gt;(a).is_frozen);
-}
-</code></pre>
-
-
-
-only (un)freeze functions can change the freezing bits of accounts [B16].
-
-
-<pre><code><b>apply</b> <a href="AccountFreezing.md#0x1_AccountFreezing_FreezingBitRemainsSame">FreezingBitRemainsSame</a> <b>to</b> * <b>except</b> freeze_account, unfreeze_account;
-</code></pre>
-
-
-
-</details>
+[//]: # ("File containing references which can be used from documentation")
+[ACCESS_CONTROL]: https://github.com/libra/lip/blob/master/lips/lip-2.md
+[ROLE]: https://github.com/libra/lip/blob/master/lips/lip-2.md#roles
+[PERMISSION]: https://github.com/libra/lip/blob/master/lips/lip-2.md#permissions

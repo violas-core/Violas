@@ -2,9 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Scratchpad for on chain values during the execution.
 
-use crate::create_access_path;
+use crate::{counters::CRITICAL_ERRORS, create_access_path, logging::AdapterLogSchema};
+#[allow(unused_imports)]
+use anyhow::format_err;
+use fail::fail_point;
 use libra_logger::prelude::*;
-use libra_state_view::StateView;
+use libra_state_view::{StateView, StateViewId};
 use libra_types::{
     access_path::AccessPath,
     on_chain_config::ConfigStorage,
@@ -68,13 +71,27 @@ impl<'a> StateViewCache<'a> {
 impl<'block> StateView for StateViewCache<'block> {
     // Get some data either through the cache or the `StateView` on a cache miss.
     fn get(&self, access_path: &AccessPath) -> anyhow::Result<Option<Vec<u8>>> {
+        fail_point!("move_adapter::data_cache::get", |_| Err(format_err!(
+            "Injected failure in data_cache::get"
+        )));
+
         match self.data_map.get(access_path) {
             Some(opt_data) => Ok(opt_data.clone()),
             None => match self.data_view.get(&access_path) {
                 Ok(remote_data) => Ok(remote_data),
                 // TODO: should we forward some error info?
                 Err(e) => {
-                    error!("[VM] Error getting data from storage for {:?}", access_path);
+                    // create an AdapterLogSchema from the `data_view` in scope. This log_context
+                    // does not carry proper information about the specific transaction and
+                    // context, but this error is related to the given `StateView` rather
+                    // than the transaction.
+                    // Also this API does not make it easy to plug in a context
+                    let log_context = AdapterLogSchema::new(self.data_view.id(), 0);
+                    CRITICAL_ERRORS.inc();
+                    error!(
+                        log_context,
+                        "[VM, StateView] Error getting data from storage for {:?}", access_path
+                    );
                     Err(e)
                 }
             },
@@ -87,6 +104,10 @@ impl<'block> StateView for StateViewCache<'block> {
 
     fn is_genesis(&self) -> bool {
         self.data_view.is_genesis()
+    }
+
+    fn id(&self) -> StateViewId {
+        self.data_view.id()
     }
 }
 

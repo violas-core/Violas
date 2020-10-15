@@ -38,16 +38,19 @@ use 0x1::SlidingNonce;
 /// # Common Abort Conditions
 /// | Error Category                | Error Reason                                 | Description                                                                                                                  |
 /// | ----------------              | --------------                               | -------------                                                                                                                |
+/// | `Errors::NOT_PUBLISHED`       | `SlidingNonce::ESLIDING_NONCE`               | A `SlidingNonce` resource is not published under `tc_account`.                                                               |
 /// | `Errors::INVALID_ARGUMENT`    | `SlidingNonce::ENONCE_TOO_OLD`               | The `sliding_nonce` is too old and it's impossible to determine if it's duplicated or not.                                   |
 /// | `Errors::INVALID_ARGUMENT`    | `SlidingNonce::ENONCE_TOO_NEW`               | The `sliding_nonce` is too far in the future.                                                                                |
 /// | `Errors::INVALID_ARGUMENT`    | `SlidingNonce::ENONCE_ALREADY_RECORDED`      | The `sliding_nonce` has been previously recorded.                                                                            |
 /// | `Errors::REQUIRES_ADDRESS`    | `CoreAddresses::ETREASURY_COMPLIANCE`        | `tc_account` is not the Treasury Compliance account.                                                                         |
+/// | `Errors::REQUIRES_ROLE`       | `Roles::ETREASURY_COMPLIANCE`                | `tc_account` is not the Treasury Compliance account.                                                                         |
 /// | `Errors::INVALID_ARGUMENT`    | `DesignatedDealer::EINVALID_MINT_AMOUNT`     | `mint_amount` is zero.                                                                                                       |
 /// | `Errors::NOT_PUBLISHED`       | `DesignatedDealer::EDEALER`                  | `DesignatedDealer::Dealer` or `DesignatedDealer::TierInfo<CoinType>` resource does not exist at `designated_dealer_address`. |
 /// | `Errors::INVALID_ARGUMENT`    | `DesignatedDealer::EINVALID_TIER_INDEX`      | The `tier_index` is out of bounds.                                                                                           |
 /// | `Errors::INVALID_ARGUMENT`    | `DesignatedDealer::EINVALID_AMOUNT_FOR_TIER` | `mint_amount` exceeds the maximum allowed amount for `tier_index`.                                                           |
 /// | `Errors::REQUIRES_CAPABILITY` | `Libra::EMINT_CAPABILITY`                    | `tc_account` does not have a `Libra::MintCapability<CoinType>` resource published under it.                                  |
 /// | `Errors::INVALID_STATE`       | `Libra::EMINTING_NOT_ALLOWED`                | Minting is not currently allowed for `CoinType` coins.                                                                       |
+/// | `Errors::LIMIT_EXCEEDED`      | `LibraAccount::EDEPOSIT_EXCEEDS_LIMITS`      | The depositing of the funds would exceed the `account`'s account limits.                                                     |
 ///
 /// # Related Scripts
 /// * `Script::create_designated_dealer`
@@ -69,7 +72,9 @@ fun tiered_mint<CoinType>(
 
 spec fun tiered_mint {
     use 0x1::Errors;
+    use 0x1::Roles;
 
+    include LibraAccount::TransactionChecks{sender: tc_account}; // properties checked by the prologue.
     include SlidingNonce::RecordNonceAbortsIf{account: tc_account, seq_nonce: sliding_nonce};
     include LibraAccount::TieredMintAbortsIf<CoinType>;
     include LibraAccount::TieredMintEnsures<CoinType>;
@@ -80,7 +85,11 @@ spec fun tiered_mint {
         Errors::NOT_PUBLISHED,
         Errors::REQUIRES_CAPABILITY,
         Errors::INVALID_STATE,
-        Errors::LIMIT_EXCEEDED, // TODO: Undocumented error code. Possibly raised in LibraAccount::deposit, Libra::deposit, and AccountLimits::can_receive.
-        Errors::REQUIRES_ROLE; // TODO: Undocumented error code. Added due to Roles::assert_treasury_compliance in DesginatedDealer::tiered_mint
+        Errors::LIMIT_EXCEEDED,
+        Errors::REQUIRES_ROLE;
+
+    /// Access Control
+    /// Only the Treasury Compliance account can mint [[H1]][PERMISSION].
+    include Roles::AbortsIfNotTreasuryCompliance{account: tc_account};
 }
 }

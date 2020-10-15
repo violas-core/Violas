@@ -104,14 +104,14 @@ Event emitted when the url used for off-chain dual attestation checking is rotat
 | new_base_url                | string | New URL endpoint for off-chain communication            |
 | time_rotated_seconds        | u64    | Blockchain time (in seconds) when the rotation occurred |
 
-#### upgrade
+#### admintransaction
 
 Event emitted when a WriteSet transaction is committed which causes the state to be updated.
 
-| Name      | Type   | Description                 |
-|-----------|--------|-----------------------------|
-| type      | string | Constant string "upgrade"   |
-| write_set | string | lcs serialized writeset     |
+| Name                   | Type   | Description                                         |
+|------------------------|--------|-----------------------------------------------------|
+| type                   | string | Constant string "admintransaction"                  |
+| committed_timestamp_secs | u64    | The block time when this transaction is committed   |
 
 #### newepoch
 
@@ -144,6 +144,16 @@ Event emitted after minted, destination address received the minted coins.
 | amount              | [Amount](type_amount.md) | The amount minted                 |
 | destination_address | string                   | The address who received the mint |
 
+#### createaccount
+
+Event emitted when a new account is created
+
+| Name            | Type   | Description                    |
+|-----------------|--------|--------------------------------|
+| type            | string | Constant string "createaccount"|
+| created_address | string | Address of the created account |
+| role_id         | u64    | Role id of the created account, see [LIP-2](https://lip.libra.org/lip-2/#move-implementation) for more details |
+
 #### unknown
 
 Represents events currently unsupported by JSON-RPC API.
@@ -152,4 +162,4 @@ Represents events currently unsupported by JSON-RPC API.
 |---------|--------|-----------------------------|
 | type    | string | Constant string "unknown"   |
 
-[1]: https://libra.github.io/libra/libra_canonical_serialization/index.html "LCS"
+[1]: https://developers.libra.org/docs/rustdocs/libra_canonical_serialization/index.html "LCS"

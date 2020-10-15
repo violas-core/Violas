@@ -9,86 +9,87 @@ The module defines functions operating on coins as well as functionality like
 minting and burning of coins.
 
 
--  [Resource <code><a href="LibraTest.md#0x1_LibraTest_RegisterNewCurrency">RegisterNewCurrency</a></code>](#0x1_LibraTest_RegisterNewCurrency)
--  [Resource <code><a href="LibraTest.md#0x1_LibraTest_Libra">Libra</a></code>](#0x1_LibraTest_Libra)
--  [Resource <code><a href="LibraTest.md#0x1_LibraTest_MintCapability">MintCapability</a></code>](#0x1_LibraTest_MintCapability)
--  [Resource <code><a href="LibraTest.md#0x1_LibraTest_BurnCapability">BurnCapability</a></code>](#0x1_LibraTest_BurnCapability)
--  [Struct <code><a href="LibraTest.md#0x1_LibraTest_MintEvent">MintEvent</a></code>](#0x1_LibraTest_MintEvent)
--  [Struct <code><a href="LibraTest.md#0x1_LibraTest_BurnEvent">BurnEvent</a></code>](#0x1_LibraTest_BurnEvent)
--  [Struct <code><a href="LibraTest.md#0x1_LibraTest_PreburnEvent">PreburnEvent</a></code>](#0x1_LibraTest_PreburnEvent)
--  [Struct <code><a href="LibraTest.md#0x1_LibraTest_CancelBurnEvent">CancelBurnEvent</a></code>](#0x1_LibraTest_CancelBurnEvent)
--  [Struct <code><a href="LibraTest.md#0x1_LibraTest_ToLBRExchangeRateUpdateEvent">ToLBRExchangeRateUpdateEvent</a></code>](#0x1_LibraTest_ToLBRExchangeRateUpdateEvent)
--  [Resource <code><a href="LibraTest.md#0x1_LibraTest_CurrencyInfo">CurrencyInfo</a></code>](#0x1_LibraTest_CurrencyInfo)
--  [Resource <code><a href="LibraTest.md#0x1_LibraTest_Preburn">Preburn</a></code>](#0x1_LibraTest_Preburn)
--  [Const <code><a href="LibraTest.md#0x1_LibraTest_ENOT_GENESIS">ENOT_GENESIS</a></code>](#0x1_LibraTest_ENOT_GENESIS)
--  [Const <code><a href="LibraTest.md#0x1_LibraTest_EINVALID_SINGLETON_ADDRESS">EINVALID_SINGLETON_ADDRESS</a></code>](#0x1_LibraTest_EINVALID_SINGLETON_ADDRESS)
--  [Const <code><a href="LibraTest.md#0x1_LibraTest_ENOT_TREASURY_COMPLIANCE">ENOT_TREASURY_COMPLIANCE</a></code>](#0x1_LibraTest_ENOT_TREASURY_COMPLIANCE)
--  [Const <code><a href="LibraTest.md#0x1_LibraTest_EMINTING_NOT_ALLOWED">EMINTING_NOT_ALLOWED</a></code>](#0x1_LibraTest_EMINTING_NOT_ALLOWED)
--  [Const <code><a href="LibraTest.md#0x1_LibraTest_EIS_SYNTHETIC_CURRENCY">EIS_SYNTHETIC_CURRENCY</a></code>](#0x1_LibraTest_EIS_SYNTHETIC_CURRENCY)
--  [Const <code><a href="LibraTest.md#0x1_LibraTest_EAMOUNT_EXCEEDS_COIN_VALUE">EAMOUNT_EXCEEDS_COIN_VALUE</a></code>](#0x1_LibraTest_EAMOUNT_EXCEEDS_COIN_VALUE)
--  [Const <code><a href="LibraTest.md#0x1_LibraTest_EDESTRUCTION_OF_NONZERO_COIN">EDESTRUCTION_OF_NONZERO_COIN</a></code>](#0x1_LibraTest_EDESTRUCTION_OF_NONZERO_COIN)
--  [Const <code><a href="LibraTest.md#0x1_LibraTest_ENOT_A_REGISTERED_CURRENCY">ENOT_A_REGISTERED_CURRENCY</a></code>](#0x1_LibraTest_ENOT_A_REGISTERED_CURRENCY)
--  [Const <code><a href="LibraTest.md#0x1_LibraTest_ENOT_AN_SCS_CURRENCY">ENOT_AN_SCS_CURRENCY</a></code>](#0x1_LibraTest_ENOT_AN_SCS_CURRENCY)
--  [Const <code><a href="LibraTest.md#0x1_LibraTest_EDOES_NOT_HAVE_LIBRA_ROOT_ROLE">EDOES_NOT_HAVE_LIBRA_ROOT_ROLE</a></code>](#0x1_LibraTest_EDOES_NOT_HAVE_LIBRA_ROOT_ROLE)
--  [Const <code><a href="LibraTest.md#0x1_LibraTest_EDOES_NOT_HAVE_TREASURY_COMPLIANCE_ROLE">EDOES_NOT_HAVE_TREASURY_COMPLIANCE_ROLE</a></code>](#0x1_LibraTest_EDOES_NOT_HAVE_TREASURY_COMPLIANCE_ROLE)
--  [Function <code>initialize</code>](#0x1_LibraTest_initialize)
--  [Function <code>publish_burn_capability</code>](#0x1_LibraTest_publish_burn_capability)
--  [Function <code>mint</code>](#0x1_LibraTest_mint)
--  [Function <code>burn</code>](#0x1_LibraTest_burn)
--  [Function <code>cancel_burn</code>](#0x1_LibraTest_cancel_burn)
--  [Function <code>mint_with_capability</code>](#0x1_LibraTest_mint_with_capability)
--  [Function <code>preburn_with_resource</code>](#0x1_LibraTest_preburn_with_resource)
--  [Function <code>create_preburn</code>](#0x1_LibraTest_create_preburn)
--  [Function <code>publish_preburn_to_account</code>](#0x1_LibraTest_publish_preburn_to_account)
--  [Function <code>preburn_to</code>](#0x1_LibraTest_preburn_to)
--  [Function <code>burn_with_capability</code>](#0x1_LibraTest_burn_with_capability)
--  [Function <code>burn_with_resource_cap</code>](#0x1_LibraTest_burn_with_resource_cap)
--  [Function <code>cancel_burn_with_capability</code>](#0x1_LibraTest_cancel_burn_with_capability)
--  [Function <code>remove_burn_capability</code>](#0x1_LibraTest_remove_burn_capability)
--  [Function <code>preburn_value</code>](#0x1_LibraTest_preburn_value)
--  [Function <code>zero</code>](#0x1_LibraTest_zero)
--  [Function <code>value</code>](#0x1_LibraTest_value)
--  [Function <code>split</code>](#0x1_LibraTest_split)
--  [Function <code>withdraw</code>](#0x1_LibraTest_withdraw)
--  [Function <code>withdraw_all</code>](#0x1_LibraTest_withdraw_all)
--  [Function <code>join</code>](#0x1_LibraTest_join)
--  [Function <code>deposit</code>](#0x1_LibraTest_deposit)
--  [Function <code>destroy_zero</code>](#0x1_LibraTest_destroy_zero)
--  [Function <code>register_currency</code>](#0x1_LibraTest_register_currency)
--  [Function <code>register_SCS_currency</code>](#0x1_LibraTest_register_SCS_currency)
--  [Function <code>market_cap</code>](#0x1_LibraTest_market_cap)
--  [Function <code>approx_lbr_for_value</code>](#0x1_LibraTest_approx_lbr_for_value)
--  [Function <code>approx_lbr_for_coin</code>](#0x1_LibraTest_approx_lbr_for_coin)
--  [Function <code>is_currency</code>](#0x1_LibraTest_is_currency)
--  [Function <code>is_SCS_currency</code>](#0x1_LibraTest_is_SCS_currency)
--  [Function <code>is_synthetic_currency</code>](#0x1_LibraTest_is_synthetic_currency)
--  [Function <code>scaling_factor</code>](#0x1_LibraTest_scaling_factor)
--  [Function <code>fractional_part</code>](#0x1_LibraTest_fractional_part)
--  [Function <code>currency_code</code>](#0x1_LibraTest_currency_code)
--  [Function <code>update_lbr_exchange_rate</code>](#0x1_LibraTest_update_lbr_exchange_rate)
--  [Function <code>lbr_exchange_rate</code>](#0x1_LibraTest_lbr_exchange_rate)
--  [Function <code>update_minting_ability</code>](#0x1_LibraTest_update_minting_ability)
--  [Function <code>assert_is_currency</code>](#0x1_LibraTest_assert_is_currency)
--  [Function <code>assert_is_SCS_currency</code>](#0x1_LibraTest_assert_is_SCS_currency)
--  [Specification](#@Specification_0)
-    -  [Module Specification](#@Module_Specification_1)
-        -  [Minting](#@Minting_2)
-        -  [Conservation of currency](#@Conservation_of_currency_3)
-    -  [Resource <code><a href="LibraTest.md#0x1_LibraTest_Libra">Libra</a></code>](#@Specification_0_Libra)
-    -  [Function <code>mint</code>](#@Specification_0_mint)
-    -  [Function <code>burn</code>](#@Specification_0_burn)
-    -  [Function <code>mint_with_capability</code>](#@Specification_0_mint_with_capability)
-    -  [Function <code>preburn_with_resource</code>](#@Specification_0_preburn_with_resource)
-    -  [Function <code>preburn_to</code>](#@Specification_0_preburn_to)
-    -  [Function <code>burn_with_capability</code>](#@Specification_0_burn_with_capability)
-    -  [Function <code>burn_with_resource_cap</code>](#@Specification_0_burn_with_resource_cap)
-    -  [Function <code>split</code>](#@Specification_0_split)
-    -  [Function <code>withdraw</code>](#@Specification_0_withdraw)
-    -  [Function <code>withdraw_all</code>](#@Specification_0_withdraw_all)
-    -  [Function <code>join</code>](#@Specification_0_join)
-    -  [Function <code>destroy_zero</code>](#@Specification_0_destroy_zero)
-    -  [Function <code>register_currency</code>](#@Specification_0_register_currency)
-    -  [Function <code>register_SCS_currency</code>](#@Specification_0_register_SCS_currency)
+-  [Resource `RegisterNewCurrency`](#0x1_LibraTest_RegisterNewCurrency)
+-  [Resource `Libra`](#0x1_LibraTest_Libra)
+-  [Resource `MintCapability`](#0x1_LibraTest_MintCapability)
+-  [Resource `BurnCapability`](#0x1_LibraTest_BurnCapability)
+-  [Struct `MintEvent`](#0x1_LibraTest_MintEvent)
+-  [Struct `BurnEvent`](#0x1_LibraTest_BurnEvent)
+-  [Struct `PreburnEvent`](#0x1_LibraTest_PreburnEvent)
+-  [Struct `CancelBurnEvent`](#0x1_LibraTest_CancelBurnEvent)
+-  [Struct `ToLBRExchangeRateUpdateEvent`](#0x1_LibraTest_ToLBRExchangeRateUpdateEvent)
+-  [Resource `CurrencyInfo`](#0x1_LibraTest_CurrencyInfo)
+-  [Resource `Preburn`](#0x1_LibraTest_Preburn)
+-  [Constants](#@Constants_0)
+-  [Function `initialize`](#0x1_LibraTest_initialize)
+-  [Function `publish_burn_capability`](#0x1_LibraTest_publish_burn_capability)
+-  [Function `mint`](#0x1_LibraTest_mint)
+-  [Function `burn`](#0x1_LibraTest_burn)
+-  [Function `cancel_burn`](#0x1_LibraTest_cancel_burn)
+-  [Function `mint_with_capability`](#0x1_LibraTest_mint_with_capability)
+-  [Function `preburn_with_resource`](#0x1_LibraTest_preburn_with_resource)
+-  [Function `create_preburn`](#0x1_LibraTest_create_preburn)
+-  [Function `publish_preburn_to_account`](#0x1_LibraTest_publish_preburn_to_account)
+-  [Function `preburn_to`](#0x1_LibraTest_preburn_to)
+-  [Function `burn_with_capability`](#0x1_LibraTest_burn_with_capability)
+-  [Function `burn_with_resource_cap`](#0x1_LibraTest_burn_with_resource_cap)
+-  [Function `cancel_burn_with_capability`](#0x1_LibraTest_cancel_burn_with_capability)
+-  [Function `remove_burn_capability`](#0x1_LibraTest_remove_burn_capability)
+-  [Function `preburn_value`](#0x1_LibraTest_preburn_value)
+-  [Function `zero`](#0x1_LibraTest_zero)
+-  [Function `value`](#0x1_LibraTest_value)
+-  [Function `split`](#0x1_LibraTest_split)
+-  [Function `withdraw`](#0x1_LibraTest_withdraw)
+-  [Function `withdraw_all`](#0x1_LibraTest_withdraw_all)
+-  [Function `join`](#0x1_LibraTest_join)
+-  [Function `deposit`](#0x1_LibraTest_deposit)
+-  [Function `destroy_zero`](#0x1_LibraTest_destroy_zero)
+-  [Function `register_currency`](#0x1_LibraTest_register_currency)
+-  [Function `register_SCS_currency`](#0x1_LibraTest_register_SCS_currency)
+-  [Function `market_cap`](#0x1_LibraTest_market_cap)
+-  [Function `approx_lbr_for_value`](#0x1_LibraTest_approx_lbr_for_value)
+-  [Function `approx_lbr_for_coin`](#0x1_LibraTest_approx_lbr_for_coin)
+-  [Function `is_currency`](#0x1_LibraTest_is_currency)
+-  [Function `is_SCS_currency`](#0x1_LibraTest_is_SCS_currency)
+-  [Function `is_synthetic_currency`](#0x1_LibraTest_is_synthetic_currency)
+-  [Function `scaling_factor`](#0x1_LibraTest_scaling_factor)
+-  [Function `fractional_part`](#0x1_LibraTest_fractional_part)
+-  [Function `currency_code`](#0x1_LibraTest_currency_code)
+-  [Function `update_lbr_exchange_rate`](#0x1_LibraTest_update_lbr_exchange_rate)
+-  [Function `lbr_exchange_rate`](#0x1_LibraTest_lbr_exchange_rate)
+-  [Function `update_minting_ability`](#0x1_LibraTest_update_minting_ability)
+-  [Function `assert_is_currency`](#0x1_LibraTest_assert_is_currency)
+-  [Function `assert_is_SCS_currency`](#0x1_LibraTest_assert_is_SCS_currency)
+-  [Specification](#@Specification_1)
+    -  [Module Specification](#@Module_Specification_2)
+        -  [Minting](#@Minting_3)
+        -  [Conservation of currency](#@Conservation_of_currency_4)
+    -  [Resource `Libra`](#@Specification_1_Libra)
+    -  [Function `mint`](#@Specification_1_mint)
+    -  [Function `burn`](#@Specification_1_burn)
+    -  [Function `mint_with_capability`](#@Specification_1_mint_with_capability)
+    -  [Function `preburn_with_resource`](#@Specification_1_preburn_with_resource)
+    -  [Function `preburn_to`](#@Specification_1_preburn_to)
+    -  [Function `burn_with_capability`](#@Specification_1_burn_with_capability)
+    -  [Function `burn_with_resource_cap`](#@Specification_1_burn_with_resource_cap)
+    -  [Function `split`](#@Specification_1_split)
+    -  [Function `withdraw`](#@Specification_1_withdraw)
+    -  [Function `withdraw_all`](#@Specification_1_withdraw_all)
+    -  [Function `join`](#@Specification_1_join)
+    -  [Function `destroy_zero`](#@Specification_1_destroy_zero)
+    -  [Function `register_currency`](#@Specification_1_register_currency)
+    -  [Function `register_SCS_currency`](#@Specification_1_register_SCS_currency)
+
+
+<pre><code><b>use</b> <a href="">0x1::CoreAddresses</a>;
+<b>use</b> <a href="">0x1::Event</a>;
+<b>use</b> <a href="">0x1::FixedPoint32</a>;
+<b>use</b> <a href="">0x1::LibraTimestamp</a>;
+<b>use</b> <a href="">0x1::RegisteredCurrencies</a>;
+<b>use</b> <a href="">0x1::Roles</a>;
+<b>use</b> <a href="">0x1::Signer</a>;
+</code></pre>
+
 
 
 <a name="0x1_LibraTest_RegisterNewCurrency"></a>
@@ -579,9 +580,12 @@ Concurrent preburn requests are not allowed, only one request (in to_burn) can b
 
 </details>
 
-<a name="0x1_LibraTest_ENOT_GENESIS"></a>
+<a name="@Constants_0"></a>
 
-## Const `ENOT_GENESIS`
+## Constants
+
+
+<a name="0x1_LibraTest_ENOT_GENESIS"></a>
 
 
 
@@ -590,53 +594,7 @@ Concurrent preburn requests are not allowed, only one request (in to_burn) can b
 
 
 
-<a name="0x1_LibraTest_EINVALID_SINGLETON_ADDRESS"></a>
-
-## Const `EINVALID_SINGLETON_ADDRESS`
-
-
-
-<pre><code><b>const</b> <a href="LibraTest.md#0x1_LibraTest_EINVALID_SINGLETON_ADDRESS">EINVALID_SINGLETON_ADDRESS</a>: u64 = 1;
-</code></pre>
-
-
-
-<a name="0x1_LibraTest_ENOT_TREASURY_COMPLIANCE"></a>
-
-## Const `ENOT_TREASURY_COMPLIANCE`
-
-
-
-<pre><code><b>const</b> <a href="LibraTest.md#0x1_LibraTest_ENOT_TREASURY_COMPLIANCE">ENOT_TREASURY_COMPLIANCE</a>: u64 = 2;
-</code></pre>
-
-
-
-<a name="0x1_LibraTest_EMINTING_NOT_ALLOWED"></a>
-
-## Const `EMINTING_NOT_ALLOWED`
-
-
-
-<pre><code><b>const</b> <a href="LibraTest.md#0x1_LibraTest_EMINTING_NOT_ALLOWED">EMINTING_NOT_ALLOWED</a>: u64 = 3;
-</code></pre>
-
-
-
-<a name="0x1_LibraTest_EIS_SYNTHETIC_CURRENCY"></a>
-
-## Const `EIS_SYNTHETIC_CURRENCY`
-
-
-
-<pre><code><b>const</b> <a href="LibraTest.md#0x1_LibraTest_EIS_SYNTHETIC_CURRENCY">EIS_SYNTHETIC_CURRENCY</a>: u64 = 4;
-</code></pre>
-
-
-
 <a name="0x1_LibraTest_EAMOUNT_EXCEEDS_COIN_VALUE"></a>
-
-## Const `EAMOUNT_EXCEEDS_COIN_VALUE`
 
 
 
@@ -647,8 +605,6 @@ Concurrent preburn requests are not allowed, only one request (in to_burn) can b
 
 <a name="0x1_LibraTest_EDESTRUCTION_OF_NONZERO_COIN"></a>
 
-## Const `EDESTRUCTION_OF_NONZERO_COIN`
-
 
 
 <pre><code><b>const</b> <a href="LibraTest.md#0x1_LibraTest_EDESTRUCTION_OF_NONZERO_COIN">EDESTRUCTION_OF_NONZERO_COIN</a>: u64 = 6;
@@ -656,31 +612,7 @@ Concurrent preburn requests are not allowed, only one request (in to_burn) can b
 
 
 
-<a name="0x1_LibraTest_ENOT_A_REGISTERED_CURRENCY"></a>
-
-## Const `ENOT_A_REGISTERED_CURRENCY`
-
-
-
-<pre><code><b>const</b> <a href="LibraTest.md#0x1_LibraTest_ENOT_A_REGISTERED_CURRENCY">ENOT_A_REGISTERED_CURRENCY</a>: u64 = 7;
-</code></pre>
-
-
-
-<a name="0x1_LibraTest_ENOT_AN_SCS_CURRENCY"></a>
-
-## Const `ENOT_AN_SCS_CURRENCY`
-
-
-
-<pre><code><b>const</b> <a href="LibraTest.md#0x1_LibraTest_ENOT_AN_SCS_CURRENCY">ENOT_AN_SCS_CURRENCY</a>: u64 = 8;
-</code></pre>
-
-
-
 <a name="0x1_LibraTest_EDOES_NOT_HAVE_LIBRA_ROOT_ROLE"></a>
-
-## Const `EDOES_NOT_HAVE_LIBRA_ROOT_ROLE`
 
 
 
@@ -691,11 +623,63 @@ Concurrent preburn requests are not allowed, only one request (in to_burn) can b
 
 <a name="0x1_LibraTest_EDOES_NOT_HAVE_TREASURY_COMPLIANCE_ROLE"></a>
 
-## Const `EDOES_NOT_HAVE_TREASURY_COMPLIANCE_ROLE`
-
 
 
 <pre><code><b>const</b> <a href="LibraTest.md#0x1_LibraTest_EDOES_NOT_HAVE_TREASURY_COMPLIANCE_ROLE">EDOES_NOT_HAVE_TREASURY_COMPLIANCE_ROLE</a>: u64 = 10;
+</code></pre>
+
+
+
+<a name="0x1_LibraTest_EINVALID_SINGLETON_ADDRESS"></a>
+
+
+
+<pre><code><b>const</b> <a href="LibraTest.md#0x1_LibraTest_EINVALID_SINGLETON_ADDRESS">EINVALID_SINGLETON_ADDRESS</a>: u64 = 1;
+</code></pre>
+
+
+
+<a name="0x1_LibraTest_EIS_SYNTHETIC_CURRENCY"></a>
+
+
+
+<pre><code><b>const</b> <a href="LibraTest.md#0x1_LibraTest_EIS_SYNTHETIC_CURRENCY">EIS_SYNTHETIC_CURRENCY</a>: u64 = 4;
+</code></pre>
+
+
+
+<a name="0x1_LibraTest_EMINTING_NOT_ALLOWED"></a>
+
+
+
+<pre><code><b>const</b> <a href="LibraTest.md#0x1_LibraTest_EMINTING_NOT_ALLOWED">EMINTING_NOT_ALLOWED</a>: u64 = 3;
+</code></pre>
+
+
+
+<a name="0x1_LibraTest_ENOT_AN_SCS_CURRENCY"></a>
+
+
+
+<pre><code><b>const</b> <a href="LibraTest.md#0x1_LibraTest_ENOT_AN_SCS_CURRENCY">ENOT_AN_SCS_CURRENCY</a>: u64 = 8;
+</code></pre>
+
+
+
+<a name="0x1_LibraTest_ENOT_A_REGISTERED_CURRENCY"></a>
+
+
+
+<pre><code><b>const</b> <a href="LibraTest.md#0x1_LibraTest_ENOT_A_REGISTERED_CURRENCY">ENOT_A_REGISTERED_CURRENCY</a>: u64 = 7;
+</code></pre>
+
+
+
+<a name="0x1_LibraTest_ENOT_TREASURY_COMPLIANCE"></a>
+
+
+
+<pre><code><b>const</b> <a href="LibraTest.md#0x1_LibraTest_ENOT_TREASURY_COMPLIANCE">ENOT_TREASURY_COMPLIANCE</a>: u64 = 2;
 </code></pre>
 
 
@@ -1413,7 +1397,7 @@ zero. Does not abort.
 and returns a new coin whose value is equal to the sum of the two inputs.
 
 
-<pre><code><b>public</b> <b>fun</b> <a href="LibraTest.md#0x1_LibraTest_join">join</a>&lt;CoinType&gt;(coin1: <a href="LibraTest.md#0x1_LibraTest_Libra">LibraTest::Libra</a>&lt;CoinType&gt;, coin2: <a href="LibraTest.md#0x1_LibraTest_Libra">LibraTest::Libra</a>&lt;CoinType&gt;): <a href="LibraTest.md#0x1_LibraTest_Libra">LibraTest::Libra</a>&lt;CoinType&gt;
+<pre><code><b>public</b> <b>fun</b> <a href="LibraTest.md#0x1_LibraTest_join">join</a>&lt;CoinType&gt;(coin1_tmp: <a href="LibraTest.md#0x1_LibraTest_Libra">LibraTest::Libra</a>&lt;CoinType&gt;, coin2: <a href="LibraTest.md#0x1_LibraTest_Libra">LibraTest::Libra</a>&lt;CoinType&gt;): <a href="LibraTest.md#0x1_LibraTest_Libra">LibraTest::Libra</a>&lt;CoinType&gt;
 </code></pre>
 
 
@@ -1422,9 +1406,9 @@ and returns a new coin whose value is equal to the sum of the two inputs.
 <summary>Implementation</summary>
 
 
-<pre><code><b>public</b> <b>fun</b> <a href="LibraTest.md#0x1_LibraTest_join">join</a>&lt;CoinType&gt;(coin1: <a href="LibraTest.md#0x1_LibraTest_Libra">Libra</a>&lt;CoinType&gt;, coin2: <a href="LibraTest.md#0x1_LibraTest_Libra">Libra</a>&lt;CoinType&gt;): <a href="LibraTest.md#0x1_LibraTest_Libra">Libra</a>&lt;CoinType&gt;  {
-    <a href="LibraTest.md#0x1_LibraTest_deposit">deposit</a>(&<b>mut</b> coin1, coin2);
-    coin1
+<pre><code><b>public</b> <b>fun</b> <a href="LibraTest.md#0x1_LibraTest_join">join</a>&lt;CoinType&gt;(coin1_tmp: <a href="LibraTest.md#0x1_LibraTest_Libra">Libra</a>&lt;CoinType&gt;, coin2: <a href="LibraTest.md#0x1_LibraTest_Libra">Libra</a>&lt;CoinType&gt;): <a href="LibraTest.md#0x1_LibraTest_Libra">Libra</a>&lt;CoinType&gt;  {
+    <a href="LibraTest.md#0x1_LibraTest_deposit">deposit</a>(&<b>mut</b> coin1_tmp, coin2);
+    coin1_tmp
 }
 </code></pre>
 
@@ -2005,14 +1989,14 @@ Asserts that <code>CoinType</code> is a registered currency.
 
 </details>
 
-<a name="@Specification_0"></a>
+<a name="@Specification_1"></a>
 
 ## Specification
 
 **************** MODULE SPECIFICATION ****************
 
 
-<a name="@Module_Specification_1"></a>
+<a name="@Module_Specification_2"></a>
 
 ### Module Specification
 
@@ -2022,7 +2006,7 @@ Verify all functions in this module.
 > about coin balance.
 
 
-<pre><code>pragma verify = <b>true</b>;
+<pre><code><b>pragma</b> verify = <b>true</b>;
 </code></pre>
 
 
@@ -2084,7 +2068,7 @@ SCS coins
 
 
 
-<a name="@Minting_2"></a>
+<a name="@Minting_3"></a>
 
 #### Minting
 
@@ -2131,7 +2115,7 @@ there are no published Mint Capabilities. (This is the state after register_SCS_
 
 
 
-<a name="@Conservation_of_currency_3"></a>
+<a name="@Conservation_of_currency_4"></a>
 
 #### Conservation of currency
 
@@ -2148,7 +2132,7 @@ all coins of a currency type.
 
 
 
-<a name="@Specification_0_Libra"></a>
+<a name="@Specification_1_Libra"></a>
 
 ### Resource `Libra`
 
@@ -2176,7 +2160,7 @@ Account for updating <code><a href="LibraTest.md#0x1_LibraTest_sum_of_coin_value
 
 
 
-<a name="@Specification_0_mint"></a>
+<a name="@Specification_1_mint"></a>
 
 ### Function `mint`
 
@@ -2194,7 +2178,7 @@ Account for updating <code><a href="LibraTest.md#0x1_LibraTest_sum_of_coin_value
 
 
 
-<a name="@Specification_0_burn"></a>
+<a name="@Specification_1_burn"></a>
 
 ### Function `burn`
 
@@ -2205,13 +2189,13 @@ Account for updating <code><a href="LibraTest.md#0x1_LibraTest_sum_of_coin_value
 
 
 
-<pre><code>pragma verify=<b>false</b>;
+<pre><code><b>pragma</b> verify=<b>false</b>;
 <b>aborts_if</b> !<b>exists</b>&lt;<a href="LibraTest.md#0x1_LibraTest_BurnCapability">BurnCapability</a>&lt;CoinType&gt;&gt;(<a href="_spec_address_of">Signer::spec_address_of</a>(account));
 </code></pre>
 
 
 
-<a name="@Specification_0_mint_with_capability"></a>
+<a name="@Specification_1_mint_with_capability"></a>
 
 ### Function `mint_with_capability`
 
@@ -2257,7 +2241,7 @@ Account for updating <code><a href="LibraTest.md#0x1_LibraTest_sum_of_coin_value
 
 
 
-<a name="@Specification_0_preburn_with_resource"></a>
+<a name="@Specification_1_preburn_with_resource"></a>
 
 ### Function `preburn_with_resource`
 
@@ -2268,7 +2252,7 @@ Account for updating <code><a href="LibraTest.md#0x1_LibraTest_sum_of_coin_value
 
 
 
-<pre><code>pragma aborts_if_is_partial = <b>true</b>;
+<pre><code><b>pragma</b> aborts_if_is_partial = <b>true</b>;
 <b>include</b> <a href="LibraTest.md#0x1_LibraTest_PreburnAbortsIf">PreburnAbortsIf</a>&lt;CoinType&gt;;
 <b>aborts_if</b> preburn.to_burn.value != 0;
 <b>include</b> <a href="LibraTest.md#0x1_LibraTest_PreburnEnsures">PreburnEnsures</a>&lt;CoinType&gt;;
@@ -2303,7 +2287,7 @@ Account for updating <code><a href="LibraTest.md#0x1_LibraTest_sum_of_coin_value
 
 
 
-<a name="@Specification_0_preburn_to"></a>
+<a name="@Specification_1_preburn_to"></a>
 
 ### Function `preburn_to`
 
@@ -2314,7 +2298,7 @@ Account for updating <code><a href="LibraTest.md#0x1_LibraTest_sum_of_coin_value
 
 
 
-<pre><code>pragma aborts_if_is_partial = <b>true</b>;
+<pre><code><b>pragma</b> aborts_if_is_partial = <b>true</b>;
 <b>aborts_if</b> !<b>exists</b>&lt;<a href="LibraTest.md#0x1_LibraTest_Preburn">Preburn</a>&lt;CoinType&gt;&gt;(<a href="_spec_address_of">Signer::spec_address_of</a>(account));
 <b>include</b> <a href="LibraTest.md#0x1_LibraTest_PreburnAbortsIf">PreburnAbortsIf</a>&lt;CoinType&gt;;
 <b>include</b> <a href="LibraTest.md#0x1_LibraTest_PreburnEnsures">PreburnEnsures</a>&lt;CoinType&gt;{preburn: <b>global</b>&lt;<a href="LibraTest.md#0x1_LibraTest_Preburn">Preburn</a>&lt;CoinType&gt;&gt;(<a href="_spec_address_of">Signer::spec_address_of</a>(account))};
@@ -2322,7 +2306,7 @@ Account for updating <code><a href="LibraTest.md#0x1_LibraTest_sum_of_coin_value
 
 
 
-<a name="@Specification_0_burn_with_capability"></a>
+<a name="@Specification_1_burn_with_capability"></a>
 
 ### Function `burn_with_capability`
 
@@ -2340,7 +2324,7 @@ Account for updating <code><a href="LibraTest.md#0x1_LibraTest_sum_of_coin_value
 
 
 
-<a name="@Specification_0_burn_with_resource_cap"></a>
+<a name="@Specification_1_burn_with_resource_cap"></a>
 
 ### Function `burn_with_resource_cap`
 
@@ -2387,7 +2371,7 @@ Account for updating <code><a href="LibraTest.md#0x1_LibraTest_sum_of_coin_value
 
 
 
-<a name="@Specification_0_split"></a>
+<a name="@Specification_1_split"></a>
 
 ### Function `split`
 
@@ -2405,7 +2389,7 @@ Account for updating <code><a href="LibraTest.md#0x1_LibraTest_sum_of_coin_value
 
 
 
-<a name="@Specification_0_withdraw"></a>
+<a name="@Specification_1_withdraw"></a>
 
 ### Function `withdraw`
 
@@ -2423,7 +2407,7 @@ Account for updating <code><a href="LibraTest.md#0x1_LibraTest_sum_of_coin_value
 
 
 
-<a name="@Specification_0_withdraw_all"></a>
+<a name="@Specification_1_withdraw_all"></a>
 
 ### Function `withdraw_all`
 
@@ -2441,24 +2425,24 @@ Account for updating <code><a href="LibraTest.md#0x1_LibraTest_sum_of_coin_value
 
 
 
-<a name="@Specification_0_join"></a>
+<a name="@Specification_1_join"></a>
 
 ### Function `join`
 
 
-<pre><code><b>public</b> <b>fun</b> <a href="LibraTest.md#0x1_LibraTest_join">join</a>&lt;CoinType&gt;(coin1: <a href="LibraTest.md#0x1_LibraTest_Libra">LibraTest::Libra</a>&lt;CoinType&gt;, coin2: <a href="LibraTest.md#0x1_LibraTest_Libra">LibraTest::Libra</a>&lt;CoinType&gt;): <a href="LibraTest.md#0x1_LibraTest_Libra">LibraTest::Libra</a>&lt;CoinType&gt;
+<pre><code><b>public</b> <b>fun</b> <a href="LibraTest.md#0x1_LibraTest_join">join</a>&lt;CoinType&gt;(coin1_tmp: <a href="LibraTest.md#0x1_LibraTest_Libra">LibraTest::Libra</a>&lt;CoinType&gt;, coin2: <a href="LibraTest.md#0x1_LibraTest_Libra">LibraTest::Libra</a>&lt;CoinType&gt;): <a href="LibraTest.md#0x1_LibraTest_Libra">LibraTest::Libra</a>&lt;CoinType&gt;
 </code></pre>
 
 
 
 
-<pre><code><b>aborts_if</b> coin1.value + coin2.value &gt; max_u64();
-<b>ensures</b> result.value == coin1.value + coin2.value;
+<pre><code><b>aborts_if</b> coin1_tmp.value + coin2.value &gt; max_u64();
+<b>ensures</b> result.value == coin1_tmp.value + coin2.value;
 </code></pre>
 
 
 
-<a name="@Specification_0_destroy_zero"></a>
+<a name="@Specification_1_destroy_zero"></a>
 
 ### Function `destroy_zero`
 
@@ -2474,7 +2458,7 @@ Account for updating <code><a href="LibraTest.md#0x1_LibraTest_sum_of_coin_value
 
 
 
-<a name="@Specification_0_register_currency"></a>
+<a name="@Specification_1_register_currency"></a>
 
 ### Function `register_currency`
 
@@ -2494,7 +2478,7 @@ Account for updating <code><a href="LibraTest.md#0x1_LibraTest_sum_of_coin_value
 
 
 
-<a name="@Specification_0_register_SCS_currency"></a>
+<a name="@Specification_1_register_SCS_currency"></a>
 
 ### Function `register_SCS_currency`
 
@@ -2505,6 +2489,6 @@ Account for updating <code><a href="LibraTest.md#0x1_LibraTest_sum_of_coin_value
 
 
 
-<pre><code>pragma aborts_if_is_partial = <b>true</b>;
+<pre><code><b>pragma</b> aborts_if_is_partial = <b>true</b>;
 <b>ensures</b> <a href="LibraTest.md#0x1_LibraTest_spec_has_mint_capability">spec_has_mint_capability</a>&lt;CoinType&gt;(<a href="_spec_address_of">Signer::spec_address_of</a>(tc_account));
 </code></pre>

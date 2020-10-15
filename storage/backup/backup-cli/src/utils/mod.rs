@@ -10,6 +10,7 @@ pub mod test_utils;
 
 use anyhow::{anyhow, Result};
 use libra_crypto::HashValue;
+use libra_infallible::duration_since_epoch;
 use libra_jellyfish_merkle::{restore::JellyfishMerkleRestore, NodeBatch, TreeWriter};
 use libra_types::transaction::Version;
 use libradb::{backup::restore_handler::RestoreHandler, GetRestoreHandler, LibraDB};
@@ -69,6 +70,13 @@ impl RestoreRunMode {
         match self {
             Self::Restore { restore_handler: _ } => "restore",
             Self::Verify => "verify",
+        }
+    }
+
+    pub fn is_verify(&self) -> bool {
+        match self {
+            Self::Restore { restore_handler: _ } => false,
+            Self::Verify => true,
         }
     }
 
@@ -139,4 +147,8 @@ impl<T: AsRef<Path>> PathToString for T {
             .into_string()
             .map_err(|s| anyhow!("into_string failed for OsString '{:?}'", s))
     }
+}
+
+pub(crate) fn unix_timestamp_sec() -> i64 {
+    duration_since_epoch().as_secs() as i64
 }

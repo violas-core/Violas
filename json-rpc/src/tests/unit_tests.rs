@@ -19,8 +19,8 @@ use libra_config::{config::DEFAULT_CONTENT_LENGTH_LIMIT, utils};
 use libra_crypto::{ed25519::Ed25519PrivateKey, hash::CryptoHash, HashValue, PrivateKey, Uniform};
 use libra_json_rpc_client::{
     views::{
-        AccountStateWithProofView, AccountView, BlockMetadata, BytesView, EventView,
-        StateProofView, TransactionDataView, TransactionView, VMStatusView,
+        AccountStateWithProofView, AccountView, BytesView, EventView, MetadataView, StateProofView,
+        TransactionDataView, TransactionView, VMStatusView,
     },
     JsonRpcAsyncClient, JsonRpcBatch, JsonRpcResponse, ResponseAsView,
 };
@@ -29,7 +29,7 @@ use libra_metrics::get_all_metrics;
 use libra_proptest_helpers::ValueGenerator;
 use libra_types::{
     account_address::AccountAddress,
-    account_config::{from_currency_code_string, AccountResource, FreezingBit, LBR_NAME},
+    account_config::{from_currency_code_string, AccountResource, FreezingBit, COIN1_NAME},
     account_state::AccountState,
     account_state_blob::{AccountStateBlob, AccountStateWithProof},
     chain_id::ChainId,
@@ -146,6 +146,24 @@ fn mock_db() -> MockLibraDB {
 }
 
 #[test]
+fn test_cors() {
+    let (_mock_db, _runtime, url, _) = create_db_and_runtime();
+
+    let origin = "test";
+
+    let client = reqwest::blocking::Client::new();
+    let request = client
+        .request(reqwest::Method::OPTIONS, &url)
+        .header("origin", origin)
+        .header("access-control-request-method", "POST");
+    let resp = request.send().unwrap();
+    assert_eq!(resp.status(), 200);
+
+    let cors_header = resp.headers().get("access-control-allow-origin").unwrap();
+    assert_eq!(cors_header, origin);
+}
+
+#[test]
 fn test_json_rpc_http_errors() {
     let (_mock_db, _runtime, url, _) = create_db_and_runtime();
 
@@ -216,11 +234,67 @@ fn test_json_rpc_protocol_invalid_requests() {
             }),
         ),
         (
+            "invalid request format: request is not an object",
+            json!(true),
+            json!({
+                "error": {
+                    "code": -32604, "data": null, "message": "Invalid request format",
+                },
+                "id": null,
+                "jsonrpc": "2.0",
+                "libra_chain_id": ChainId::test().id(),
+                "libra_ledger_timestampusec": timestamp,
+                "libra_ledger_version": version
+            }),
+        ),
+        (
             "method not found",
             json!({"jsonrpc": "2.0", "method": "add", "params": [], "id": 1}),
             json!({
                 "error": {
                     "code": -32601, "data": null, "message": "Method not found",
+                },
+                "id": 1,
+                "jsonrpc": "2.0",
+                "libra_chain_id": ChainId::test().id(),
+                "libra_ledger_timestampusec": timestamp,
+                "libra_ledger_version": version
+            }),
+        ),
+        (
+            "method not given",
+            json!({"jsonrpc": "2.0", "params": [], "id": 1}),
+            json!({
+                "error": {
+                    "code": -32601, "data": null, "message": "Method not found",
+                },
+                "id": 1,
+                "jsonrpc": "2.0",
+                "libra_chain_id": ChainId::test().id(),
+                "libra_ledger_timestampusec": timestamp,
+                "libra_ledger_version": version
+            }),
+        ),
+        (
+            "params not given",
+            json!({"jsonrpc": "2.0", "method": "get_metadata", "id": 1}),
+            json!({
+                "error": {
+                    "code": -32602, "data": null, "message": "Invalid params",
+                },
+                "id": 1,
+                "jsonrpc": "2.0",
+                "libra_chain_id": ChainId::test().id(),
+                "libra_ledger_timestampusec": timestamp,
+                "libra_ledger_version": version
+            }),
+        ),
+        (
+            "jsonrpc not given",
+            json!({"method": "get_metadata", "params": [], "id": 1}),
+            json!({
+                "error": {
+                    "code": -32600, "data": null, "message": "Invalid Request",
                 },
                 "id": 1,
                 "jsonrpc": "2.0",
@@ -554,6 +628,22 @@ fn test_json_rpc_protocol_invalid_requests() {
             }),
         ),
         (
+            "get_account_transactions: account not found",
+            json!({"jsonrpc": "2.0", "method": "get_account_transactions", "params": ["00000000000000000000000000000033", 1, 2, false], "id": 1}),
+            json!({
+                "error": {
+                    "code": -32600,
+                    "message": "Invalid Request: could not find account by address 00000000000000000000000000000033",
+                    "data": null
+                },
+                "id": 1,
+                "jsonrpc": "2.0",
+                "libra_chain_id": ChainId::test().id(),
+                "libra_ledger_timestampusec": timestamp,
+                "libra_ledger_version": version
+            }),
+        ),
+        (
             "get_account_transactions: invalid start param",
             json!({"jsonrpc": "2.0", "method": "get_account_transactions", "params": ["e1b3d22871989e9fd9dc6814b2f4fc41", false, 2, false], "id": 1}),
             json!({
@@ -678,6 +768,38 @@ fn test_json_rpc_protocol_invalid_requests() {
             }),
         ),
         (
+            "get_account_state_with_proof: version > ledger version",
+            json!({"jsonrpc": "2.0", "method": "get_account_state_with_proof", "params": ["e1b3d22871989e9fd9dc6814b2f4fc41", version, version-1], "id": 1}),
+            json!({
+                "error": {
+                    "code": -32600,
+                    "message": format!("Invalid Request: version({}) should <= ledger version({})",version, version-1),
+                    "data": null
+                },
+                "id": 1,
+                "jsonrpc": "2.0",
+                "libra_chain_id": ChainId::test().id(),
+                "libra_ledger_timestampusec": timestamp,
+                "libra_ledger_version": version
+            }),
+        ),
+        (
+            "get_account_state_with_proof: ledger version is too large",
+            json!({"jsonrpc": "2.0", "method": "get_account_state_with_proof", "params": ["e1b3d22871989e9fd9dc6814b2f4fc41", 0, version+1], "id": 1}),
+            json!({
+                "error": {
+                    "code": -32602,
+                    "message": format!("Invalid param ledger version for proof(params[2]): should be <= known latest version {}", version),
+                    "data": null
+                },
+                "id": 1,
+                "jsonrpc": "2.0",
+                "libra_chain_id": ChainId::test().id(),
+                "libra_ledger_timestampusec": timestamp,
+                "libra_ledger_version": version
+            }),
+        ),
+        (
             "get_account_state_with_proof: invalid ledger version",
             json!({"jsonrpc": "2.0", "method": "get_account_state_with_proof", "params": ["e1b3d22871989e9fd9dc6814b2f4fc41", version, "invalid"], "id": 1}),
             json!({
@@ -725,6 +847,25 @@ fn test_json_rpc_protocol_invalid_requests() {
                 "libra_ledger_version": version
             }),
         ),
+        (
+            "id not given",
+            json!({"jsonrpc": "2.0", "method": "get_metadata", "params": []}),
+            json!({
+                "id": null,
+                "jsonrpc": "2.0",
+                "libra_chain_id": ChainId::test().id(),
+                "libra_ledger_timestampusec": timestamp,
+                "libra_ledger_version": version,
+                "result": {
+                    "chain_id": ChainId::test().id(),
+                    "timestamp": timestamp,
+                    "version": version,
+                    "script_hash_allow_list": [],
+                    "module_publishing_allowed": true,
+                    "libra_version": 1
+                }
+            }),
+        ),
     ];
     for (name, request, expected) in calls {
         let resp = client.post(&url).json(&request).send().unwrap();
@@ -762,17 +903,21 @@ fn test_metrics() {
 
     let metrics = get_all_metrics();
     let expected_metrics = vec![
-        // requests count
-        "libra_client_service_requests_count{result=success,type=get_currencies}",
+        // rpc request count
+        "libra_client_service_rpc_requests_count{type=single}",
+        "libra_client_service_rpc_requests_count{type=batch}",
+        // rpc request latency
+        "libra_client_service_rpc_request_latency_seconds{type=single}",
+        "libra_client_service_rpc_request_latency_seconds{type=batch}",
+        // method request count
+        "libra_client_service_requests_count{method=get_currencies,result=success,type=single}",
         // method latency
         "libra_client_service_method_latency_seconds{method=get_currencies,type=single}",
         "libra_client_service_method_latency_seconds{method=get_currencies,type=batch}",
-        // request latency
-        "libra_client_service_request_latency_seconds{type=single}",
-        "libra_client_service_request_latency_seconds{type=batch}",
         // invalid params
-        "libra_client_service_invalid_requests_count{type=invalid_params}",
+        "libra_client_service_invalid_requests_count{errortype=invalid_params,method=get_currencies,type=single}",
     ];
+
     for name in expected_metrics {
         assert!(
             metrics.contains_key(name),
@@ -855,7 +1000,7 @@ fn test_get_account() {
         .expect("account does not exist");
     let account_balances: Vec<_> = account.balances.iter().map(|bal| bal.amount).collect();
     let expected_resource_balances: Vec<_> = expected_resource
-        .get_balance_resources(&[from_currency_code_string(LBR_NAME).unwrap()])
+        .get_balance_resources(&[from_currency_code_string(COIN1_NAME).unwrap()])
         .unwrap()
         .iter()
         .map(|(_, bal_resource)| bal_resource.coin())
@@ -895,7 +1040,7 @@ fn test_get_account() {
             .expect("account does not exist");
         let account_balances: Vec<_> = account.balances.iter().map(|bal| bal.amount).collect();
         let expected_resource_balances: Vec<_> = states[idx]
-            .get_balance_resources(&[from_currency_code_string(LBR_NAME).unwrap()])
+            .get_balance_resources(&[from_currency_code_string(COIN1_NAME).unwrap()])
             .unwrap()
             .iter()
             .map(|(_, bal_resource)| bal_resource.coin())
@@ -922,7 +1067,7 @@ fn test_get_metadata_latest() {
 
     let result = execute_batch_and_get_first_response(&client, &mut runtime, batch);
 
-    let result_view = BlockMetadata::from_response(result).unwrap();
+    let result_view = MetadataView::from_response(result).unwrap();
     assert_eq!(result_view.version, actual_version);
     assert_eq!(result_view.timestamp, actual_timestamp);
 }
@@ -936,7 +1081,7 @@ fn test_get_metadata() {
 
     let result = execute_batch_and_get_first_response(&client, &mut runtime, batch);
 
-    let result_view = BlockMetadata::from_response(result).unwrap();
+    let result_view = MetadataView::from_response(result).unwrap();
     assert_eq!(result_view.version, 1);
     assert_eq!(result_view.timestamp, mock_db.timestamps[1]);
 }
@@ -1306,7 +1451,7 @@ fn create_db_and_runtime() -> (
 ) {
     let mock_db = mock_db();
 
-    let host = "0.0.0.0";
+    let host = "127.0.0.1";
     let port = utils::get_available_port();
     let address = format!("{}:{}", host, port);
     let (mp_sender, mp_events) = channel(1);

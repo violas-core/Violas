@@ -32,7 +32,7 @@ The Libra network consists of different types of actors:
   * **Verifying clients**. By default, clients are bootstrapped with a state and a set of validator, and can thus be epoch-aware by syncing this state with the blockchain. This way, a verifying client can verify the proofs carried in every response they obtain from full nodes they query. A full node, for instance, is a verifying client. A developer could develop a custom verifying client with the LPN specifications for specific applications, for instance, a light weight client that only keeps the more recent subset of account state.
   * **Non-verifying clients**. A client might query a third-party to access the state of the blockchain without verifying the signatures from the validators. The optional JSON-RPC protocol supports this mode of operation, and developers are also free to build other systems that accomplish this task. This specification does not define how a client should find such a service. As an example, some clients could run their own full nodes that expose the JSON-RPC protocol and access these endpoints under secure channels. In this setup, a non-verifying client delegates proof verification to the full node.
 
-Below is a recapitulating diagram of the Libra network. The arrow tail signifies the sender of a network request and the arrow head is the receiver of the network request.
+Below is a recapicoin1_tmpating diagram of the Libra network. The arrow tail signifies the sender of a network request and the arrow head is the receiver of the network request.
 
 ## The Libra network
 
@@ -53,13 +53,12 @@ As [depicted](#The-Libra-network), there are 4 network protocol specifications:
 
 In addition, these specifications build on top of a common set of specifications:
 
-* **[Libra canonical serialization (LCS)](https://libra.github.io/libra/libra_canonical_serialization/)**. This details how data is canonically serialized and deserialized. Hashing and signing of data structures are applied after LCS serialization.
+* **[Libra canonical serialization (LCS)](https://developers.libra.org/docs/rustdocs/libra_canonical_serialization/)**. This details how data is canonically serialized and deserialized. Hashing and signing of data structures are applied after LCS serialization.
 * **[Common data structures](common/data_structures.md)**. These are the data structures that are used across more than one specification.
 * **[LibraNet](network/)**. This describes a handshake and wire protocol for all networking protocols. This relies on the [Noise protocol framework](https://noiseprotocol.org/) for integrity and confidentiality.
 * **[On-chain discovery](network/onchain-discovery.md)**. This defines how clients can safely find the endpoints of the LPN validators.
 * **[Authenticated data structures](common/authenticated_data_structures.md)**. This describes the ledger history, ledger state, and events data structures.
-* **Move virtual machine (VM)**. This defines the semantics of the Move bytecode interpreter and Move bytecode verifier.
-* **Libra adapter**. This defines the checks performed on a transaction before passing its script into the Move VM (e.g., signature checking).
+* **[Move adapter and Move virtual machine (VM)](move_adapter/)**. Libra transactions are implemented as scripts in the Move programming language, and this specification defines how transactions are validated and executed using the Move VM.
 
 ## Specification upgrades
 

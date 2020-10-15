@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use libra_metrics::{
-    register_histogram_vec, register_int_counter, register_int_counter_vec, register_int_gauge_vec,
-    HistogramVec, IntCounter, IntCounterVec, IntGaugeVec,
+    register_histogram_vec, register_int_counter, register_int_counter_vec, register_int_gauge,
+    register_int_gauge_vec, HistogramVec, IntCounter, IntCounterVec, IntGauge, IntGaugeVec,
 };
 use once_cell::sync::Lazy;
 
@@ -40,15 +40,36 @@ pub const REQUEST_SUCCESS_LABEL: &str = "success";
 pub const FETCH_SEQ_NUM_LABEL: &str = "storage_fetch";
 pub const VM_VALIDATION_LABEL: &str = "vm_validation";
 
+// Txn process result labels
+pub const CLIENT_LABEL: &str = "client";
+pub const SUCCESS_LABEL: &str = "success";
+
 // Bounded executor task labels
 pub const CLIENT_EVENT_LABEL: &str = "client_event";
 pub const STATE_SYNC_EVENT_LABEL: &str = "state_sync";
 pub const RECONFIG_EVENT_LABEL: &str = "reconfig";
 pub const PEER_BROADCAST_EVENT_LABEL: &str = "peer_broadcast";
 
+// task spawn stage labels
+pub const SPAWN_LABEL: &str = "spawn";
+pub const START_LABEL: &str = "start";
+
 // Mempool network msg failure type labels:
 pub const BROADCAST_TXNS: &str = "broadcast_txns";
 pub const ACK_TXNS: &str = "ack_txns";
+
+// Broadcast/ACK type labels
+pub const EXPIRED_BROADCAST_LABEL: &str = "expired";
+pub const RETRY_BROADCAST_LABEL: &str = "retry";
+pub const BACKPRESSURE_BROADCAST_LABEL: &str = "backpressure";
+
+// ACK direction labels
+pub const RECEIVED_LABEL: &str = "received";
+pub const SENT_LABEL: &str = "sent";
+
+// invalid ACK type labels
+pub const INVALID_REQUEST_ID: &str = "invalid_req_id";
+pub const UNKNOWN_PEER: &str = "unknown_peer";
 
 /// Counter tracking size of various indices in core mempool
 pub static CORE_MEMPOOL_INDEX_SIZE: Lazy<IntGaugeVec> = Lazy::new(|| {
@@ -56,6 +77,15 @@ pub static CORE_MEMPOOL_INDEX_SIZE: Lazy<IntGaugeVec> = Lazy::new(|| {
         "libra_core_mempool_index_size",
         "Size of a core mempool index",
         &["index"]
+    )
+    .unwrap()
+});
+
+/// Counter tracking number of txns removed from core mempool
+pub static CORE_MEMPOOL_REMOVED_TXNS: Lazy<IntCounter> = Lazy::new(|| {
+    register_int_counter!(
+        "libra_core_mempool_removed_txns_count",
+        "Number of txns removed from core mempool"
     )
     .unwrap()
 });
@@ -71,14 +101,17 @@ pub static CORE_MEMPOOL_TXN_COMMIT_LATENCY: Lazy<HistogramVec> = Lazy::new(|| {
     .unwrap()
 });
 
+/// Counter for number of periodic garbage-collection (=GC) events that happen, regardless of
+/// how many txns were actually cleaned up in this GC event
 pub static CORE_MEMPOOL_GC_EVENT_COUNT: Lazy<IntCounterVec> = Lazy::new(|| {
     register_int_counter_vec!(
         "libra_core_mempool_gc_event_count",
-        "Number of times a garbage-collection event occurs, regardless of how many txns were actually removed",
+        "Number of times the periodic garbage-collection event occurs, regardless of how many txns were actually removed",
         &["type"])
        .unwrap()
 });
 
+/// Counter tracking time for how long a transaction stayed in core-mempool before being garbage-collected
 pub static CORE_MEMPOOL_GC_LATENCY: Lazy<HistogramVec> = Lazy::new(|| {
     register_histogram_vec!(
         "libra_core_mempool_gc_latency",
@@ -110,6 +143,7 @@ pub static MEMPOOL_SERVICE_TXNS: Lazy<HistogramVec> = Lazy::new(|| {
 });
 
 /// Counter for tracking latency of mempool processing requests from consensus/state sync
+/// A 'fail' result means the mempool's callback response to consensus/state sync failed.
 pub static MEMPOOL_SERVICE_LATENCY: Lazy<HistogramVec> = Lazy::new(|| {
     register_histogram_vec!(
         "libra_mempool_service_latency_ms",
@@ -119,6 +153,7 @@ pub static MEMPOOL_SERVICE_LATENCY: Lazy<HistogramVec> = Lazy::new(|| {
     .unwrap()
 });
 
+/// Counter for types of network messages received by shared mempool
 pub static SHARED_MEMPOOL_EVENTS: Lazy<IntCounterVec> = Lazy::new(|| {
     register_int_counter_vec!(
         "libra_shared_mempool_events",
@@ -133,7 +168,7 @@ pub static PROCESS_TXN_SUBMISSION_LATENCY: Lazy<HistogramVec> = Lazy::new(|| {
     register_histogram_vec!(
         "libra_shared_mempool_request_latency",
         "Latency of mempool processing txn submission requests",
-        &["sender"] // sender of txn(s)
+        &["network", "sender"] // sender of txn(s)
     )
     .unwrap()
 });
@@ -153,7 +188,7 @@ pub static SHARED_MEMPOOL_BROADCAST_LATENCY: Lazy<HistogramVec> = Lazy::new(|| {
     register_histogram_vec!(
         "libra_broadcast_latency",
         "Latency of mempool executing broadcast to another peer",
-        &["recipient"]
+        &["network", "recipient"]
     )
     .unwrap()
 });
@@ -163,7 +198,7 @@ pub static SHARED_MEMPOOL_BROADCAST_RTT: Lazy<HistogramVec> = Lazy::new(|| {
     register_histogram_vec!(
         "libra_shared_mempool_broadcast_roundtrip_latency",
         "Time elapsed between sending a broadcast and receiving an ACK for that broadcast",
-        &["recipient"]
+        &["network", "recipient"]
     )
     .unwrap()
 });
@@ -173,7 +208,7 @@ pub static SHARED_MEMPOOL_PENDING_BROADCASTS_COUNT: Lazy<IntGaugeVec> = Lazy::ne
     register_int_gauge_vec!(
         "libra_shared_mempool_pending_broadcasts_count",
         "Number of mempool broadcasts not ACK'ed for yet",
-        &["recipient"]
+        &["network", "recipient"]
     )
     .unwrap()
 });
@@ -184,19 +219,37 @@ pub static SHARED_MEMPOOL_TRANSACTIONS_PROCESSED: Lazy<IntCounterVec> = Lazy::ne
         "Number of transactions received and handled by shared mempool",
         &[
             // state of transaction processing: "received", "success", status code from failed txn processing
-            "status", // sender of the txns
-            "sender"
+            "status", // state of transaction processing: "received", "success", status code from failed txn processing
+            "network", "sender" // sender of the txns
         ]
     )
     .unwrap()
 });
 
-// Counter for broadcast size to peers
-pub static SHARED_MEMPOOL_TRANSACTION_BROADCAST: Lazy<HistogramVec> = Lazy::new(|| {
+/// Counter for number of transactions in each mempool broadcast sent
+pub static SHARED_MEMPOOL_TRANSACTION_BROADCAST_SIZE: Lazy<HistogramVec> = Lazy::new(|| {
     register_histogram_vec!(
         "libra_shared_mempool_transaction_broadcast",
         "Number of transactions in each mempool broadcast sent",
-        &["recipient"]
+        &["network", "recipient"]
+    )
+    .unwrap()
+});
+
+pub static SHARED_MEMPOOL_BROADCAST_TYPE_COUNT: Lazy<IntCounterVec> = Lazy::new(|| {
+    register_int_counter_vec!(
+        "libra_shared_mempool_rebroadcast_count",
+        "Number of various types of broadcasts executed by shared mempool",
+        &["network", "recipient", "type"]
+    )
+    .unwrap()
+});
+
+pub static SHARED_MEMPOOL_ACK_TYPE_COUNT: Lazy<IntCounterVec> = Lazy::new(|| {
+    register_int_counter_vec!(
+        "libra_shared_mempool_ack_count",
+        "Number of various types of ACKs sent/received by shared mempool",
+        &["network", "recipient", "direction", "type"]
     )
     .unwrap()
 });
@@ -205,7 +258,7 @@ pub static TASK_SPAWN_LATENCY: Lazy<HistogramVec> = Lazy::new(|| {
     register_histogram_vec!(
         "libra_mempool_bounded_executor_spawn_latency",
         "Time it takes for mempool's coordinator to spawn async tasks",
-        &["task"]
+        &["task", "stage"]
     )
     .unwrap()
 });
@@ -226,6 +279,7 @@ pub static VM_RECONFIG_UPDATE_FAIL_COUNT: Lazy<IntCounter> = Lazy::new(|| {
     .unwrap()
 });
 
+/// Counter for failed Libra network sends
 pub static NETWORK_SEND_FAIL: Lazy<IntCounterVec> = Lazy::new(|| {
     register_int_counter_vec!(
         "libra_mempool_network_send_fail_count",
@@ -235,10 +289,63 @@ pub static NETWORK_SEND_FAIL: Lazy<IntCounterVec> = Lazy::new(|| {
     .unwrap()
 });
 
+pub static UNEXPECTED_NETWORK_MSG_COUNT: Lazy<IntCounterVec> = Lazy::new(|| {
+    register_int_counter_vec!(
+        "libra_mempool_unexpected_network_count",
+        "Number of unexpected network msgs received",
+        &["network", "peer"]
+    )
+    .unwrap()
+});
+
+/// Counter for failed callback response to JSON RPC
 pub static CLIENT_CALLBACK_FAIL: Lazy<IntCounter> = Lazy::new(|| {
     register_int_counter!(
         "libra_mempool_json_rpc_callback_fail_count",
         "Number of times callback to JSON RPC failed in mempool"
+    )
+    .unwrap()
+});
+
+/// Counter for how many ACKs were received with an invalid request_id that this node's mempool
+/// did not send
+pub static INVALID_ACK_RECEIVED_COUNT: Lazy<IntCounterVec> = Lazy::new(|| {
+    register_int_counter_vec!(
+        "libra_mempool_unrecognized_ack_received_count",
+        "Number of ACK messages received with an invalid request_id that this node's mempool did not send",
+        &["network", "sender", "type"]
+    )
+        .unwrap()
+});
+
+/// Counter for number of times a DB read resulted in error
+pub static DB_ERROR: Lazy<IntCounter> = Lazy::new(|| {
+    register_int_counter!(
+        "libra_mempool_db_error_count",
+        "Number of times a DB read error was encountered in mempool"
+    )
+    .unwrap()
+});
+
+/// Gauge for the preference ranking of the current chosen upstream network
+/// to broadcast to
+/// See `UpstreamConfig::get_upstream_preference` for details on the numerical value of the preference
+/// ranking of a network
+pub static UPSTREAM_NETWORK: Lazy<IntGauge> = Lazy::new(|| {
+    register_int_gauge!(
+        "libra_mempool_upstream_network",
+        "The preference of the network mempool is broadcasting to"
+    )
+    .unwrap()
+});
+
+/// Counter for the current number of active upstream peers mempool can
+/// broadcast to, summed across each of its networks
+pub static ACTIVE_UPSTREAM_PEERS_COUNT: Lazy<IntGaugeVec> = Lazy::new(|| {
+    register_int_gauge_vec!(
+        "libra_mempool_active_upstream_peers_count",
+        "Number of active upstream peers for the node of this mempool",
+        &["network"]
     )
     .unwrap()
 });

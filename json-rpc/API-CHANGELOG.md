@@ -12,6 +12,52 @@ Please add the API change in the following format:
 - <describle another change of the API>
 
 ```
+## 2020-10-05 Rename `upgradeevent` to `admintransaction` event
+- Changed the name and structure for `upgradeevent`
+- [See PR #6449](https://github.com/libra/libra/pull/6449)
+
+
+## 2020-10-08 Decode transaction script as name, code, arguments and type_arguments
+
+- Transaction [Script](docs/type_transaction.md#type-script) is fulfilled with known script name as type, code, arguments and type_arguments. Similar with on-chain transaction [Script](https://developers.libra.org/docs/rustdocs/libra_types/transaction/struct.Script.html) type.
+- Renamed type `peer_to_peer_transaction` to `peer_to_peer_with_metadata`, which is consistent with stdlib transaction script name.
+- Removed `mint_transaction`, it is never rendered because of a bug, and the script does not exist anymore.
+- [See PR #6453](https://github.com/libra/libra/pull/6453)
+
+
+## 2020-10-07 Add `libra_version` field to `get_metadata` response
+
+- `libra_version` number of libra onchain version
+
+See [doc](docs/type_metadata.md) for more details.
+
+
+## [breaking] 2020-10-07 Rename unknown script type from `unknown_transaction` to `unknown`
+
+- `unknown_transaction` may cause user think the transaction is invalid. Change to `unknown` which is align with other unknown types.
+
+This is breaking change if a client used `unknown_transaction` to handle result.
+
+See [doc](docs/type_transaction.md#type-script) for more details.
+
+
+## 2020-10-06 Add `script_hash_allow_list` and `module_publishing_allowed` fields to `get_metadata` method response
+
+- `script_hash_allow_list` returns list of allowed scripts hash.
+- `module_publishing_allowed` returns bool value indicates whether publishing customized scripts are allowed
+
+See [doc](docs/type_metadata.md) for more details.
+
+
+## 2020-10-05 Add `created_address` and `role_id` fields to `CreateAccount` event
+
+- `created_address` is the address created account.
+- `role_id` is the role id of the created account.
+
+## 2020-09-30 Add `CreateAccount` event
+
+- New event data type createaccount.
+
 ## [breaking] 2020-09-09
 
 - In `KeptVMStatus`, `VerificationError` and `DeserializationError` were merged into `MiscellaneousError`

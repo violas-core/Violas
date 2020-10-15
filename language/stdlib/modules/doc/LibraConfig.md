@@ -3,33 +3,45 @@
 
 # Module `0x1::LibraConfig`
 
+Publishes configuration information for validators, and issues reconfiguration events
+to synchronize configuration changes for the validators.
 
 
--  [Resource <code><a href="LibraConfig.md#0x1_LibraConfig">LibraConfig</a></code>](#0x1_LibraConfig_LibraConfig)
--  [Struct <code><a href="LibraConfig.md#0x1_LibraConfig_NewEpochEvent">NewEpochEvent</a></code>](#0x1_LibraConfig_NewEpochEvent)
--  [Resource <code><a href="LibraConfig.md#0x1_LibraConfig_Configuration">Configuration</a></code>](#0x1_LibraConfig_Configuration)
--  [Resource <code><a href="LibraConfig.md#0x1_LibraConfig_ModifyConfigCapability">ModifyConfigCapability</a></code>](#0x1_LibraConfig_ModifyConfigCapability)
--  [Const <code><a href="LibraConfig.md#0x1_LibraConfig_ECONFIGURATION">ECONFIGURATION</a></code>](#0x1_LibraConfig_ECONFIGURATION)
--  [Const <code><a href="LibraConfig.md#0x1_LibraConfig_ELIBRA_CONFIG">ELIBRA_CONFIG</a></code>](#0x1_LibraConfig_ELIBRA_CONFIG)
--  [Const <code><a href="LibraConfig.md#0x1_LibraConfig_EMODIFY_CAPABILITY">EMODIFY_CAPABILITY</a></code>](#0x1_LibraConfig_EMODIFY_CAPABILITY)
--  [Const <code><a href="LibraConfig.md#0x1_LibraConfig_EINVALID_BLOCK_TIME">EINVALID_BLOCK_TIME</a></code>](#0x1_LibraConfig_EINVALID_BLOCK_TIME)
--  [Const <code><a href="LibraConfig.md#0x1_LibraConfig_MAX_U64">MAX_U64</a></code>](#0x1_LibraConfig_MAX_U64)
--  [Function <code>initialize</code>](#0x1_LibraConfig_initialize)
--  [Function <code>get</code>](#0x1_LibraConfig_get)
--  [Function <code>set</code>](#0x1_LibraConfig_set)
--  [Function <code>set_with_capability_and_reconfigure</code>](#0x1_LibraConfig_set_with_capability_and_reconfigure)
--  [Function <code>publish_new_config_and_get_capability</code>](#0x1_LibraConfig_publish_new_config_and_get_capability)
--  [Function <code>publish_new_config</code>](#0x1_LibraConfig_publish_new_config)
--  [Function <code>reconfigure</code>](#0x1_LibraConfig_reconfigure)
--  [Function <code>reconfigure_</code>](#0x1_LibraConfig_reconfigure_)
--  [Function <code>emit_genesis_reconfiguration_event</code>](#0x1_LibraConfig_emit_genesis_reconfiguration_event)
--  [Module Specification](#@Module_Specification_0)
+-  [Resource `LibraConfig`](#0x1_LibraConfig_LibraConfig)
+-  [Struct `NewEpochEvent`](#0x1_LibraConfig_NewEpochEvent)
+-  [Resource `Configuration`](#0x1_LibraConfig_Configuration)
+-  [Resource `ModifyConfigCapability`](#0x1_LibraConfig_ModifyConfigCapability)
+-  [Constants](#@Constants_0)
+-  [Function `initialize`](#0x1_LibraConfig_initialize)
+-  [Function `get`](#0x1_LibraConfig_get)
+-  [Function `set`](#0x1_LibraConfig_set)
+-  [Function `set_with_capability_and_reconfigure`](#0x1_LibraConfig_set_with_capability_and_reconfigure)
+-  [Function `publish_new_config_and_get_capability`](#0x1_LibraConfig_publish_new_config_and_get_capability)
+-  [Function `publish_new_config`](#0x1_LibraConfig_publish_new_config)
+-  [Function `reconfigure`](#0x1_LibraConfig_reconfigure)
+-  [Function `reconfigure_`](#0x1_LibraConfig_reconfigure_)
+-  [Function `emit_genesis_reconfiguration_event`](#0x1_LibraConfig_emit_genesis_reconfiguration_event)
+-  [Module Specification](#@Module_Specification_1)
+    -  [Initialization](#@Initialization_2)
+    -  [Invariants](#@Invariants_3)
+    -  [Helper Functions](#@Helper_Functions_4)
+
+
+<pre><code><b>use</b> <a href="CoreAddresses.md#0x1_CoreAddresses">0x1::CoreAddresses</a>;
+<b>use</b> <a href="Errors.md#0x1_Errors">0x1::Errors</a>;
+<b>use</b> <a href="Event.md#0x1_Event">0x1::Event</a>;
+<b>use</b> <a href="LibraTimestamp.md#0x1_LibraTimestamp">0x1::LibraTimestamp</a>;
+<b>use</b> <a href="Roles.md#0x1_Roles">0x1::Roles</a>;
+<b>use</b> <a href="Signer.md#0x1_Signer">0x1::Signer</a>;
+</code></pre>
+
 
 
 <a name="0x1_LibraConfig_LibraConfig"></a>
 
 ## Resource `LibraConfig`
 
+A generic singleton resource that holds a value of a specific type.
 
 
 <pre><code><b>resource</b> <b>struct</b> <a href="LibraConfig.md#0x1_LibraConfig">LibraConfig</a>&lt;Config: <b>copyable</b>&gt;
@@ -46,7 +58,7 @@
 <code>payload: Config</code>
 </dt>
 <dd>
-
+ Holds specific info for instance of <code>Config</code> type.
 </dd>
 </dl>
 
@@ -57,6 +69,9 @@
 
 ## Struct `NewEpochEvent`
 
+Event that signals LibraBFT algorithm to start a new epoch,
+with new configuration information. This is also called a
+"reconfiguration event"
 
 
 <pre><code><b>struct</b> <a href="LibraConfig.md#0x1_LibraConfig_NewEpochEvent">NewEpochEvent</a>
@@ -84,6 +99,7 @@
 
 ## Resource `Configuration`
 
+Holds information about state of reconfiguration
 
 
 <pre><code><b>resource</b> <b>struct</b> <a href="LibraConfig.md#0x1_LibraConfig_Configuration">Configuration</a>
@@ -100,19 +116,19 @@
 <code>epoch: u64</code>
 </dt>
 <dd>
-
+ Epoch number
 </dd>
 <dt>
 <code>last_reconfiguration_time: u64</code>
 </dt>
 <dd>
-
+ Time of last reconfiguration. Only changes on reconfiguration events.
 </dd>
 <dt>
 <code>events: <a href="Event.md#0x1_Event_EventHandle">Event::EventHandle</a>&lt;<a href="LibraConfig.md#0x1_LibraConfig_NewEpochEvent">LibraConfig::NewEpochEvent</a>&gt;</code>
 </dt>
 <dd>
-
+ Event handle for reconfiguration events
 </dd>
 </dl>
 
@@ -123,6 +139,7 @@
 
 ## Resource `ModifyConfigCapability`
 
+Accounts with this privilege can modify LibraConfig<TypeName> under Libra root address.
 
 
 <pre><code><b>resource</b> <b>struct</b> <a href="LibraConfig.md#0x1_LibraConfig_ModifyConfigCapability">ModifyConfigCapability</a>&lt;TypeName&gt;
@@ -146,9 +163,22 @@
 
 </details>
 
-<a name="0x1_LibraConfig_ECONFIGURATION"></a>
+<a name="@Constants_0"></a>
 
-## Const `ECONFIGURATION`
+## Constants
+
+
+<a name="0x1_LibraConfig_MAX_U64"></a>
+
+The largest possible u64 value
+
+
+<pre><code><b>const</b> <a href="LibraConfig.md#0x1_LibraConfig_MAX_U64">MAX_U64</a>: u64 = 18446744073709551615;
+</code></pre>
+
+
+
+<a name="0x1_LibraConfig_ECONFIGURATION"></a>
 
 The <code><a href="LibraConfig.md#0x1_LibraConfig_Configuration">Configuration</a></code> resource is in an invalid state
 
@@ -158,9 +188,17 @@ The <code><a href="LibraConfig.md#0x1_LibraConfig_Configuration">Configuration</
 
 
 
-<a name="0x1_LibraConfig_ELIBRA_CONFIG"></a>
+<a name="0x1_LibraConfig_EINVALID_BLOCK_TIME"></a>
 
-## Const `ELIBRA_CONFIG`
+An invalid block time was encountered.
+
+
+<pre><code><b>const</b> <a href="LibraConfig.md#0x1_LibraConfig_EINVALID_BLOCK_TIME">EINVALID_BLOCK_TIME</a>: u64 = 4;
+</code></pre>
+
+
+
+<a name="0x1_LibraConfig_ELIBRA_CONFIG"></a>
 
 A <code><a href="LibraConfig.md#0x1_LibraConfig">LibraConfig</a></code> resource is in an invalid state
 
@@ -172,8 +210,6 @@ A <code><a href="LibraConfig.md#0x1_LibraConfig">LibraConfig</a></code> resource
 
 <a name="0x1_LibraConfig_EMODIFY_CAPABILITY"></a>
 
-## Const `EMODIFY_CAPABILITY`
-
 A <code><a href="LibraConfig.md#0x1_LibraConfig_ModifyConfigCapability">ModifyConfigCapability</a></code> is in a different state than was expected
 
 
@@ -182,33 +218,11 @@ A <code><a href="LibraConfig.md#0x1_LibraConfig_ModifyConfigCapability">ModifyCo
 
 
 
-<a name="0x1_LibraConfig_EINVALID_BLOCK_TIME"></a>
-
-## Const `EINVALID_BLOCK_TIME`
-
-An invalid block time was encountered.
-
-
-<pre><code><b>const</b> <a href="LibraConfig.md#0x1_LibraConfig_EINVALID_BLOCK_TIME">EINVALID_BLOCK_TIME</a>: u64 = 4;
-</code></pre>
-
-
-
-<a name="0x1_LibraConfig_MAX_U64"></a>
-
-## Const `MAX_U64`
-
-
-
-<pre><code><b>const</b> <a href="LibraConfig.md#0x1_LibraConfig_MAX_U64">MAX_U64</a>: u64 = 18446744073709551615;
-</code></pre>
-
-
-
 <a name="0x1_LibraConfig_initialize"></a>
 
 ## Function `initialize`
 
+Publishes <code><a href="LibraConfig.md#0x1_LibraConfig_Configuration">Configuration</a></code> resource. Can only be invoked by Libra root, and only a single time in Genesis.
 
 
 <pre><code><b>public</b> <b>fun</b> <a href="LibraConfig.md#0x1_LibraConfig_initialize">initialize</a>(lr_account: &signer)
@@ -246,14 +260,10 @@ An invalid block time was encountered.
 
 
 
-<pre><code>pragma opaque;
+<pre><code><b>pragma</b> opaque;
 <b>include</b> <a href="LibraConfig.md#0x1_LibraConfig_InitializeAbortsIf">InitializeAbortsIf</a>;
+<b>include</b> <a href="LibraConfig.md#0x1_LibraConfig_InitializeEnsures">InitializeEnsures</a>;
 <b>modifies</b> <b>global</b>&lt;<a href="LibraConfig.md#0x1_LibraConfig_Configuration">Configuration</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>());
-<b>ensures</b> <a href="LibraConfig.md#0x1_LibraConfig_spec_has_config">spec_has_config</a>();
-<a name="0x1_LibraConfig_new_config$17"></a>
-<b>let</b> new_config = <b>global</b>&lt;<a href="LibraConfig.md#0x1_LibraConfig_Configuration">Configuration</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>());
-<b>ensures</b> new_config.epoch == 0;
-<b>ensures</b> new_config.last_reconfiguration_time == 0;
 </code></pre>
 
 
@@ -272,12 +282,28 @@ An invalid block time was encountered.
 
 
 
+
+<a name="0x1_LibraConfig_InitializeEnsures"></a>
+
+
+<pre><code><b>schema</b> <a href="LibraConfig.md#0x1_LibraConfig_InitializeEnsures">InitializeEnsures</a> {
+    <b>ensures</b> <a href="LibraConfig.md#0x1_LibraConfig_spec_has_config">spec_has_config</a>();
+    <a name="0x1_LibraConfig_new_config$13"></a>
+    <b>let</b> new_config = <b>global</b>&lt;<a href="LibraConfig.md#0x1_LibraConfig_Configuration">Configuration</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>());
+    <b>ensures</b> new_config.epoch == 0;
+    <b>ensures</b> new_config.last_reconfiguration_time == 0;
+}
+</code></pre>
+
+
+
 </details>
 
 <a name="0x1_LibraConfig_get"></a>
 
 ## Function `get`
 
+Returns a copy of <code>Config</code> value stored under <code>addr</code>.
 
 
 <pre><code><b>public</b> <b>fun</b> <a href="LibraConfig.md#0x1_LibraConfig_get">get</a>&lt;Config: <b>copyable</b>&gt;(): Config
@@ -306,7 +332,7 @@ An invalid block time was encountered.
 
 
 
-<pre><code>pragma opaque;
+<pre><code><b>pragma</b> opaque;
 <b>include</b> <a href="LibraConfig.md#0x1_LibraConfig_AbortsIfNotPublished">AbortsIfNotPublished</a>&lt;Config&gt;;
 <b>ensures</b> result == <a href="LibraConfig.md#0x1_LibraConfig_get">get</a>&lt;Config&gt;();
 </code></pre>
@@ -330,6 +356,8 @@ An invalid block time was encountered.
 
 ## Function `set`
 
+Set a config item to a new value with the default capability stored under config address and trigger a
+reconfiguration. This function requires that the signer be Libra root.
 
 
 <pre><code><b>public</b> <b>fun</b> <a href="LibraConfig.md#0x1_LibraConfig_set">set</a>&lt;Config: <b>copyable</b>&gt;(account: &signer, payload: Config)
@@ -344,6 +372,7 @@ An invalid block time was encountered.
 <pre><code><b>public</b> <b>fun</b> <a href="LibraConfig.md#0x1_LibraConfig_set">set</a>&lt;Config: <b>copyable</b>&gt;(account: &signer, payload: Config)
 <b>acquires</b> <a href="LibraConfig.md#0x1_LibraConfig">LibraConfig</a>, <a href="LibraConfig.md#0x1_LibraConfig_Configuration">Configuration</a> {
     <b>let</b> signer_address = <a href="Signer.md#0x1_Signer_address_of">Signer::address_of</a>(account);
+    // Next should always be <b>true</b> <b>if</b> properly initialized.
     <b>assert</b>(<b>exists</b>&lt;<a href="LibraConfig.md#0x1_LibraConfig_ModifyConfigCapability">ModifyConfigCapability</a>&lt;Config&gt;&gt;(signer_address), <a href="Errors.md#0x1_Errors_requires_capability">Errors::requires_capability</a>(<a href="LibraConfig.md#0x1_LibraConfig_EMODIFY_CAPABILITY">EMODIFY_CAPABILITY</a>));
 
     <b>let</b> addr = <a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>();
@@ -364,7 +393,7 @@ An invalid block time was encountered.
 
 
 
-<pre><code>pragma opaque;
+<pre><code><b>pragma</b> opaque;
 <b>include</b> <a href="LibraConfig.md#0x1_LibraConfig_SetAbortsIf">SetAbortsIf</a>&lt;Config&gt;;
 <b>include</b> <a href="LibraConfig.md#0x1_LibraConfig_SetEnsures">SetEnsures</a>&lt;Config&gt;;
 </code></pre>
@@ -417,6 +446,12 @@ An invalid block time was encountered.
 
 ## Function `set_with_capability_and_reconfigure`
 
+Set a config item to a new value and trigger a reconfiguration. This function
+requires a reference to a <code><a href="LibraConfig.md#0x1_LibraConfig_ModifyConfigCapability">ModifyConfigCapability</a></code>, which is returned when the
+config is published using <code>publish_new_config_and_get_capability</code>.
+It is called by <code><a href="LibraSystem.md#0x1_LibraSystem_update_config_and_reconfigure">LibraSystem::update_config_and_reconfigure</a></code>, which allows
+validator operators to change the validator set.  All other config changes require
+a Libra root signer.
 
 
 <pre><code><b>public</b> <b>fun</b> <a href="LibraConfig.md#0x1_LibraConfig_set_with_capability_and_reconfigure">set_with_capability_and_reconfigure</a>&lt;Config: <b>copyable</b>&gt;(_cap: &<a href="LibraConfig.md#0x1_LibraConfig_ModifyConfigCapability">LibraConfig::ModifyConfigCapability</a>&lt;Config&gt;, payload: Config)
@@ -449,7 +484,8 @@ An invalid block time was encountered.
 
 
 
-<pre><code>pragma opaque;
+<pre><code><b>pragma</b> opaque;
+<b>modifies</b> <b>global</b>&lt;<a href="LibraConfig.md#0x1_LibraConfig_Configuration">Configuration</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>());
 <b>include</b> <a href="LibraConfig.md#0x1_LibraConfig_AbortsIfNotPublished">AbortsIfNotPublished</a>&lt;Config&gt;;
 <b>include</b> <a href="LibraConfig.md#0x1_LibraConfig_ReconfigureAbortsIf">ReconfigureAbortsIf</a>;
 <b>modifies</b> <b>global</b>&lt;<a href="LibraConfig.md#0x1_LibraConfig">LibraConfig</a>&lt;Config&gt;&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>());
@@ -464,6 +500,10 @@ An invalid block time was encountered.
 
 ## Function `publish_new_config_and_get_capability`
 
+Publishes a new config.
+The caller will use the returned ModifyConfigCapability to specify the access control
+policy for who can modify the config.
+Does not trigger a reconfiguration.
 
 
 <pre><code><b>public</b> <b>fun</b> <a href="LibraConfig.md#0x1_LibraConfig_publish_new_config_and_get_capability">publish_new_config_and_get_capability</a>&lt;Config: <b>copyable</b>&gt;(lr_account: &signer, payload: Config): <a href="LibraConfig.md#0x1_LibraConfig_ModifyConfigCapability">LibraConfig::ModifyConfigCapability</a>&lt;Config&gt;
@@ -499,7 +539,7 @@ An invalid block time was encountered.
 
 
 
-<pre><code>pragma opaque;
+<pre><code><b>pragma</b> opaque;
 <b>modifies</b> <b>global</b>&lt;<a href="LibraConfig.md#0x1_LibraConfig">LibraConfig</a>&lt;Config&gt;&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>());
 <b>include</b> <a href="LibraTimestamp.md#0x1_LibraTimestamp_AbortsIfNotGenesis">LibraTimestamp::AbortsIfNotGenesis</a>;
 <b>include</b> <a href="Roles.md#0x1_Roles_AbortsIfNotLibraRoot">Roles::AbortsIfNotLibraRoot</a>{account: lr_account};
@@ -526,6 +566,9 @@ An invalid block time was encountered.
 
 ## Function `publish_new_config`
 
+Publish a new config item. Only Libra root can modify such config.
+Publishes the capability to modify this config under the Libra root account.
+Does not trigger a reconfiguration.
 
 
 <pre><code><b>public</b> <b>fun</b> <a href="LibraConfig.md#0x1_LibraConfig_publish_new_config">publish_new_config</a>&lt;Config: <b>copyable</b>&gt;(lr_account: &signer, payload: Config)
@@ -559,7 +602,7 @@ An invalid block time was encountered.
 
 
 
-<pre><code>pragma opaque;
+<pre><code><b>pragma</b> opaque;
 <b>modifies</b> <b>global</b>&lt;<a href="LibraConfig.md#0x1_LibraConfig">LibraConfig</a>&lt;Config&gt;&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>());
 <b>modifies</b> <b>global</b>&lt;<a href="LibraConfig.md#0x1_LibraConfig_ModifyConfigCapability">ModifyConfigCapability</a>&lt;Config&gt;&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>());
 <b>include</b> <a href="LibraConfig.md#0x1_LibraConfig_PublishNewConfigAbortsIf">PublishNewConfigAbortsIf</a>&lt;Config&gt;;
@@ -603,6 +646,7 @@ An invalid block time was encountered.
 
 ## Function `reconfigure`
 
+Signal validators to start using new configuration. Must be called by Libra root.
 
 
 <pre><code><b>public</b> <b>fun</b> <a href="LibraConfig.md#0x1_LibraConfig_reconfigure">reconfigure</a>(lr_account: &signer)
@@ -631,7 +675,8 @@ An invalid block time was encountered.
 
 
 
-<pre><code>pragma opaque;
+<pre><code><b>pragma</b> opaque;
+<b>modifies</b> <b>global</b>&lt;<a href="LibraConfig.md#0x1_LibraConfig_Configuration">Configuration</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>());
 <b>include</b> <a href="Roles.md#0x1_Roles_AbortsIfNotLibraRoot">Roles::AbortsIfNotLibraRoot</a>{account: lr_account};
 <b>include</b> <a href="LibraConfig.md#0x1_LibraConfig_ReconfigureAbortsIf">ReconfigureAbortsIf</a>;
 </code></pre>
@@ -644,6 +689,8 @@ An invalid block time was encountered.
 
 ## Function `reconfigure_`
 
+Private function to do reconfiguration.  Updates reconfiguration status resource
+<code><a href="LibraConfig.md#0x1_LibraConfig_Configuration">Configuration</a></code> and emits a <code><a href="LibraConfig.md#0x1_LibraConfig_NewEpochEvent">NewEpochEvent</a></code>
 
 
 <pre><code><b>fun</b> <a href="LibraConfig.md#0x1_LibraConfig_reconfigure_">reconfigure_</a>()
@@ -663,6 +710,23 @@ An invalid block time was encountered.
 
     <b>let</b> config_ref = borrow_global_mut&lt;<a href="LibraConfig.md#0x1_LibraConfig_Configuration">Configuration</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>());
     <b>let</b> current_time = <a href="LibraTimestamp.md#0x1_LibraTimestamp_now_microseconds">LibraTimestamp::now_microseconds</a>();
+
+    // Do not do anything <b>if</b> a reconfiguration event is already emitted within this transaction.
+    //
+    // This is OK because:
+    // - The time changes in every non-empty block
+    // - A block automatically ends after a transaction that emits a reconfiguration event, which is guaranteed by
+    //   LibraVM <b>spec</b> that all transactions comming after a reconfiguration transaction will be returned <b>as</b> Retry
+    //   status.
+    // - Each transaction must emit at most one reconfiguration event
+    //
+    // Thus, this check <b>ensures</b> that a transaction that does multiple "reconfiguration required" actions emits only
+    // one reconfiguration event.
+    //
+    <b>if</b> (current_time == config_ref.last_reconfiguration_time) {
+        <b>return</b>
+    };
+
     <b>assert</b>(current_time &gt; config_ref.last_reconfiguration_time, <a href="Errors.md#0x1_Errors_invalid_state">Errors::invalid_state</a>(<a href="LibraConfig.md#0x1_LibraConfig_EINVALID_BLOCK_TIME">EINVALID_BLOCK_TIME</a>));
     config_ref.last_reconfiguration_time = current_time;
     config_ref.epoch = config_ref.epoch + 1;
@@ -685,7 +749,7 @@ An invalid block time was encountered.
 
 
 
-<pre><code>pragma opaque;
+<pre><code><b>pragma</b> opaque;
 <b>modifies</b> <b>global</b>&lt;<a href="LibraConfig.md#0x1_LibraConfig_Configuration">Configuration</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>());
 <a name="0x1_LibraConfig_config$18"></a>
 <b>let</b> config = <b>global</b>&lt;<a href="LibraConfig.md#0x1_LibraConfig_Configuration">Configuration</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>());
@@ -693,13 +757,16 @@ An invalid block time was encountered.
 <b>let</b> now = <a href="LibraTimestamp.md#0x1_LibraTimestamp_spec_now_microseconds">LibraTimestamp::spec_now_microseconds</a>();
 <a name="0x1_LibraConfig_epoch$20"></a>
 <b>let</b> epoch = config.epoch;
-<b>include</b> !<a href="LibraConfig.md#0x1_LibraConfig_spec_reconfigure_omitted">spec_reconfigure_omitted</a>() ==&gt; <a href="LibraConfig.md#0x1_LibraConfig_InternalReconfigureAbortsIf">InternalReconfigureAbortsIf</a> && <a href="LibraConfig.md#0x1_LibraConfig_ReconfigureAbortsIf">ReconfigureAbortsIf</a>;
-<b>ensures</b> <a href="LibraConfig.md#0x1_LibraConfig_spec_reconfigure_omitted">spec_reconfigure_omitted</a>() ==&gt; config == <b>old</b>(config);
-<b>ensures</b> !<a href="LibraConfig.md#0x1_LibraConfig_spec_reconfigure_omitted">spec_reconfigure_omitted</a>() ==&gt; config ==
-    update_field(
-    update_field(<b>old</b>(config),
-        epoch, <b>old</b>(config.epoch) + 1),
-        last_reconfiguration_time, now);
+<b>include</b> !<a href="LibraConfig.md#0x1_LibraConfig_spec_reconfigure_omitted">spec_reconfigure_omitted</a>() || (config.last_reconfiguration_time == now)
+    ==&gt; <a href="LibraConfig.md#0x1_LibraConfig_InternalReconfigureAbortsIf">InternalReconfigureAbortsIf</a> && <a href="LibraConfig.md#0x1_LibraConfig_ReconfigureAbortsIf">ReconfigureAbortsIf</a>;
+<b>ensures</b> <a href="LibraConfig.md#0x1_LibraConfig_spec_reconfigure_omitted">spec_reconfigure_omitted</a>() || (<b>old</b>(config).last_reconfiguration_time == now)
+    ==&gt; config == <b>old</b>(config);
+<b>ensures</b> !(<a href="LibraConfig.md#0x1_LibraConfig_spec_reconfigure_omitted">spec_reconfigure_omitted</a>() || (config.last_reconfiguration_time == now))
+    ==&gt; config ==
+        update_field(
+        update_field(<b>old</b>(config),
+            epoch, <b>old</b>(config.epoch) + 1),
+            last_reconfiguration_time, now);
 </code></pre>
 
 
@@ -711,35 +778,38 @@ These conditions are unlikely to happen in reality, and excluding them avoids fo
 <a name="0x1_LibraConfig_InternalReconfigureAbortsIf"></a>
 
 
-<a name="0x1_LibraConfig_config$15"></a>
+<a name="0x1_LibraConfig_config$16"></a>
 
 
 <pre><code><b>schema</b> <a href="LibraConfig.md#0x1_LibraConfig_InternalReconfigureAbortsIf">InternalReconfigureAbortsIf</a> {
     <b>let</b> config = <b>global</b>&lt;<a href="LibraConfig.md#0x1_LibraConfig_Configuration">Configuration</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>());
-    <a name="0x1_LibraConfig_current_time$16"></a>
+    <a name="0x1_LibraConfig_current_time$17"></a>
     <b>let</b> current_time = <a href="LibraTimestamp.md#0x1_LibraTimestamp_spec_now_microseconds">LibraTimestamp::spec_now_microseconds</a>();
-    <b>aborts_if</b> [concrete] current_time &lt;= config.last_reconfiguration_time <b>with</b> <a href="Errors.md#0x1_Errors_INVALID_STATE">Errors::INVALID_STATE</a>;
-    <b>aborts_if</b> [concrete] config.epoch == <a href="LibraConfig.md#0x1_LibraConfig_MAX_U64">MAX_U64</a> <b>with</b> EXECUTION_FAILURE;
+    <b>aborts_if</b> [concrete] current_time &lt; config.last_reconfiguration_time <b>with</b> <a href="Errors.md#0x1_Errors_INVALID_STATE">Errors::INVALID_STATE</a>;
+    <b>aborts_if</b> [concrete] config.epoch == <a href="LibraConfig.md#0x1_LibraConfig_MAX_U64">MAX_U64</a>
+        && current_time != config.last_reconfiguration_time <b>with</b> EXECUTION_FAILURE;
 }
 </code></pre>
 
 
+This schema is to be used by callers of <code>reconfigure</code>
 
 
 <a name="0x1_LibraConfig_ReconfigureAbortsIf"></a>
 
 
-<a name="0x1_LibraConfig_config$13"></a>
+<a name="0x1_LibraConfig_config$14"></a>
 
 
 <pre><code><b>schema</b> <a href="LibraConfig.md#0x1_LibraConfig_ReconfigureAbortsIf">ReconfigureAbortsIf</a> {
     <b>let</b> config = <b>global</b>&lt;<a href="LibraConfig.md#0x1_LibraConfig_Configuration">Configuration</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>());
-    <a name="0x1_LibraConfig_current_time$14"></a>
+    <a name="0x1_LibraConfig_current_time$15"></a>
     <b>let</b> current_time = <a href="LibraTimestamp.md#0x1_LibraTimestamp_spec_now_microseconds">LibraTimestamp::spec_now_microseconds</a>();
     <b>aborts_if</b> <a href="LibraTimestamp.md#0x1_LibraTimestamp_is_operating">LibraTimestamp::is_operating</a>()
         && <a href="LibraTimestamp.md#0x1_LibraTimestamp_spec_now_microseconds">LibraTimestamp::spec_now_microseconds</a>() &gt; 0
         && config.epoch &lt; <a href="LibraConfig.md#0x1_LibraConfig_MAX_U64">MAX_U64</a>
-        && current_time == config.last_reconfiguration_time <b>with</b> <a href="Errors.md#0x1_Errors_INVALID_STATE">Errors::INVALID_STATE</a>;
+        && current_time &lt; config.last_reconfiguration_time
+            <b>with</b> <a href="Errors.md#0x1_Errors_INVALID_STATE">Errors::INVALID_STATE</a>;
 }
 </code></pre>
 
@@ -751,6 +821,8 @@ These conditions are unlikely to happen in reality, and excluding them avoids fo
 
 ## Function `emit_genesis_reconfiguration_event`
 
+Emit a <code><a href="LibraConfig.md#0x1_LibraConfig_NewEpochEvent">NewEpochEvent</a></code> event. This function will be invoked by genesis directly to generate the very first
+reconfiguration event.
 
 
 <pre><code><b>fun</b> <a href="LibraConfig.md#0x1_LibraConfig_emit_genesis_reconfiguration_event">emit_genesis_reconfiguration_event</a>()
@@ -781,7 +853,7 @@ These conditions are unlikely to happen in reality, and excluding them avoids fo
 
 </details>
 
-<a name="@Module_Specification_0"></a>
+<a name="@Module_Specification_1"></a>
 
 ## Module Specification
 
@@ -791,10 +863,61 @@ These conditions are unlikely to happen in reality, and excluding them avoids fo
 
 
 <pre><code><b>define</b> <a href="LibraConfig.md#0x1_LibraConfig_spec_reconfigure_omitted">spec_reconfigure_omitted</a>(): bool {
-<a href="LibraTimestamp.md#0x1_LibraTimestamp_is_genesis">LibraTimestamp::is_genesis</a>() || <a href="LibraTimestamp.md#0x1_LibraTimestamp_spec_now_microseconds">LibraTimestamp::spec_now_microseconds</a>() == 0
+  <a href="LibraTimestamp.md#0x1_LibraTimestamp_is_genesis">LibraTimestamp::is_genesis</a>() || <a href="LibraTimestamp.md#0x1_LibraTimestamp_spec_now_microseconds">LibraTimestamp::spec_now_microseconds</a>() == 0
 }
 </code></pre>
 
+
+
+
+<a name="@Initialization_2"></a>
+
+### Initialization
+
+
+After genesis, the <code><a href="LibraConfig.md#0x1_LibraConfig_Configuration">Configuration</a></code> is published.
+
+
+<pre><code><b>invariant</b> [<b>global</b>] <a href="LibraTimestamp.md#0x1_LibraTimestamp_is_operating">LibraTimestamp::is_operating</a>() ==&gt; <a href="LibraConfig.md#0x1_LibraConfig_spec_has_config">spec_has_config</a>();
+</code></pre>
+
+
+
+<a name="@Invariants_3"></a>
+
+### Invariants
+
+
+Configurations are only stored at the libra root address.
+
+
+<pre><code><b>invariant</b> [<b>global</b>]
+    <b>forall</b> config_address: address, config_type: type <b>where</b> <b>exists</b>&lt;<a href="LibraConfig.md#0x1_LibraConfig">LibraConfig</a>&lt;config_type&gt;&gt;(config_address):
+        config_address == <a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>();
+</code></pre>
+
+
+After genesis, no new configurations are added.
+
+
+<pre><code><b>invariant</b> <b>update</b> [<b>global</b>]
+    <a href="LibraTimestamp.md#0x1_LibraTimestamp_is_operating">LibraTimestamp::is_operating</a>() ==&gt;
+        (<b>forall</b> config_type: type <b>where</b> <a href="LibraConfig.md#0x1_LibraConfig_spec_is_published">spec_is_published</a>&lt;config_type&gt;(): <b>old</b>(<a href="LibraConfig.md#0x1_LibraConfig_spec_is_published">spec_is_published</a>&lt;config_type&gt;()));
+</code></pre>
+
+
+Published configurations are persistent.
+
+
+<pre><code><b>invariant</b> <b>update</b> [<b>global</b>]
+    (<b>forall</b> config_type: type <b>where</b> <b>old</b>(<a href="LibraConfig.md#0x1_LibraConfig_spec_is_published">spec_is_published</a>&lt;config_type&gt;()): <a href="LibraConfig.md#0x1_LibraConfig_spec_is_published">spec_is_published</a>&lt;config_type&gt;());
+</code></pre>
+
+
+
+<a name="@Helper_Functions_4"></a>
+
+### Helper Functions
 
 
 
@@ -815,28 +938,7 @@ These conditions are unlikely to happen in reality, and excluding them avoids fo
 </code></pre>
 
 
-After genesis, the <code><a href="LibraConfig.md#0x1_LibraConfig_Configuration">Configuration</a></code> is published.
-
-
-<pre><code><b>invariant</b> [<b>global</b>] <a href="LibraTimestamp.md#0x1_LibraTimestamp_is_operating">LibraTimestamp::is_operating</a>() ==&gt; <a href="LibraConfig.md#0x1_LibraConfig_spec_has_config">spec_has_config</a>();
-</code></pre>
-
-
-Configurations are only stored at the libra root address.
-
-
-<pre><code><b>invariant</b> [<b>global</b>]
-    <b>forall</b> config_address: address, config_type: type <b>where</b> <b>exists</b>&lt;<a href="LibraConfig.md#0x1_LibraConfig">LibraConfig</a>&lt;config_type&gt;&gt;(config_address):
-        config_address == <a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>();
-</code></pre>
-
-
-After genesis, no new configurations are added.
-
-
-<pre><code><b>invariant</b> <b>update</b> [<b>global</b>]
-    <a href="LibraTimestamp.md#0x1_LibraTimestamp_is_operating">LibraTimestamp::is_operating</a>() ==&gt;
-        (<b>forall</b> config_type: type <b>where</b> <a href="LibraConfig.md#0x1_LibraConfig_spec_is_published">spec_is_published</a>&lt;config_type&gt;(): <b>old</b>(<a href="LibraConfig.md#0x1_LibraConfig_spec_is_published">spec_is_published</a>&lt;config_type&gt;()));
-<b>invariant</b> <b>update</b> [<b>global</b>]
-    (<b>forall</b> config_type: type <b>where</b> <b>old</b>(<a href="LibraConfig.md#0x1_LibraConfig_spec_is_published">spec_is_published</a>&lt;config_type&gt;()): <a href="LibraConfig.md#0x1_LibraConfig_spec_is_published">spec_is_published</a>&lt;config_type&gt;());
-</code></pre>
+[//]: # ("File containing references which can be used from documentation")
+[ACCESS_CONTROL]: https://github.com/libra/lip/blob/master/lips/lip-2.md
+[ROLE]: https://github.com/libra/lip/blob/master/lips/lip-2.md#roles
+[PERMISSION]: https://github.com/libra/lip/blob/master/lips/lip-2.md#permissions

@@ -12,7 +12,6 @@ use crate::{
     },
     counters,
     logging::{LogEntry, LogSchema, TxnsLog},
-    OP_COUNTERS,
 };
 use libra_config::config::NodeConfig;
 use libra_logger::prelude::*;
@@ -33,7 +32,6 @@ pub struct Mempool {
     transactions: TransactionStore,
 
     sequence_number_cache: TtlCache<AccountAddress, u64>,
-    // temporary DS. TODO: eventually retire it
     // for each transaction, entry with timestamp is added when transaction enters mempool
     // used to measure e2e latency of transaction in system, as well as time it takes to pick it up
     // by consensus
@@ -108,7 +106,7 @@ impl Mempool {
         &mut self,
         txn: SignedTransaction,
         gas_amount: u64,
-        rankin_score: u64,
+        ranking_score: u64,
         db_sequence_number: u64,
         timeline_state: TimelineState,
         governance_role: GovernanceRole,
@@ -134,7 +132,8 @@ impl Mempool {
             ));
         }
 
-        let expiration_time = libra_time::duration_since_epoch() + self.system_transaction_timeout;
+        let expiration_time =
+            libra_infallible::duration_since_epoch() + self.system_transaction_timeout;
         if timeline_state != TimelineState::NonQualified {
             self.metrics_cache
                 .insert((txn.sender(), txn.sequence_number()), SystemTime::now());
@@ -144,14 +143,12 @@ impl Mempool {
             txn,
             expiration_time,
             gas_amount,
-            rankin_score,
+            ranking_score,
             timeline_state,
             governance_role,
         );
 
-        let status = self.transactions.insert(txn_info, sequence_number);
-        OP_COUNTERS.inc(&format!("insert.{:?}", status));
-        status
+        self.transactions.insert(txn_info, sequence_number)
     }
 
     /// Fetches next block of transactions for consensus
@@ -260,17 +257,17 @@ impl Mempool {
         &mut self,
         timeline_id: u64,
         count: usize,
-    ) -> (Vec<(u64, SignedTransaction)>, u64) {
+    ) -> (Vec<SignedTransaction>, u64) {
         self.transactions.read_timeline(timeline_id, count)
     }
 
-    /// Read transactions as (timeline_id, transaction) with timeline IDs in `timeline_ids`
-    /// Note for some requested timeline IDs, the corresponding transaction may not be in the timeline
-    pub(crate) fn filter_read_timeline(
-        &mut self,
-        timeline_ids: Vec<u64>,
-    ) -> Vec<(u64, SignedTransaction)> {
-        self.transactions.filter_read_timeline(timeline_ids)
+    /// Read transactions from timeline from `start_id` (exclusive) to `end_id` (inclusive)
+    pub(crate) fn timeline_range(&mut self, start_id: u64, end_id: u64) -> Vec<SignedTransaction> {
+        self.transactions.timeline_range(start_id, end_id)
+    }
+
+    pub fn gen_snapshot(&self) -> TxnsLog {
+        self.transactions.gen_snapshot(&self.metrics_cache)
     }
 
     #[cfg(test)]

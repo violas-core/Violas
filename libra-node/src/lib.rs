@@ -42,6 +42,7 @@ use tokio::runtime::{Builder, Runtime};
 
 const AC_SMP_CHANNEL_BUFFER_SIZE: usize = 1_024;
 const INTRA_NODE_CHANNEL_BUFFER_SIZE: usize = 1;
+const MEMPOOL_NETWORK_CHANNEL_BUFFER_SIZE: usize = 1_024;
 
 pub struct LibraHandle {
     _rpc: Runtime,
@@ -84,7 +85,7 @@ pub fn start(config: &NodeConfig, log_file: Option<PathBuf>) {
     let logger = Some(logger.build());
 
     // Let's now log some important information, since the logger is set up
-    info!(config = config, "Loaded config");
+    info!(config = config, "Loaded LibraNode config");
 
     if config.metrics.enabled {
         for network in &config.full_node_networks {
@@ -311,11 +312,9 @@ pub fn setup_environment(node_config: &NodeConfig, logger: Option<Arc<Logger>>) 
         ));
 
         // Create the endpoints to connect the Network to mempool.
-        let (mempool_sender, mempool_events) =
-            network_builder.add_protocol_handler(libra_mempool::network::network_endpoint_config(
-                // TODO:  Make this configuration option more clear.
-                node_config.mempool.max_broadcasts_per_peer,
-            ));
+        let (mempool_sender, mempool_events) = network_builder.add_protocol_handler(
+            libra_mempool::network::network_endpoint_config(MEMPOOL_NETWORK_CHANNEL_BUFFER_SIZE),
+        );
         mempool_network_handles.push((
             NodeNetworkId::new(network_id, idx),
             mempool_sender,
@@ -347,9 +346,14 @@ pub fn setup_environment(node_config: &NodeConfig, logger: Option<Arc<Logger>>) 
 
     // Build the configured networks.
     for network_builder in &mut network_builders {
-        debug!("Creating runtime for {}", network_builder.network_context());
+        let network_context = network_builder.network_context();
+        debug!("Creating runtime for {}", network_context);
         let runtime = Builder::new()
-            .thread_name("network-")
+            .thread_name(format!(
+                "network-{}-{}",
+                network_context.role(),
+                network_context.network_id()
+            ))
             .threaded_scheduler()
             .enable_all()
             .build()

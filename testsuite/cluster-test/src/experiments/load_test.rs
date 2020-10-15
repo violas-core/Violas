@@ -196,7 +196,7 @@ impl StubbedNode {
             ),
         ));
         let network_runtime = Builder::new()
-            .thread_name("stubbed-node-network-")
+            .thread_name("stubbed-node-network")
             .threaded_scheduler()
             .enable_all()
             .build()
@@ -247,7 +247,7 @@ async fn mempool_load_test(
     mut sender: MempoolNetworkSender,
     mut events: MempoolNetworkEvents,
 ) -> Result<MempoolResult> {
-    let new_peer_event = events.select_next_some().await?;
+    let new_peer_event = events.select_next_some().await;
     let vfn = if let Event::NewPeer(peer_id, _) = new_peer_event {
         peer_id
     } else {
@@ -259,7 +259,7 @@ async fn mempool_load_test(
     let task_start = Instant::now();
     while Instant::now().duration_since(task_start) < duration {
         let msg = libra_mempool::network::MempoolSyncMsg::BroadcastTransactionsRequest {
-            request_id: "0_100".to_string(),
+            request_id: lcs::to_bytes("request_id")?,
             transactions: vec![], // TODO submit actual txns
         };
         // TODO log stats for bandwidth sent to remote peer to MempoolResult
@@ -280,7 +280,7 @@ async fn state_sync_load_test(
     mut sender: StateSynchronizerSender,
     mut events: StateSynchronizerEvents,
 ) -> Result<StateSyncResult> {
-    let new_peer_event = events.select_next_some().await?;
+    let new_peer_event = events.select_next_some().await;
     let vfn = if let Event::NewPeer(peer_id, _) = new_peer_event {
         peer_id
     } else {
@@ -308,8 +308,8 @@ async fn state_sync_load_test(
         sender.send_to(vfn, msg)?;
 
         // await response from remote peer
-        let response = events.select_next_some().await?;
-        if let Event::Message((_remote_peer, payload)) = response {
+        let response = events.select_next_some().await;
+        if let Event::Message(_remote_peer, payload) = response {
             if let state_synchronizer::network::StateSynchronizerMsg::GetChunkResponse(
                 chunk_response,
             ) = payload

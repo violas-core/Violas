@@ -3,7 +3,10 @@
 
 use crate::{
     backup_types::epoch_ending::manifest::EpochEndingBackup,
-    metrics::restore::{EPOCH_ENDING_EPOCH, EPOCH_ENDING_VERSION},
+    metrics::{
+        restore::{EPOCH_ENDING_EPOCH, EPOCH_ENDING_VERSION},
+        verify::{VERIFY_EPOCH_ENDING_EPOCH, VERIFY_EPOCH_ENDING_VERSION},
+    },
     storage::{BackupStorage, FileHandle},
     utils::{
         read_record_bytes::ReadRecordBytes, storage_ext::BackupStorageExt, GlobalRestoreOptions,
@@ -150,24 +153,17 @@ impl EpochEndingRestoreController {
 
             // write to db
             if !lis.is_empty() {
+                let last_li = lis.last().expect("Verified not empty.").ledger_info();
                 match self.run_mode.as_ref() {
                     RestoreRunMode::Restore { restore_handler } => {
                         restore_handler.save_ledger_infos(&lis)?;
-                        EPOCH_ENDING_EPOCH.set(
-                            lis.last()
-                                .expect("Verified not empty.")
-                                .ledger_info()
-                                .epoch() as i64,
-                        );
-                        EPOCH_ENDING_VERSION.set(
-                            lis.last()
-                                .expect("Verified not empty.")
-                                .ledger_info()
-                                .version() as i64,
-                        );
+
+                        EPOCH_ENDING_EPOCH.set(last_li.epoch() as i64);
+                        EPOCH_ENDING_VERSION.set(last_li.version() as i64);
                     }
                     RestoreRunMode::Verify => {
-                        // add counters
+                        VERIFY_EPOCH_ENDING_EPOCH.set(last_li.epoch() as i64);
+                        VERIFY_EPOCH_ENDING_VERSION.set(last_li.version() as i64);
                     }
                 };
                 output_lis.extend(lis.into_iter().map(|x| x.ledger_info().clone()));
@@ -206,7 +202,7 @@ impl EpochHistory {
         ensure!(!self.epoch_endings.is_empty(), "Empty epoch history.",);
         ensure!(
             epoch <= self.epoch_endings.len() as u64,
-            "History until epoch {} can't varify epoch {}",
+            "History until epoch {} can't verify epoch {}",
             self.epoch_endings.len(),
             epoch,
         );
@@ -247,9 +243,9 @@ impl EpochHistoryRestoreController {
     pub async fn run(self) -> Result<EpochHistory> {
         let name = self.name();
         info!(
-            "{} started. Trying epoch endings for epoch 0 till {} (inclusive)",
+            "{} started. Trying epoch endings starting from epoch 0, {} in total.",
             name,
-            self.manifest_handles.len() - 1,
+            self.manifest_handles.len(),
         );
         let res = self
             .run_impl()
@@ -266,6 +262,12 @@ impl EpochHistoryRestoreController {
     }
 
     async fn run_impl(self) -> Result<EpochHistory> {
+        if self.manifest_handles.is_empty() {
+            return Ok(EpochHistory {
+                epoch_endings: Vec::new(),
+            });
+        }
+
         let mut next_epoch = 0u64;
         let mut previous_li = None;
         let mut epoch_endings = Vec::new();
@@ -305,11 +307,6 @@ impl EpochHistoryRestoreController {
             previous_li = Some(lis.last().expect("Verified not empty.").clone());
             epoch_endings.extend(lis);
         }
-        ensure!(
-            !epoch_endings.is_empty(),
-            "No epochs restored from {} manifests",
-            self.manifest_handles.len(),
-        );
 
         Ok(EpochHistory { epoch_endings })
     }

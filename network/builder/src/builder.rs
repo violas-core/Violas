@@ -11,10 +11,15 @@
 //! long as the latter is in its trusted peers set.
 use channel::{self, message_queues::QueueStyle};
 use libra_config::{
-    config::{DiscoveryMethod, GossipConfig, NetworkConfig, RoleType, HANDSHAKE_VERSION},
+    config::{
+        DiscoveryMethod, NetworkConfig, RoleType, CONNECTION_BACKOFF_BASE,
+        CONNECTIVITY_CHECK_INTERVAL_MS, MAX_CONCURRENT_NETWORK_NOTIFS, MAX_CONCURRENT_NETWORK_REQS,
+        MAX_CONNECTION_DELAY_MS, MAX_FRAME_SIZE, MAX_FULLNODE_CONNECTIONS, NETWORK_CHANNEL_SIZE,
+    },
     network_id::NetworkContext,
 };
 use libra_crypto::x25519;
+use libra_infallible::RwLock;
 use libra_logger::prelude::*;
 use libra_metrics::IntCounterVec;
 use libra_network_address::NetworkAddress;
@@ -22,14 +27,12 @@ use libra_network_address_encryption::Encryptor;
 use libra_types::{chain_id::ChainId, PeerId};
 use network::{
     connectivity_manager::{builder::ConnectivityManagerBuilder, ConnectivityRequest},
-    constants,
     logging::NetworkSchema,
     peer_manager::{
         builder::{AuthenticationMode, PeerManagerBuilder},
         conn_notifs_channel, ConnectionRequestSender,
     },
     protocols::{
-        gossip_discovery::{self, builder::GossipDiscoveryBuilder},
         health_checker::{self, builder::HealthCheckerBuilder},
         network::{NewNetworkEvents, NewNetworkSender},
     },
@@ -41,7 +44,7 @@ use network_simple_onchain_discovery::{
 use std::{
     clone::Clone,
     collections::{HashMap, HashSet},
-    sync::{Arc, RwLock},
+    sync::Arc,
 };
 use subscription_service::ReconfigSubscription;
 use tokio::runtime::Handle;
@@ -65,7 +68,6 @@ pub struct NetworkBuilder {
 
     configuration_change_listener_builder: Option<ConfigurationChangeListenerBuilder>,
     connectivity_manager_builder: Option<ConnectivityManagerBuilder>,
-    discovery_builder: Option<GossipDiscoveryBuilder>,
     health_checker_builder: Option<HealthCheckerBuilder>,
     peer_manager_builder: PeerManagerBuilder,
 
@@ -83,6 +85,10 @@ impl NetworkBuilder {
         listen_address: NetworkAddress,
         authentication_mode: AuthenticationMode,
         max_frame_size: usize,
+        enable_proxy_protocol: bool,
+        network_channel_size: usize,
+        max_concurrent_network_reqs: usize,
+        max_concurrent_network_notifs: usize,
     ) -> Self {
         // A network cannot exist without a PeerManager
         // TODO:  construct this in create and pass it to new() as a parameter. The complication is manual construction of NetworkBuilder in various tests.
@@ -92,13 +98,11 @@ impl NetworkBuilder {
             listen_address,
             trusted_peers,
             authentication_mode,
-            // TODO: Encode this value in NetworkConfig
-            constants::NETWORK_CHANNEL_SIZE,
-            // TODO: Encode this value in NetworkConfig
-            constants::MAX_CONCURRENT_NETWORK_REQS,
-            // TODO: Encode this value in NetworkConfig
-            constants::MAX_CONCURRENT_NETWORK_NOTIFS,
+            network_channel_size,
+            max_concurrent_network_reqs,
+            max_concurrent_network_notifs,
             max_frame_size,
+            enable_proxy_protocol,
         );
 
         NetworkBuilder {
@@ -107,18 +111,52 @@ impl NetworkBuilder {
             network_context,
             configuration_change_listener_builder: None,
             connectivity_manager_builder: None,
-            discovery_builder: None,
             health_checker_builder: None,
             peer_manager_builder,
             reconfig_subscriptions: vec![],
         }
     }
 
+    pub fn new_for_test(
+        chain_id: ChainId,
+        seed_addrs: HashMap<PeerId, Vec<NetworkAddress>>,
+        seed_pubkeys: HashMap<PeerId, HashSet<x25519::PublicKey>>,
+        trusted_peers: Arc<RwLock<HashMap<PeerId, HashSet<x25519::PublicKey>>>>,
+        network_context: Arc<NetworkContext>,
+        listen_address: NetworkAddress,
+        authentication_mode: AuthenticationMode,
+    ) -> NetworkBuilder {
+        let mut builder = NetworkBuilder::new(
+            chain_id,
+            trusted_peers.clone(),
+            network_context,
+            listen_address,
+            authentication_mode,
+            MAX_FRAME_SIZE,
+            false, /* Disable proxy protocol */
+            NETWORK_CHANNEL_SIZE,
+            MAX_CONCURRENT_NETWORK_REQS,
+            MAX_CONCURRENT_NETWORK_NOTIFS,
+        );
+
+        builder.add_connectivity_manager(
+            seed_addrs,
+            seed_pubkeys,
+            trusted_peers,
+            MAX_FULLNODE_CONNECTIONS,
+            CONNECTION_BACKOFF_BASE,
+            MAX_CONNECTION_DELAY_MS,
+            CONNECTIVITY_CHECK_INTERVAL_MS,
+            NETWORK_CHANNEL_SIZE,
+        );
+
+        builder
+    }
+
     /// Create a new NetworkBuilder based on the provided configuration.
     pub fn create(chain_id: ChainId, role: RoleType, config: &NetworkConfig) -> NetworkBuilder {
         let peer_id = config.peer_id();
         let identity_key = config.identity_key();
-        let pubkey = libra_crypto::PrivateKey::public_key(&identity_key);
 
         let authentication_mode = if config.mutual_authentication {
             AuthenticationMode::Mutual(identity_key)
@@ -141,15 +179,16 @@ impl NetworkBuilder {
             config.listen_address.clone(),
             authentication_mode,
             config.max_frame_size,
+            config.enable_proxy_protocol,
+            config.network_channel_size,
+            config.max_concurrent_network_reqs,
+            config.max_concurrent_network_notifs,
         );
 
         network_builder.add_connection_monitoring(
-            // TODO: Encode this value in NetworkConfig
-            constants::PING_INTERVAL_MS,
-            // TODO: Encode this value in NetworkConfig
-            constants::PING_TIMEOUT_MS,
-            // TODO: Encode this value in NetworkConfig
-            constants::PING_FAILURES_TOLERATED,
+            config.ping_interval_ms,
+            config.ping_timeout_ms,
+            config.ping_failures_tolerated,
         );
 
         // Sanity check seed addresses.
@@ -175,25 +214,17 @@ impl NetworkBuilder {
         {
             network_builder.add_connectivity_manager(
                 config.seed_addrs.clone(),
-                config.seed_pubkeys.clone(), // TODO: this should be encoded in network config
+                config.seed_pubkeys.clone(),
                 trusted_peers,
-                constants::MAX_FULLNODE_CONNECTIONS,
-                // TODO: this should be encoded in network_config
-                constants::MAX_CONNECTION_DELAY_MS,
+                config.max_fullnode_connections,
+                config.connection_backoff_base,
+                config.max_connection_delay_ms,
                 config.connectivity_check_interval_ms,
-                constants::NETWORK_CHANNEL_SIZE,
+                config.network_channel_size,
             );
         }
 
         match &config.discovery_method {
-            DiscoveryMethod::Gossip(gossip_config) => {
-                network_builder.add_gossip_discovery(gossip_config.clone(), pubkey);
-                // HACK: gossip relies on on-chain discovery for the eligible peers update.
-                // TODO:  it should be safe to enable the configuraction_change_listener always.
-                if role == RoleType::Validator {
-                    network_builder.add_configuration_change_listener(config.encryptor());
-                }
-            }
             DiscoveryMethod::Onchain => {
                 network_builder.add_configuration_change_listener(config.encryptor());
             }
@@ -210,7 +241,6 @@ impl NetworkBuilder {
         self.executor = Some(executor);
         self.build_peer_manager()
             .build_configuration_change_listener()
-            .build_gossip_discovery()
             .build_connectivity_manager()
             .build_connection_monitoring()
     }
@@ -222,7 +252,6 @@ impl NetworkBuilder {
         self.start_peer_manager()
             .start_connectivity_manager()
             .start_connection_monitoring()
-            .start_gossip_discovery()
             .start_configuration_change_listener()
     }
 
@@ -276,6 +305,7 @@ impl NetworkBuilder {
         mut seed_pubkeys: HashMap<PeerId, HashSet<x25519::PublicKey>>,
         trusted_peers: Arc<RwLock<HashMap<PeerId, HashSet<x25519::PublicKey>>>>,
         max_fullnode_connections: usize,
+        connection_backoff_base: u64,
         max_connection_delay_ms: u64,
         connectivity_check_interval_ms: u64,
         channel_size: usize,
@@ -305,8 +335,7 @@ impl NetworkBuilder {
             seed_addrs,
             seed_pubkeys,
             connectivity_check_interval_ms,
-            // TODO:  move this into a config
-            2, // Legacy hardcoded value,
+            connection_backoff_base,
             max_connection_delay_ms,
             channel_size,
             ConnectionRequestSender::new(self.peer_manager_builder.connection_reqs_tx()),
@@ -368,77 +397,8 @@ impl NetworkBuilder {
         self
     }
 
-    /// Add the (gossip) [`Discovery`] protocol to the network.
-    ///
-    /// (gossip) [`Discovery`] discovers other eligible peers' network addresses
-    /// by exchanging the full set of known peer network addresses with connected
-    /// peers as a network protocol.
-    ///
-    /// This is for testing purposes only and should not be used in production networks.
-    // TODO:  remove the pub qualifier
-    pub fn add_gossip_discovery(
-        &mut self,
-        gossip_config: GossipConfig,
-        pubkey: x25519::PublicKey,
-    ) -> &mut Self {
-        let conn_mgr_reqs_tx = self
-            .conn_mgr_reqs_tx()
-            .expect("ConnectivityManager not enabled");
-        // Get handles for network events and sender.
-        let (discovery_network_tx, discovery_network_rx) =
-            self.add_protocol_handler(gossip_discovery::network_endpoint_config());
-
-        // TODO(philiphayes): the current setup for gossip discovery doesn't work
-        // when we don't have an `advertised_address` set, since it uses the
-        // `listen_address`, which might not be bound to a port yet. For example,
-        // if our `listen_address` is "/ip6/::1/tcp/0" and `advertised_address` is
-        // `None`, then this will set our `advertised_address` to something like
-        // "/ip6/::1/tcp/0/ln-noise-ik/<pubkey>/ln-handshake/0", which is wrong
-        // since the actual bound port will be something > 0.
-
-        // TODO:  move this logic into DiscoveryBuilder::create
-        let advertised_address = gossip_config
-            .advertised_address
-            .append_prod_protos(pubkey, HANDSHAKE_VERSION);
-
-        let addrs = vec![advertised_address];
-
-        self.discovery_builder = Some(GossipDiscoveryBuilder::create(
-            self.network_context(),
-            addrs,
-            gossip_config.discovery_interval_ms,
-            discovery_network_tx,
-            discovery_network_rx,
-            conn_mgr_reqs_tx,
-        ));
-        self
-    }
-
-    fn build_gossip_discovery(&mut self) -> &mut Self {
-        if let Some(discovery_builder) = self.discovery_builder.as_mut() {
-            discovery_builder.build(self.executor.as_mut().expect("Executor must exist"));
-            debug!(
-                NetworkSchema::new(&self.network_context),
-                "{} Built Gossip Discovery", self.network_context
-            );
-        }
-        self
-    }
-
-    fn start_gossip_discovery(&mut self) -> &mut Self {
-        if let Some(discovery_builder) = self.discovery_builder.as_mut() {
-            discovery_builder.start(self.executor.as_mut().expect("Executor must exist"));
-            debug!(
-                NetworkSchema::new(&self.network_context),
-                "{} Started gossip discovery", self.network_context
-            );
-        }
-        self
-    }
-
     /// Add a HealthChecker to the network.
-    // TODO: remove the pub qualifier
-    pub fn add_connection_monitoring(
+    fn add_connection_monitoring(
         &mut self,
         ping_interval_ms: u64,
         ping_timeout_ms: u64,

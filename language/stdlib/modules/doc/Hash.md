@@ -3,10 +3,18 @@
 
 # Module `0x1::Hash`
 
+Module which defines SHA hashes for byte vectors.
+
+The functions in this module are natively declared both in the Move runtime
+as in the Move prover's prelude.
 
 
--  [Function <code>sha2_256</code>](#0x1_Hash_sha2_256)
--  [Function <code>sha3_256</code>](#0x1_Hash_sha3_256)
+-  [Function `sha2_256`](#0x1_Hash_sha2_256)
+-  [Function `sha3_256`](#0x1_Hash_sha3_256)
+
+
+<pre><code></code></pre>
+
 
 
 <a name="0x1_Hash_sha2_256"></a>
@@ -52,3 +60,9 @@
 
 
 </details>
+
+
+[//]: # ("File containing references which can be used from documentation")
+[ACCESS_CONTROL]: https://github.com/libra/lip/blob/master/lips/lip-2.md
+[ROLE]: https://github.com/libra/lip/blob/master/lips/lip-2.md#roles
+[PERMISSION]: https://github.com/libra/lip/blob/master/lips/lip-2.md#permissions

@@ -3,13 +3,13 @@
 
 use crate::{
     counters,
-    errors::JsonRpcError,
+    errors::{is_internal_error, JsonRpcError},
     methods::{build_registry, JsonRpcRequest, JsonRpcService, RpcRegistry},
     response::JsonRpcResponse,
 };
 use futures::future::join_all;
 use libra_config::config::{NodeConfig, RoleType};
-use libra_logger::{info, Level, Schema};
+use libra_logger::{debug, Level, Schema};
 use libra_mempool::MempoolClientSender;
 use libra_types::{chain_id::ChainId, ledger_info::LedgerInfoWithSignatures};
 use rand::{rngs::OsRng, RngCore};
@@ -18,6 +18,7 @@ use std::{net::SocketAddr, sync::Arc};
 use storage_interface::DbReader;
 use tokio::runtime::{Builder, Runtime};
 use warp::{
+    http::header,
     reject::{self, Reject},
     Filter,
 };
@@ -39,6 +40,7 @@ struct HttpRequestLog<'a> {
     user_agent: Option<&'a str>,
     #[schema(debug)]
     elapsed: std::time::Duration,
+    forwarded: Option<&'a str>,
 }
 
 #[derive(Schema)]
@@ -58,9 +60,9 @@ struct RpcResponseLog<'a> {
 #[macro_export]
 macro_rules! log_response {
     ($trace_id: expr, $resp: expr, $is_batch: expr) => {
-        let mut level = Level::Debug;
+        let mut level = Level::Trace;
         if let Some(ref error) = $resp.error {
-            if is_internal_error(error) {
+            if is_internal_error(&error.code) {
                 level = Level::Error
             }
         }
@@ -114,7 +116,7 @@ pub fn bootstrap(
         .and(warp::any().map(move || Arc::clone(&registry)))
         .and_then(rpc_endpoint)
         .with(warp::log::custom(|info| {
-            info!(HttpRequestLog {
+            debug!(HttpRequestLog {
                 remote_addr: info.remote_addr(),
                 method: info.method().to_string(),
                 path: info.path().to_string(),
@@ -122,8 +124,13 @@ pub fn bootstrap(
                 referer: info.referer(),
                 user_agent: info.user_agent(),
                 elapsed: info.elapsed(),
+                forwarded: info
+                    .request_headers()
+                    .get(header::FORWARDED)
+                    .and_then(|v| v.to_str().ok())
             })
-        }));
+        }))
+        .with(warp::cors().allow_any_origin().allow_methods(vec!["POST"]));
 
     // For now we still allow user to use "/", but user should start to move to "/v1" soon
     let route_root = warp::path::end().and(base_route.clone());
@@ -181,7 +188,8 @@ pub(crate) async fn rpc_endpoint(
         Value::Array(_) => LABEL_BATCH,
         _ => LABEL_SINGLE,
     };
-    let timer = counters::REQUEST_LATENCY
+    counters::RPC_REQUESTS.with_label_values(&[label]).inc();
+    let timer = counters::RPC_REQUEST_LATENCY
         .with_label_values(&[label])
         .start_timer();
     let ret = rpc_endpoint_without_metrics(data, service, registry).await;
@@ -201,7 +209,7 @@ async fn rpc_endpoint_without_metrics(
 
     let mut rng = OsRng;
     let trace_id = rng.next_u64();
-    info!(RpcRequestLog {
+    debug!(RpcRequestLog {
         trace_id,
         request: data.clone(),
     });
@@ -232,7 +240,7 @@ async fn rpc_endpoint_without_metrics(
                     ledger_info.ledger_info().version(),
                     ledger_info.ledger_info().timestamp_usecs(),
                 );
-                set_response_error(&mut resp, err);
+                set_response_error(&mut resp, err, LABEL_BATCH, "unknown");
                 log_response!(trace_id, &resp, true);
 
                 warp::reply::json(&resp)
@@ -272,7 +280,12 @@ async fn rpc_request_handler(
             request = data;
         }
         _ => {
-            set_response_error(&mut response, JsonRpcError::invalid_format());
+            set_response_error(
+                &mut response,
+                JsonRpcError::invalid_format(),
+                request_type_label,
+                "unknown",
+            );
             return response;
         }
     }
@@ -283,14 +296,14 @@ async fn rpc_request_handler(
             response.id = Some(request_id);
         }
         Err(err) => {
-            set_response_error(&mut response, err);
+            set_response_error(&mut response, err, request_type_label, "unknown");
             return response;
         }
     };
 
     // verify protocol version
     if let Err(err) = verify_protocol(&request) {
-        set_response_error(&mut response, err);
+        set_response_error(&mut response, err, request_type_label, "unknown");
         return response;
     }
 
@@ -301,7 +314,12 @@ async fn rpc_request_handler(
             params = parameters.to_vec();
         }
         _ => {
-            set_response_error(&mut response, JsonRpcError::invalid_params(None));
+            set_response_error(
+                &mut response,
+                JsonRpcError::invalid_params(None),
+                request_type_label,
+                "unknown",
+            );
             return response;
         }
     }
@@ -322,7 +340,7 @@ async fn rpc_request_handler(
                     Ok(result) => {
                         response.result = Some(result);
                         counters::REQUESTS
-                            .with_label_values(&[name, LABEL_SUCCESS])
+                            .with_label_values(&[request_type_label, name, LABEL_SUCCESS])
                             .inc();
                     }
                     Err(err) => {
@@ -332,17 +350,29 @@ async fn rpc_request_handler(
                             err.downcast_ref::<JsonRpcError>()
                                 .cloned()
                                 .unwrap_or_else(|| JsonRpcError::internal_error(err.to_string())),
+                            request_type_label,
+                            &name,
                         );
                         counters::REQUESTS
-                            .with_label_values(&[name, LABEL_FAIL])
+                            .with_label_values(&[request_type_label, name, LABEL_FAIL])
                             .inc();
                     }
                 }
                 timer.stop_and_record();
             }
-            None => set_response_error(&mut response, JsonRpcError::method_not_found()),
+            None => set_response_error(
+                &mut response,
+                JsonRpcError::method_not_found(),
+                request_type_label,
+                "not_found",
+            ),
         },
-        _ => set_response_error(&mut response, JsonRpcError::method_not_found()),
+        _ => set_response_error(
+            &mut response,
+            JsonRpcError::method_not_found(),
+            request_type_label,
+            "not_found",
+        ),
     }
 
     response
@@ -350,27 +380,31 @@ async fn rpc_request_handler(
 
 // Sets the JSON RPC error value for a given response.
 // If a counter label is supplied, also increments the invalid request counter using the label,
-fn set_response_error(response: &mut JsonRpcResponse, error: JsonRpcError) {
+fn set_response_error(
+    response: &mut JsonRpcResponse,
+    error: JsonRpcError,
+    request_type: &str,
+    method: &str,
+) {
     let err_code = error.code;
-    if is_internal_error(&error) {
-        counters::INTERNAL_ERRORS.inc();
+    if is_internal_error(&error.code) {
+        counters::INTERNAL_ERRORS
+            .with_label_values(&[request_type, method, &err_code.to_string()])
+            .inc();
     } else {
         let label = match err_code {
             -32600 => "invalid_request",
             -32601 => "method_not_found",
             -32602 => "invalid_params",
             -32604 => "invalid_format",
-            -32700 => "parse_error",
             _ => "unexpected_code",
         };
-        counters::INVALID_REQUESTS.with_label_values(&[label]).inc();
+        counters::INVALID_REQUESTS
+            .with_label_values(&[request_type, method, label])
+            .inc();
     }
 
     response.error = Some(error);
-}
-
-fn is_internal_error(e: &JsonRpcError) -> bool {
-    e.code <= -32000 && e.code >= -32099
 }
 
 fn parse_request_id(request: &Map<String, Value>) -> Result<Value, JsonRpcError> {

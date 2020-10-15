@@ -5,6 +5,7 @@ use crate::{
     data_cache::{RemoteCache, TransactionDataCache},
     interpreter::Interpreter,
     loader::Loader,
+    logging::LogContext,
     session::Session,
 };
 use libra_logger::prelude::*;
@@ -42,19 +43,21 @@ impl VMRuntime {
         }
     }
 
+    // See Session::publish_module for what contracts to follow.
     pub(crate) fn publish_module(
         &self,
         module: Vec<u8>,
         sender: AccountAddress,
         data_store: &mut impl DataStore,
         _cost_strategy: &mut CostStrategy,
+        log_context: &impl LogContext,
     ) -> VMResult<()> {
         // deserialize the module. Perform bounds check. After this indexes can be
         // used with the `[]` operator
         let compiled_module = match CompiledModule::deserialize(&module) {
             Ok(module) => module,
             Err(err) => {
-                warn!("[VM] module deserialization failed {:?}", err);
+                warn!(*log_context, "[VM] module deserialization failed {:?}", err);
                 return Err(err.finish(Location::Undefined));
             }
         };
@@ -82,12 +85,16 @@ impl VMRuntime {
         };
 
         // perform bytecode and loading verification
-        self.loader
-            .verify_module_verify_no_missing_dependencies(&compiled_module, data_store)?;
+        self.loader.verify_module_verify_no_missing_dependencies(
+            &compiled_module,
+            data_store,
+            log_context,
+        )?;
 
         data_store.publish_module(&module_id, module)
     }
 
+    // See Session::execute_script for what contracts to follow.
     pub(crate) fn execute_script(
         &self,
         script: Vec<u8>,
@@ -96,6 +103,7 @@ impl VMRuntime {
         senders: Vec<AccountAddress>,
         data_store: &mut impl DataStore,
         cost_strategy: &mut CostStrategy,
+        log_context: &impl LogContext,
     ) -> VMResult<()> {
         // signer helper closure
         fn is_signer_reference(s: &SignatureToken) -> bool {
@@ -107,7 +115,9 @@ impl VMRuntime {
         }
 
         // load the script, perform verification
-        let (main, type_params) = self.loader.load_script(&script, &ty_args, data_store)?;
+        let (main, type_params) =
+            self.loader
+                .load_script(&script, &ty_args, data_store, log_context)?;
 
         // Build the arguments list for the main and check the arguments are of restricted types.
         // Signers are built up from left-to-right. Either all signer arguments are used, or no
@@ -140,9 +150,11 @@ impl VMRuntime {
             data_store,
             cost_strategy,
             &self.loader,
+            log_context,
         )
     }
 
+    // See Session::execute_function for what contracts to follow.
     pub(crate) fn execute_function(
         &self,
         module: &ModuleId,
@@ -151,12 +163,13 @@ impl VMRuntime {
         args: Vec<Value>,
         data_store: &mut impl DataStore,
         cost_strategy: &mut CostStrategy,
+        log_context: &impl LogContext,
     ) -> VMResult<()> {
         // load the function in the given module, perform verification of the module and
         // its dependencies if the module was not loaded
         let (func, type_params) =
             self.loader
-                .load_function(function_name, module, &ty_args, data_store)?;
+                .load_function(function_name, module, &ty_args, data_store, log_context)?;
 
         // check the arguments provided are of restricted types
         check_args(&args).map_err(|e| e.finish(Location::Module(module.clone())))?;
@@ -169,6 +182,7 @@ impl VMRuntime {
             data_store,
             cost_strategy,
             &self.loader,
+            log_context,
         )
     }
 }

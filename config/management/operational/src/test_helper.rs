@@ -48,10 +48,85 @@ impl OperationalTool {
         command.account_resource()
     }
 
+    fn extract_key(
+        &self,
+        key_name: &str,
+        key_file: &str,
+        backend: &config::SecureBackend,
+        command_name: CommandName,
+        execute: fn(Command) -> Result<(), Error>,
+    ) -> Result<(), Error> {
+        let args = format!(
+            "
+                {command}
+                --key-name {key_name}
+                --key-file {key_file}
+                --validator-backend {backend_args}
+            ",
+            command = command(TOOL_NAME, command_name),
+            key_name = key_name,
+            key_file = key_file,
+            backend_args = backend_args(backend)?,
+        );
+
+        let command = Command::from_iter(args.split_whitespace());
+        execute(command)
+    }
+
+    pub fn extract_public_key(
+        &self,
+        key_name: &str,
+        key_file: &str,
+        backend: &config::SecureBackend,
+    ) -> Result<(), Error> {
+        self.extract_key(
+            key_name,
+            key_file,
+            backend,
+            CommandName::ExtractPublicKey,
+            |cmd| cmd.extract_public_key(),
+        )
+    }
+
+    pub fn extract_private_key(
+        &self,
+        key_name: &str,
+        key_file: &str,
+        backend: &config::SecureBackend,
+    ) -> Result<(), Error> {
+        self.extract_key(
+            key_name,
+            key_file,
+            backend,
+            CommandName::ExtractPrivateKey,
+            |cmd| cmd.extract_private_key(),
+        )
+    }
+
+    pub fn print_account(
+        &self,
+        account_name: &str,
+        backend: &config::SecureBackend,
+    ) -> Result<AccountAddress, Error> {
+        let args = format!(
+            "
+            {command}
+            --account-name {account_name}
+            --validator-backend {backend_args}
+            ",
+            command = command(TOOL_NAME, CommandName::PrintAccount),
+            account_name = account_name,
+            backend_args = backend_args(backend)?,
+        );
+        let command = Command::from_iter(args.split_whitespace());
+        command.print_account()
+    }
+
     pub fn set_validator_config(
         &self,
         validator_address: Option<NetworkAddress>,
         fullnode_address: Option<NetworkAddress>,
+        backend: &config::SecureBackend,
     ) -> Result<TransactionContext, Error> {
         let args = format!(
             "
@@ -60,12 +135,14 @@ impl OperationalTool {
                 {validator_address}
                 --chain-id {chain_id}
                 --json-server {host}
+                --validator-backend {backend_args}
             ",
             command = command(TOOL_NAME, CommandName::SetValidatorConfig),
             host = self.host,
             chain_id = self.chain_id.id(),
             fullnode_address = optional_arg("fullnode-address", fullnode_address),
             validator_address = optional_arg("validator-address", validator_address),
+            backend_args = backend_args(backend)?,
         );
 
         let command = Command::from_iter(args.split_whitespace());
@@ -176,19 +253,19 @@ impl OperationalTool {
 
     pub fn validator_set(
         &self,
-        account_address: AccountAddress,
+        account_address: Option<AccountAddress>,
         backend: &config::SecureBackend,
     ) -> Result<Vec<DecryptedValidatorInfo>, Error> {
         let args = format!(
             "
                 {command}
+                {account_address}
                 --json-server {json_server}
-                --account-address {account_address}
                 --validator-backend {backend_args}
         ",
             command = command(TOOL_NAME, CommandName::ValidatorSet),
             json_server = self.host,
-            account_address = account_address,
+            account_address = optional_arg("account-address", account_address),
             backend_args = backend_args(backend)?,
         );
 

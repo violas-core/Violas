@@ -23,13 +23,23 @@ use std::{
     string::ToString,
 };
 
+// TODO: We could possibly move these constants somewhere else, but since they are defaults for the
+//   configurations of the system, we'll leave it here for now.
 /// Current supported protocol negotiation handshake version.
 ///
 /// See [`perform_handshake`] in `network/src/transport.rs`
-// TODO(philiphayes): ideally these constants live somewhere in network/ ...
-// might need to extract into a separate network_constants crate or something.
 pub const HANDSHAKE_VERSION: u8 = 0;
-pub const MAX_FRAME_SIZE: usize = 8 * 1024 * 1024;
+pub const NETWORK_CHANNEL_SIZE: usize = 1024;
+pub const PING_INTERVAL_MS: u64 = 1000;
+pub const PING_TIMEOUT_MS: u64 = 10_000;
+pub const PING_FAILURES_TOLERATED: u64 = 5;
+pub const CONNECTIVITY_CHECK_INTERVAL_MS: u64 = 5000;
+pub const MAX_CONCURRENT_NETWORK_REQS: usize = 100;
+pub const MAX_CONCURRENT_NETWORK_NOTIFS: usize = 100;
+pub const MAX_CONNECTION_DELAY_MS: u64 = 60_000; /* 1 minute */
+pub const MAX_FULLNODE_CONNECTIONS: usize = 3;
+pub const MAX_FRAME_SIZE: usize = 8 * 1024 * 1024; /* 8 MiB */
+pub const CONNECTION_BACKOFF_BASE: u64 = 2;
 
 pub type SeedPublicKeys = HashMap<PeerId, HashSet<x25519::PublicKey>>;
 pub type SeedAddresses = HashMap<PeerId, Vec<NetworkAddress>>;
@@ -37,8 +47,21 @@ pub type SeedAddresses = HashMap<PeerId, Vec<NetworkAddress>>;
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct NetworkConfig {
+    // Maximum backoff delay for connecting outbound to peers
+    pub max_connection_delay_ms: u64,
+    // Base for outbound connection backoff
+    pub connection_backoff_base: u64,
+    // Rate to check connectivity to connected peers
     pub connectivity_check_interval_ms: u64,
-    // Enable this network to use either gossip discovery or onchain discovery.
+    // Size of all network channels
+    pub network_channel_size: usize,
+    // Maximum number of concurrent network requests
+    pub max_concurrent_network_reqs: usize,
+    // Maximum number of concurrent network notifications
+    pub max_concurrent_network_notifs: usize,
+    // Choose a protocol to discover and dial out to other peers on this network.
+    // `DiscoveryMethod::None` disables discovery and dialing out (unless you have
+    // seed peers configured).
     pub discovery_method: DiscoveryMethod,
     pub identity: Identity,
     // TODO: Add support for multiple listen/advertised addresses in config.
@@ -58,7 +81,18 @@ pub struct NetworkConfig {
     // mutual_authentication network. This config field is intended as a fallback
     // in case some peers don't have well defined addresses.
     pub seed_pubkeys: SeedPublicKeys,
+    // The maximum size of an inbound or outbound request frame
     pub max_frame_size: usize,
+    // Enables proxy protocol on incoming connections to get original source addresses
+    pub enable_proxy_protocol: bool,
+    // Interval to send healthcheck pings to peers
+    pub ping_interval_ms: u64,
+    // Timeout until a healthcheck ping is rejected
+    pub ping_timeout_ms: u64,
+    // Number of failed healthcheck pings until a peer is marked unhealthy
+    pub ping_failures_tolerated: u64,
+    // Maximum number of allows fullnode connections.  Will prevent future outbound connections
+    pub max_fullnode_connections: usize,
 }
 
 impl Default for NetworkConfig {
@@ -70,7 +104,6 @@ impl Default for NetworkConfig {
 impl NetworkConfig {
     pub fn network_with_id(network_id: NetworkId) -> NetworkConfig {
         let mut config = Self {
-            connectivity_check_interval_ms: 5000,
             discovery_method: DiscoveryMethod::None,
             identity: Identity::None,
             listen_address: "/ip4/0.0.0.0/tcp/6180".parse().unwrap(),
@@ -80,6 +113,17 @@ impl NetworkConfig {
             seed_pubkeys: HashMap::default(),
             seed_addrs: HashMap::default(),
             max_frame_size: MAX_FRAME_SIZE,
+            enable_proxy_protocol: false,
+            max_connection_delay_ms: MAX_CONNECTION_DELAY_MS,
+            connectivity_check_interval_ms: CONNECTIVITY_CHECK_INTERVAL_MS,
+            network_channel_size: NETWORK_CHANNEL_SIZE,
+            max_concurrent_network_reqs: MAX_CONCURRENT_NETWORK_REQS,
+            max_concurrent_network_notifs: MAX_CONCURRENT_NETWORK_NOTIFS,
+            connection_backoff_base: CONNECTION_BACKOFF_BASE,
+            ping_interval_ms: PING_INTERVAL_MS,
+            ping_timeout_ms: PING_TIMEOUT_MS,
+            ping_failures_tolerated: PING_FAILURES_TOLERATED,
+            max_fullnode_connections: MAX_FULLNODE_CONNECTIONS,
         };
         config.prepare_identity();
         config
@@ -210,35 +254,8 @@ impl NetworkConfig {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DiscoveryMethod {
-    // default until we can deprecate
-    Gossip(GossipConfig),
     Onchain,
     None,
-}
-
-impl DiscoveryMethod {
-    pub fn gossip(advertised_address: NetworkAddress) -> Self {
-        DiscoveryMethod::Gossip(GossipConfig {
-            advertised_address,
-            discovery_interval_ms: 1000,
-        })
-    }
-
-    pub fn advertised_address(&self) -> NetworkAddress {
-        if let DiscoveryMethod::Gossip(config) = self {
-            config.advertised_address.clone()
-        } else {
-            panic!("Invalid discovery method");
-        }
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct GossipConfig {
-    // The address that this node advertises to other nodes for the discovery protocol.
-    pub advertised_address: NetworkAddress,
-    pub discovery_interval_ms: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]

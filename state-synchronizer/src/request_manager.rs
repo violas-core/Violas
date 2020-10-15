@@ -26,7 +26,7 @@ use std::{
 
 const MAX_SCORE: f64 = 100.0;
 const MIN_SCORE: f64 = 1.0;
-const MIN_UPSTREAM_NETWORK_CT: usize = 1;
+const PRIMARY_NETWORK_PREFERENCE: usize = 0;
 
 #[derive(Default, Debug, Clone)]
 pub struct PeerInfo {
@@ -87,9 +87,8 @@ pub struct RequestManager {
     request_timeout: Duration,
     // duration with the same version before multicasting, i.e. sending the next chunk request to more networks
     multicast_timeout: Duration,
-    // number of networks to try to multicast the same chunk request to
-    // the node will try send chunk requests to one peer per the first `multicast_level` networks
-    // available, in order of preference specified by the upstream config
+    // the maximum preference level of all the networks to try to multicast the same chunk request to,
+    // where network preference is specified by the upstream config
     multicast_level: usize,
     network_senders: HashMap<NodeNetworkId, StateSynchronizerSender>,
 }
@@ -101,6 +100,7 @@ impl RequestManager {
         multicast_timeout: Duration,
         network_senders: HashMap<NodeNetworkId, StateSynchronizerSender>,
     ) -> Self {
+        counters::MULTICAST_LEVEL.set(PRIMARY_NETWORK_PREFERENCE as i64);
         Self {
             eligible_peers: BTreeMap::new(),
             peers: HashMap::new(),
@@ -108,7 +108,7 @@ impl RequestManager {
             upstream_config,
             request_timeout,
             multicast_timeout,
-            multicast_level: MIN_UPSTREAM_NETWORK_CT,
+            multicast_level: PRIMARY_NETWORK_PREFERENCE,
             network_senders,
         }
     }
@@ -123,14 +123,15 @@ impl RequestManager {
             return;
         }
 
-        debug!("[state sync] state before: {:?}", self.peers);
+        counters::ACTIVE_UPSTREAM_PEERS
+            .with_label_values(&[&peer.raw_network_id().to_string()])
+            .inc();
         if let Some(peer_info) = self.peers.get_mut(&peer) {
             peer_info.is_alive = true;
         } else {
             self.peers.insert(peer, PeerInfo::new(true, MAX_SCORE));
         }
         self.update_peer_selection_data();
-        debug!("[state sync] state after: {:?}", self.peers);
     }
 
     pub fn disable_peer(&mut self, peer: &PeerNetworkId, origin: ConnectionOrigin) {
@@ -139,6 +140,9 @@ impl RequestManager {
             .is_upstream_peer(self.is_upstream_peer(&peer, origin)));
 
         if let Some(peer_info) = self.peers.get_mut(peer) {
+            counters::ACTIVE_UPSTREAM_PEERS
+                .with_label_values(&[&peer.raw_network_id().to_string()])
+                .dec();
             peer_info.is_alive = false;
         }
         self.update_peer_selection_data();
@@ -176,14 +180,12 @@ impl RequestManager {
     // * eligible_peers
     // * weighted_index: the chance that a peer is selected from `eligible_peers` is weighted by its score
     fn update_peer_selection_data(&mut self) {
-        let mut active_peers_count = 0;
         // group active peers by network
         let active_peers = self
             .peers
             .iter()
             .filter(|(_peer, peer_info)| peer_info.is_alive)
             .map(|(peer, peer_info)| {
-                active_peers_count += 1;
                 let network_pref = self
                     .upstream_config
                     .get_upstream_preference(peer.raw_network_id())
@@ -191,8 +193,6 @@ impl RequestManager {
                 (network_pref, (peer, peer_info))
             })
             .into_group_map();
-
-        counters::ACTIVE_UPSTREAM_PEERS.set(active_peers_count);
 
         // for each network, compute peer selection data
         self.eligible_peers = active_peers
@@ -233,12 +233,41 @@ impl RequestManager {
         None
     }
 
-    pub fn pick_peers(&self) -> Vec<PeerNetworkId> {
-        self.eligible_peers
-            .iter()
-            .take(self.multicast_level)
-            .filter_map(|(_, (peers, weighted_index))| Self::pick_peer(peers, weighted_index))
-            .collect::<Vec<_>>()
+    /// Picks a set of peers to send chunk requests to
+    /// Tries to pick one peer per network, in order of network preference (where the higher the preference,
+    /// the lower the value)
+    /// The set of networks selected is determined by the multicast level. The preference level of the
+    /// network is as defined in `UpstreamConfig` - 0 is the numeric value for the highest preference,
+    /// and the larger this level, the less preferred this network is.
+    /// All networks with preference level <= multicast level are first sampled. If there are no live peers in
+    /// these networks, we find the next available network with preference level greater than the current multicast
+    /// level with any live peers. If such a network is found, the multicast level is also updated to
+    /// the preference level of the chosen network.
+    pub fn pick_peers(&mut self) -> Vec<PeerNetworkId> {
+        // Strategy: pick peers using multicast level
+        // if no live peers exist for this multicast level, keep failing over to next level
+
+        let mut chosen_peers = vec![];
+        let mut new_multicast_level = None;
+        for (level, (peers, weighted_index)) in self.eligible_peers.iter() {
+            if let Some(peer) = Self::pick_peer(peers, weighted_index) {
+                chosen_peers.push(peer)
+            }
+            // at the minimum go through networks with preference level <= multicast_level
+            // if no peers are found for the current multicast_level, continue doing
+            // best effort search of the first network with live peers to failover to
+            if !chosen_peers.is_empty() && *level >= self.multicast_level {
+                new_multicast_level = Some(*level);
+                break;
+            }
+        }
+
+        // we call `update_multicast` here instead of before the break to avoid mutable borrow conflict
+        // with the outer loop
+        if let Some(level) = new_multicast_level {
+            self.update_multicast(level, None);
+        }
+        chosen_peers
     }
 
     pub fn send_chunk_request(&mut self, req: GetChunkRequest) -> Result<()> {
@@ -252,10 +281,10 @@ impl RequestManager {
         }
 
         let req_info = self.add_request(req.known_version, peers.clone());
-        debug!(
-            "[state sync] request next chunk - chunk req info: {:?}",
-            req_info
-        );
+        debug!(log
+            .clone()
+            .event(LogEvent::ChunkRequestInfo)
+            .chunk_req_info(&req_info));
 
         // actually execute network send
         let target_version = req.target().version();
@@ -278,7 +307,11 @@ impl RequestManager {
                 counters::SEND_SUCCESS_LABEL
             };
             counters::REQUESTS_SENT
-                .with_label_values(&[&peer_id.to_string(), result_label])
+                .with_label_values(&[
+                    &peer.raw_network_id().to_string(),
+                    &peer_id.to_string(),
+                    result_label,
+                ])
                 .inc();
         }
 
@@ -320,14 +353,14 @@ impl RequestManager {
 
     pub fn process_success_response(&mut self, peer: &PeerNetworkId) {
         // update multicast
-        let is_primary_upstream_peer = self
+        let peer_level = self
             .upstream_config
             .get_upstream_preference(peer.raw_network_id())
-            == Some(0);
-        if is_primary_upstream_peer {
-            // if chunk from a primary upstream is successful, stop multicasting the request to failover networks
-            debug!("[state sync] exit multicast mode");
-            self.multicast_level = MIN_UPSTREAM_NETWORK_CT;
+            .unwrap_or_else(|| self.upstream_config.upstream_count());
+        if peer_level < self.multicast_level {
+            // reduce multicast_level if we received peer from lower multicast level (= more highly
+            // prioritized network)
+            self.update_multicast(peer_level, None)
         }
 
         // update score
@@ -434,12 +467,11 @@ impl RequestManager {
         // increment multicast level if this request is also multicast-timed-out
         let multicast_start_time = self.get_multicast_start_time(version).unwrap_or(UNIX_EPOCH);
         if Self::is_timeout(multicast_start_time, self.multicast_timeout) {
-            let prev_multicast_level = self.multicast_level;
-            self.multicast_level = std::cmp::min(
+            let new_multicast_level = std::cmp::min(
                 self.multicast_level + 1,
-                self.upstream_config.upstream_count(),
+                self.upstream_config.upstream_count() - 1, // multicast_level (=network preference) is 0-indexed
             );
-            debug!("[state sync] multicast timeout occurred for version {}, update multicast level from {} to {}", version, prev_multicast_level, self.multicast_level);
+            self.update_multicast(new_multicast_level, Some(version));
         }
         is_timeout
     }
@@ -457,6 +489,10 @@ impl RequestManager {
         }
     }
 
+    pub fn is_known_upstream_peer(&self, peer: &PeerNetworkId) -> bool {
+        self.peers.contains_key(peer)
+    }
+
     #[cfg(test)]
     pub fn peer_score(&self, peer: &PeerNetworkId) -> Option<f64> {
         self.peers.get(peer).map(|p| p.score)
@@ -470,5 +506,25 @@ impl RequestManager {
             .map_or(false, |deadline| {
                 SystemTime::now().duration_since(deadline).is_ok()
             })
+    }
+
+    fn update_multicast(&mut self, new_level: usize, request_version: Option<u64>) {
+        let old_level = self.multicast_level;
+        let event = match new_level {
+            l if l > old_level => LogEvent::Failover,
+            l if l < old_level => LogEvent::Recover,
+            _ => return,
+        };
+
+        let mut log = LogSchema::event_log(LogEntry::Multicast, event)
+            .old_multicast_level(old_level)
+            .new_multicast_level(new_level);
+        if let Some(version) = request_version {
+            log = log.request_version(version);
+        }
+
+        info!(log);
+        self.multicast_level = new_level;
+        counters::MULTICAST_LEVEL.set(self.multicast_level as i64);
     }
 }

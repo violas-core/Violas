@@ -31,7 +31,7 @@ use move_core_types::{
     identifier::Identifier,
     language_storage::{ModuleId, TypeTag},
 };
-use move_vm_runtime::move_vm::MoveVM;
+use move_vm_runtime::{logging::NoContextLog, move_vm::MoveVM};
 use move_vm_types::{
     gas_schedule::{zero_cost_schedule, CostStrategy},
     values::Value,
@@ -263,9 +263,13 @@ impl FakeExecutor {
     }
 
     pub fn new_block(&mut self) {
+        self.new_block_with_timestamp(self.block_time + 1);
+    }
+
+    pub fn new_block_with_timestamp(&mut self, time_stamp: u64) {
         let validator_set = ValidatorSet::fetch_config(&self.data_store)
             .expect("Unable to retrieve the validator set from storage");
-        self.block_time += 1;
+        self.block_time = time_stamp;
         let new_block = BlockMetadata::new(
             HashValue::zero(),
             0,
@@ -315,6 +319,7 @@ impl FakeExecutor {
             let vm = MoveVM::new();
             let remote_view = RemoteStorage::new(&self.data_store);
             let mut session = vm.new_session(&remote_view);
+            let log_context = NoContextLog::new();
             session
                 .execute_function(
                     &Self::module(module_name),
@@ -323,6 +328,7 @@ impl FakeExecutor {
                     args,
                     *sender,
                     &mut cost_strategy,
+                    &log_context,
                 )
                 .unwrap_or_else(|e| {
                     panic!(
@@ -353,6 +359,7 @@ impl FakeExecutor {
         let vm = MoveVM::new();
         let remote_view = RemoteStorage::new(&self.data_store);
         let mut session = vm.new_session(&remote_view);
+        let log_context = NoContextLog::new();
         session
             .execute_function(
                 &Self::module(module_name),
@@ -361,6 +368,7 @@ impl FakeExecutor {
                 args,
                 *sender,
                 &mut cost_strategy,
+                &log_context,
             )
             .map_err(|e| e.into_vm_status())?;
         let effects = session.finish().expect("Failed to generate txn effects");

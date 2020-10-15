@@ -18,6 +18,7 @@ use libra_config::{
     config::{MempoolConfig, PeerNetworkId},
     network_id::NodeNetworkId,
 };
+use libra_infallible::{Mutex, RwLock};
 use libra_types::{
     account_address::AccountAddress,
     mempool_status::MempoolStatus,
@@ -25,14 +26,7 @@ use libra_types::{
     transaction::SignedTransaction,
     vm_status::DiscardedVMStatus,
 };
-use std::{
-    collections::HashMap,
-    fmt,
-    pin::Pin,
-    sync::{Arc, Mutex, RwLock},
-    task::Waker,
-    time::Instant,
-};
+use std::{collections::HashMap, fmt, pin::Pin, sync::Arc, task::Waker, time::Instant};
 use storage_interface::DbReader;
 use subscription_service::ReconfigSubscription;
 use tokio::runtime::Handle;
@@ -91,7 +85,7 @@ impl ScheduledBroadcast {
             let tokio_instant = tokio::time::Instant::from_std(deadline);
             executor.spawn(async move {
                 tokio::time::delay_until(tokio_instant).await;
-                let mut waker = waker_clone.lock().expect("failed to acquire waker lock");
+                let mut waker = waker_clone.lock();
                 if let Some(waker) = waker.take() {
                     waker.wake()
                 }
@@ -113,7 +107,7 @@ impl Future for ScheduledBroadcast {
     fn poll(self: Pin<&mut Self>, context: &mut Context) -> Poll<Self::Output> {
         if Instant::now() < self.deadline {
             let waker_clone = context.waker().clone();
-            let mut waker = self.waker.lock().expect("failed to acquire waker lock");
+            let mut waker = self.waker.lock();
             *waker = Some(waker_clone);
 
             Poll::Pending
@@ -226,6 +220,7 @@ impl fmt::Display for CommittedTransaction {
 }
 
 /// excluded txn
+#[derive(Clone)]
 pub struct TransactionExclusion {
     /// sender
     pub sender: AccountAddress,

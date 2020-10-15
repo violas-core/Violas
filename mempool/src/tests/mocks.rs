@@ -14,6 +14,7 @@ use libra_config::{
     config::{NetworkConfig, NodeConfig},
     network_id::{NetworkId, NodeNetworkId},
 };
+use libra_infallible::{Mutex, RwLock};
 use libra_types::{
     mempool_status::MempoolStatusCode,
     transaction::{GovernanceRole, SignedTransaction},
@@ -22,10 +23,7 @@ use network::{
     peer_manager::{conn_notifs_channel, ConnectionRequestSender, PeerManagerRequestSender},
     protocols::network::{NewNetworkEvents, NewNetworkSender},
 };
-use std::{
-    num::NonZeroUsize,
-    sync::{Arc, Mutex, RwLock},
-};
+use std::{num::NonZeroUsize, sync::Arc};
 use storage_interface::mock::MockDbReader;
 use tokio::runtime::{Builder, Runtime};
 use vm_validator::mocks::mock_vm_validator::MockVMValidator;
@@ -49,7 +47,7 @@ impl MockSharedMempool {
     /// and the channel through which shared mempool receives client events
     pub fn new(state_sync: Option<mpsc::Receiver<CommitNotification>>) -> Self {
         let runtime = Builder::new()
-            .thread_name("mock-shared-mem-")
+            .thread_name("mock-shared-mem")
             .threaded_scheduler()
             .enable_all()
             .build()
@@ -114,10 +112,7 @@ impl MockSharedMempool {
     /// add txns to mempool
     pub fn add_txns(&self, txns: Vec<SignedTransaction>) -> Result<()> {
         {
-            let mut pool = self
-                .mempool
-                .lock()
-                .expect("[mock shared mempool] failed to acquire mempool lock");
+            let mut pool = self.mempool.lock();
             for txn in txns {
                 if pool
                     .add_txn(
@@ -140,14 +135,10 @@ impl MockSharedMempool {
 
     /// true if all given txns are in mempool, else false
     pub fn read_timeline(&self, timeline_id: u64, count: usize) -> Vec<SignedTransaction> {
-        let mut pool = self
-            .mempool
-            .lock()
-            .expect("[mock shared mempool] failed to acquire mempool lock");
+        let mut pool = self.mempool.lock();
         pool.read_timeline(timeline_id, count)
             .0
             .into_iter()
-            .map(|(_, txn)| txn)
             .collect()
     }
 }

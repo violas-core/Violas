@@ -14,7 +14,7 @@ use libra_crypto::{
     test_utils::KeyPair,
 };
 use libra_json_rpc_client::views::{
-    AccountView, BlockMetadata, EventView, TransactionView, VMStatusView,
+    AccountView, EventView, MetadataView, TransactionView, VMStatusView,
 };
 use libra_logger::prelude::*;
 use libra_temppath::TempPath;
@@ -24,7 +24,7 @@ use libra_types::{
     account_config::{
         from_currency_code_string, libra_root_address, testnet_dd_account_address,
         treasury_compliance_account_address, type_tag_for_currency_code,
-        ACCOUNT_RECEIVED_EVENT_PATH, ACCOUNT_SENT_EVENT_PATH, LBR_NAME,
+        ACCOUNT_RECEIVED_EVENT_PATH, ACCOUNT_SENT_EVENT_PATH, COIN1_NAME, LBR_NAME,
     },
     account_state::AccountState,
     chain_id::ChainId,
@@ -675,7 +675,7 @@ impl ClientProxy {
         is_blocking: bool,
     ) -> Result<()> {
         ensure!(
-            space_delim_strings[0] == "upgrade_stdlib",
+            space_delim_strings[0] == "upgrade_stdlib" || space_delim_strings[0] == "u",
             "inconsistent command '{}' for upgrade_stdlib",
             space_delim_strings[0]
         );
@@ -829,7 +829,7 @@ impl ClientProxy {
             sender_sequence_number,
             max_gas_amount.unwrap_or(MAX_GAS_AMOUNT),
             gas_unit_price.unwrap_or(GAS_UNIT_PRICE),
-            gas_currency_code.unwrap_or_else(|| LBR_NAME.to_owned()),
+            gas_currency_code.unwrap_or_else(|| COIN1_NAME.to_owned()),
             TX_EXPIRATION,
             self.chain_id,
         ))
@@ -904,7 +904,7 @@ impl ClientProxy {
     /// Compile Move program
     pub fn compile_program(&mut self, space_delim_strings: &[&str]) -> Result<Vec<String>> {
         ensure!(
-            space_delim_strings[0] == "compile",
+            space_delim_strings[0] == "compile" || space_delim_strings[0] == "c",
             "inconsistent command '{}' for compile_program",
             space_delim_strings[0]
         );
@@ -995,7 +995,7 @@ impl ClientProxy {
     /// Publish Move module
     pub fn publish_module(&mut self, space_delim_strings: &[&str]) -> Result<()> {
         ensure!(
-            space_delim_strings[0] == "publish",
+            space_delim_strings[0] == "publish" || space_delim_strings[0] == "p",
             "inconsistent command '{}' for publish_module",
             space_delim_strings[0]
         );
@@ -1009,7 +1009,7 @@ impl ClientProxy {
     /// Execute custom script
     pub fn execute_script(&mut self, space_delim_strings: &[&str]) -> Result<()> {
         ensure!(
-            space_delim_strings[0] == "execute",
+            space_delim_strings[0] == "execute" || space_delim_strings[0] == "e",
             "inconsistent command '{}' for execute_script",
             space_delim_strings[0]
         );
@@ -1256,7 +1256,7 @@ impl ClientProxy {
     }
 
     /// Test JSON RPC client connection with validator.
-    pub fn test_validator_connection(&mut self) -> Result<BlockMetadata> {
+    pub fn test_validator_connection(&mut self) -> Result<MetadataView> {
         self.client.get_metadata()
     }
 
@@ -1559,13 +1559,17 @@ impl ClientProxy {
         value.to_u64().ok_or_else(|| format_err!("invalid value"))
     }
 
-    /// convert number of coins (main unit) given as string to its on-chain represention
+    /// convert number of coins (main unit) given as string to its on-chain representation
     pub fn convert_to_on_chain_representation(
         &mut self,
         input: &str,
         currency: &str,
     ) -> Result<u64> {
         ensure!(!input.is_empty(), "Empty input not allowed for libra unit");
+        ensure!(
+            currency != LBR_NAME,
+            "LBR not allowed to be minted or transferred. Use Coin1 instead"
+        );
         // This is not supposed to panic as it is used as constant here.
         let currencies_info = self.client.get_currency_info()?;
         let currency_info = currencies_info
@@ -1604,7 +1608,7 @@ impl ClientProxy {
             sender_account.sequence_number,
             max_gas_amount.unwrap_or(MAX_GAS_AMOUNT),
             gas_unit_price.unwrap_or(GAS_UNIT_PRICE),
-            gas_currency_code.unwrap_or_else(|| LBR_NAME.to_owned()),
+            gas_currency_code.unwrap_or_else(|| COIN1_NAME.to_owned()),
             TX_EXPIRATION,
             self.chain_id,
         )

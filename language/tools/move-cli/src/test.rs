@@ -1,7 +1,7 @@
 // Copyright (c) The Libra Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::{MOVE_DATA, MOVE_SRC};
+use crate::{DEFAULT_BUILD_OUTPUT_DIR, MOVE_DATA};
 use move_lang::test_utils::*;
 
 use std::{
@@ -67,13 +67,14 @@ pub fn run_one(args_path: &Path, cli_binary: &str) -> anyhow::Result<()> {
     let exe_dir = args_path.parent().unwrap();
     let cli_binary_path = Path::new(cli_binary).canonicalize()?;
     let move_data = Path::new(exe_dir).join(MOVE_DATA);
-    let move_src = Path::new(exe_dir).join(MOVE_SRC);
-    let move_src_exists_before = move_src.exists();
-    assert!(
-        !move_data.exists(),
-        "tests should never include a {:?} directory",
-        MOVE_DATA
-    );
+    let build_output = Path::new(exe_dir).join(DEFAULT_BUILD_OUTPUT_DIR);
+    if move_data.exists() || build_output.exists() {
+        // need to clean before testing
+        Command::new(cli_binary_path.clone())
+            .current_dir(exe_dir)
+            .arg("clean")
+            .output()?;
+    }
     let mut output = "".to_string();
     for args_line in args_file {
         let args_line = args_line?;
@@ -97,11 +98,6 @@ pub fn run_one(args_path: &Path, cli_binary: &str) -> anyhow::Result<()> {
 
     // post-test cleanup and cleanup checks
     // check that the test command didn't create a move_src dir
-    assert!(
-        move_src_exists_before || !move_src.exists(),
-        "`move clean` failed to eliminate {} directory",
-        MOVE_SRC
-    );
 
     let run_move_clean = !read_bool_var(NO_MOVE_CLEAN);
     if run_move_clean {
@@ -115,6 +111,11 @@ pub fn run_one(args_path: &Path, cli_binary: &str) -> anyhow::Result<()> {
             !move_data.exists(),
             "`move clean` failed to eliminate {} directory",
             MOVE_DATA
+        );
+        assert!(
+            !move_data.exists(),
+            "`move clean` failed to eliminate {} directory",
+            DEFAULT_BUILD_OUTPUT_DIR
         );
     }
 
@@ -134,4 +135,20 @@ pub fn run_one(args_path: &Path, cli_binary: &str) -> anyhow::Result<()> {
     } else {
         Ok(())
     }
+}
+
+pub fn run_all(args_path: &str, cli_binary: &str) -> anyhow::Result<()> {
+    let mut test_total = 0;
+    let mut test_passed = 0;
+    for entry in move_lang::find_filenames(&[args_path.to_owned()], |fpath| {
+        fpath.file_name().expect("unexpected file entry path") == "args.txt"
+    })? {
+        match run_one(Path::new(&entry), cli_binary) {
+            Ok(_) => test_passed += 1,
+            Err(ex) => eprintln!("Test {} failed with error: {}", entry, ex),
+        }
+        test_total += 1;
+    }
+    println!("{} / {} test(s) passed.", test_total, test_passed);
+    Ok(())
 }

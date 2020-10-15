@@ -4,6 +4,7 @@
 use crate::{
     block_storage::BlockStore,
     counters,
+    error::{error_kind, DbError},
     liveness::{
         leader_reputation::{ActiveInactiveHeuristic, LeaderReputation, LibraDBBackend},
         proposal_generator::ProposalGenerator,
@@ -29,6 +30,7 @@ use consensus_types::{
 };
 use futures::{select, StreamExt};
 use libra_config::config::{ConsensusConfig, ConsensusProposerType, NodeConfig};
+use libra_infallible::duration_since_epoch;
 use libra_logger::prelude::*;
 use libra_metrics::monitor;
 use libra_types::{
@@ -71,7 +73,7 @@ pub struct EpochManager {
     author: Author,
     config: ConsensusConfig,
     time_service: Arc<dyn TimeService>,
-    self_sender: channel::Sender<anyhow::Result<Event<ConsensusMsg>>>,
+    self_sender: channel::Sender<Event<ConsensusMsg>>,
     network_sender: ConsensusNetworkSender,
     timeout_sender: channel::Sender<Round>,
     txn_manager: Arc<dyn TxnManager>,
@@ -86,7 +88,7 @@ impl EpochManager {
     pub fn new(
         node_config: &NodeConfig,
         time_service: Arc<dyn TimeService>,
-        self_sender: channel::Sender<anyhow::Result<Event<ConsensusMsg>>>,
+        self_sender: channel::Sender<Event<ConsensusMsg>>,
         network_sender: ConsensusNetworkSender,
         timeout_sender: channel::Sender<Round>,
         txn_manager: Arc<dyn TxnManager>,
@@ -203,6 +205,7 @@ impl EpochManager {
             .storage
             .libra_db()
             .get_epoch_ending_ledger_infos(request.start_epoch, request.end_epoch)
+            .map_err(DbError::from)
             .context("[EpochManager] Failed to get epoch proof")?;
         let msg = ConsensusMsg::EpochChangeProof(Box::new(proof));
         self.network_sender.send_to(peer_id, msg).context(format!(
@@ -549,7 +552,8 @@ impl EpochManager {
                 "main_loop",
                 select! {
                     msg = network_receivers.consensus_messages.select_next_some() => {
-                        monitor!("process_message", self.process_message(msg.0, msg.1).await)
+                        let (peer, msg) = (msg.0, msg.1);
+                        monitor!("process_message", self.process_message(peer, msg).await.with_context(|| format!("from peer: {}", peer)))
                     }
                     block_retrieval = network_receivers.block_retrieval.select_next_some() => {
                         monitor!("process_block_retrieval", self.process_block_retrieval(block_retrieval).await)
@@ -568,9 +572,15 @@ impl EpochManager {
                 Ok(_) => trace!(RoundStateLogSchema::new(round_state)),
                 Err(e) => {
                     counters::ERROR_COUNT.inc();
-                    error!(error = ?e, RoundStateLogSchema::new(round_state));
+                    error!(error = ?e, kind = error_kind(&e), RoundStateLogSchema::new(round_state));
                 }
             }
+
+            // Continually capture the time of consensus process to ensure that clock skew between
+            // validators is reasonable and to find any unusual (possibly byzantine) clock behavior.
+            counters::OP_COUNTERS
+                .gauge("time_since_epoch_ms")
+                .set(duration_since_epoch().as_millis() as i64);
         }
     }
 }

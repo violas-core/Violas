@@ -1,15 +1,16 @@
 // Copyright (c) The Libra Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::{ConsensusState, Error, SafetyRules, TSafetyRules};
+use crate::{counters, logging::LogEntry, ConsensusState, Error, SafetyRules, TSafetyRules};
 use consensus_types::{
     block::Block, block_data::BlockData, timeout::Timeout, vote::Vote,
     vote_proposal::MaybeSignedVoteProposal,
 };
 use libra_crypto::ed25519::Ed25519Signature;
+use libra_infallible::RwLock;
 use libra_types::epoch_change::EpochChangeProof;
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum SafetyRulesInput {
@@ -71,11 +72,13 @@ impl SerializerClient {
 
 impl TSafetyRules for SerializerClient {
     fn consensus_state(&mut self) -> Result<ConsensusState, Error> {
+        let _timer = counters::start_timer("external", LogEntry::ConsensusState.as_str());
         let response = self.request(SafetyRulesInput::ConsensusState)?;
         lcs::from_bytes(&response)?
     }
 
     fn initialize(&mut self, proof: &EpochChangeProof) -> Result<(), Error> {
+        let _timer = counters::start_timer("external", LogEntry::Initialize.as_str());
         let response = self.request(SafetyRulesInput::Initialize(Box::new(proof.clone())))?;
         lcs::from_bytes(&response)?
     }
@@ -84,6 +87,7 @@ impl TSafetyRules for SerializerClient {
         &mut self,
         vote_proposal: &MaybeSignedVoteProposal,
     ) -> Result<Vote, Error> {
+        let _timer = counters::start_timer("external", LogEntry::ConstructAndSignVote.as_str());
         let response = self.request(SafetyRulesInput::ConstructAndSignVote(Box::new(
             vote_proposal.clone(),
         )))?;
@@ -91,11 +95,13 @@ impl TSafetyRules for SerializerClient {
     }
 
     fn sign_proposal(&mut self, block_data: BlockData) -> Result<Block, Error> {
+        let _timer = counters::start_timer("external", LogEntry::SignProposal.as_str());
         let response = self.request(SafetyRulesInput::SignProposal(Box::new(block_data)))?;
         lcs::from_bytes(&response)?
     }
 
     fn sign_timeout(&mut self, timeout: &Timeout) -> Result<Ed25519Signature, Error> {
+        let _timer = counters::start_timer("external", LogEntry::SignTimeout.as_str());
         let response = self.request(SafetyRulesInput::SignTimeout(Box::new(timeout.clone())))?;
         lcs::from_bytes(&response)?
     }
@@ -114,7 +120,6 @@ impl TSerializerClient for LocalService {
         let input_message = lcs::to_bytes(&input)?;
         self.serializer_service
             .write()
-            .unwrap()
             .handle_message(input_message)
     }
 }

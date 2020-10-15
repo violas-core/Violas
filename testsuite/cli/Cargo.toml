@@ -10,8 +10,8 @@ publish = false
 edition = "2018"
 
 [dependencies]
-anyhow = "1.0.32"
-chrono = "0.4.18"
+anyhow = "1.0.33"
+chrono = "0.4.19"
 hex = "0.4.2"
 proptest = { version = "0.10.1", optional = true }
 rustyline = "6.3.0"

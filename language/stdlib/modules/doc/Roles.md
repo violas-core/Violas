@@ -3,64 +3,55 @@
 
 # Module `0x1::Roles`
 
-This module describes two things:
+This module defines role-based access control for the Libra framework.
 
-1. The relationship between roles, e.g. Role_A can creates accounts of Role_B
-It is important to note here that this module _does not_ describe the
-privileges that a specific role can have. This is a property of each of
-the modules that declares a privilege.
+Roles are associated with accounts and govern what operations are permitted by those accounts. A role
+is typically asserted on function entry using a statement like <code><a href="Roles.md#0x1_Roles_assert_libra_root">Self::assert_libra_root</a>(account)</code>. This
+module provides multiple assertion functions like this one, as well as the functions to setup roles.
 
-Roles are defined to be completely opaque outside of this module --
-all operations should be guarded by privilege checks, and not by role
-checks. Each role comes with a default privilege.
+For a conceptual discussion of roles, see the [LIP-2 document][ACCESS_CONTROL].
 
 
--  [Resource <code><a href="Roles.md#0x1_Roles_RoleId">RoleId</a></code>](#0x1_Roles_RoleId)
--  [Const <code><a href="Roles.md#0x1_Roles_EROLE_ID">EROLE_ID</a></code>](#0x1_Roles_EROLE_ID)
--  [Const <code><a href="Roles.md#0x1_Roles_ELIBRA_ROOT">ELIBRA_ROOT</a></code>](#0x1_Roles_ELIBRA_ROOT)
--  [Const <code><a href="Roles.md#0x1_Roles_ETREASURY_COMPLIANCE">ETREASURY_COMPLIANCE</a></code>](#0x1_Roles_ETREASURY_COMPLIANCE)
--  [Const <code><a href="Roles.md#0x1_Roles_EPARENT_VASP">EPARENT_VASP</a></code>](#0x1_Roles_EPARENT_VASP)
--  [Const <code><a href="Roles.md#0x1_Roles_EPARENT_VASP_OR_CHILD_VASP">EPARENT_VASP_OR_CHILD_VASP</a></code>](#0x1_Roles_EPARENT_VASP_OR_CHILD_VASP)
--  [Const <code><a href="Roles.md#0x1_Roles_EPARENT_VASP_OR_DESIGNATED_DEALER">EPARENT_VASP_OR_DESIGNATED_DEALER</a></code>](#0x1_Roles_EPARENT_VASP_OR_DESIGNATED_DEALER)
--  [Const <code><a href="Roles.md#0x1_Roles_EDESIGNATED_DEALER">EDESIGNATED_DEALER</a></code>](#0x1_Roles_EDESIGNATED_DEALER)
--  [Const <code><a href="Roles.md#0x1_Roles_EVALIDATOR">EVALIDATOR</a></code>](#0x1_Roles_EVALIDATOR)
--  [Const <code><a href="Roles.md#0x1_Roles_EVALIDATOR_OPERATOR">EVALIDATOR_OPERATOR</a></code>](#0x1_Roles_EVALIDATOR_OPERATOR)
--  [Const <code><a href="Roles.md#0x1_Roles_LIBRA_ROOT_ROLE_ID">LIBRA_ROOT_ROLE_ID</a></code>](#0x1_Roles_LIBRA_ROOT_ROLE_ID)
--  [Const <code><a href="Roles.md#0x1_Roles_TREASURY_COMPLIANCE_ROLE_ID">TREASURY_COMPLIANCE_ROLE_ID</a></code>](#0x1_Roles_TREASURY_COMPLIANCE_ROLE_ID)
--  [Const <code><a href="Roles.md#0x1_Roles_DESIGNATED_DEALER_ROLE_ID">DESIGNATED_DEALER_ROLE_ID</a></code>](#0x1_Roles_DESIGNATED_DEALER_ROLE_ID)
--  [Const <code><a href="Roles.md#0x1_Roles_VALIDATOR_ROLE_ID">VALIDATOR_ROLE_ID</a></code>](#0x1_Roles_VALIDATOR_ROLE_ID)
--  [Const <code><a href="Roles.md#0x1_Roles_VALIDATOR_OPERATOR_ROLE_ID">VALIDATOR_OPERATOR_ROLE_ID</a></code>](#0x1_Roles_VALIDATOR_OPERATOR_ROLE_ID)
--  [Const <code><a href="Roles.md#0x1_Roles_PARENT_VASP_ROLE_ID">PARENT_VASP_ROLE_ID</a></code>](#0x1_Roles_PARENT_VASP_ROLE_ID)
--  [Const <code><a href="Roles.md#0x1_Roles_CHILD_VASP_ROLE_ID">CHILD_VASP_ROLE_ID</a></code>](#0x1_Roles_CHILD_VASP_ROLE_ID)
--  [Function <code>grant_libra_root_role</code>](#0x1_Roles_grant_libra_root_role)
--  [Function <code>grant_treasury_compliance_role</code>](#0x1_Roles_grant_treasury_compliance_role)
--  [Function <code>new_designated_dealer_role</code>](#0x1_Roles_new_designated_dealer_role)
--  [Function <code>new_validator_role</code>](#0x1_Roles_new_validator_role)
--  [Function <code>new_validator_operator_role</code>](#0x1_Roles_new_validator_operator_role)
--  [Function <code>new_parent_vasp_role</code>](#0x1_Roles_new_parent_vasp_role)
--  [Function <code>new_child_vasp_role</code>](#0x1_Roles_new_child_vasp_role)
--  [Function <code>grant_role</code>](#0x1_Roles_grant_role)
--  [Function <code>has_role</code>](#0x1_Roles_has_role)
--  [Function <code>has_libra_root_role</code>](#0x1_Roles_has_libra_root_role)
--  [Function <code>has_treasury_compliance_role</code>](#0x1_Roles_has_treasury_compliance_role)
--  [Function <code>has_designated_dealer_role</code>](#0x1_Roles_has_designated_dealer_role)
--  [Function <code>has_validator_role</code>](#0x1_Roles_has_validator_role)
--  [Function <code>has_validator_operator_role</code>](#0x1_Roles_has_validator_operator_role)
--  [Function <code>has_parent_VASP_role</code>](#0x1_Roles_has_parent_VASP_role)
--  [Function <code>has_child_VASP_role</code>](#0x1_Roles_has_child_VASP_role)
--  [Function <code>get_role_id</code>](#0x1_Roles_get_role_id)
--  [Function <code>can_hold_balance</code>](#0x1_Roles_can_hold_balance)
--  [Function <code>assert_libra_root</code>](#0x1_Roles_assert_libra_root)
--  [Function <code>assert_treasury_compliance</code>](#0x1_Roles_assert_treasury_compliance)
--  [Function <code>assert_parent_vasp_role</code>](#0x1_Roles_assert_parent_vasp_role)
--  [Function <code>assert_designated_dealer</code>](#0x1_Roles_assert_designated_dealer)
--  [Function <code>assert_validator</code>](#0x1_Roles_assert_validator)
--  [Function <code>assert_validator_operator</code>](#0x1_Roles_assert_validator_operator)
--  [Function <code>assert_parent_vasp_or_designated_dealer</code>](#0x1_Roles_assert_parent_vasp_or_designated_dealer)
--  [Function <code>assert_parent_vasp_or_child_vasp</code>](#0x1_Roles_assert_parent_vasp_or_child_vasp)
-        -  [Helper Functions and Schemas](#@Helper_Functions_and_Schemas_0)
-        -  [Persistence of Roles](#@Persistence_of_Roles_1)
-        -  [Conditions from Requirements](#@Conditions_from_Requirements_2)
+-  [Resource `RoleId`](#0x1_Roles_RoleId)
+-  [Constants](#@Constants_0)
+-  [Function `grant_libra_root_role`](#0x1_Roles_grant_libra_root_role)
+-  [Function `grant_treasury_compliance_role`](#0x1_Roles_grant_treasury_compliance_role)
+-  [Function `new_designated_dealer_role`](#0x1_Roles_new_designated_dealer_role)
+-  [Function `new_validator_role`](#0x1_Roles_new_validator_role)
+-  [Function `new_validator_operator_role`](#0x1_Roles_new_validator_operator_role)
+-  [Function `new_parent_vasp_role`](#0x1_Roles_new_parent_vasp_role)
+-  [Function `new_child_vasp_role`](#0x1_Roles_new_child_vasp_role)
+-  [Function `grant_role`](#0x1_Roles_grant_role)
+-  [Function `has_role`](#0x1_Roles_has_role)
+-  [Function `has_libra_root_role`](#0x1_Roles_has_libra_root_role)
+-  [Function `has_treasury_compliance_role`](#0x1_Roles_has_treasury_compliance_role)
+-  [Function `has_designated_dealer_role`](#0x1_Roles_has_designated_dealer_role)
+-  [Function `has_validator_role`](#0x1_Roles_has_validator_role)
+-  [Function `has_validator_operator_role`](#0x1_Roles_has_validator_operator_role)
+-  [Function `has_parent_VASP_role`](#0x1_Roles_has_parent_VASP_role)
+-  [Function `has_child_VASP_role`](#0x1_Roles_has_child_VASP_role)
+-  [Function `get_role_id`](#0x1_Roles_get_role_id)
+-  [Function `can_hold_balance`](#0x1_Roles_can_hold_balance)
+-  [Function `assert_libra_root`](#0x1_Roles_assert_libra_root)
+-  [Function `assert_treasury_compliance`](#0x1_Roles_assert_treasury_compliance)
+-  [Function `assert_parent_vasp_role`](#0x1_Roles_assert_parent_vasp_role)
+-  [Function `assert_designated_dealer`](#0x1_Roles_assert_designated_dealer)
+-  [Function `assert_validator`](#0x1_Roles_assert_validator)
+-  [Function `assert_validator_operator`](#0x1_Roles_assert_validator_operator)
+-  [Function `assert_parent_vasp_or_designated_dealer`](#0x1_Roles_assert_parent_vasp_or_designated_dealer)
+-  [Function `assert_parent_vasp_or_child_vasp`](#0x1_Roles_assert_parent_vasp_or_child_vasp)
+-  [Module Specification](#@Module_Specification_1)
+    -  [Persistence of Roles](#@Persistence_of_Roles_2)
+    -  [Access Control](#@Access_Control_3)
+    -  [Helper Functions and Schemas](#@Helper_Functions_and_Schemas_4)
+
+
+<pre><code><b>use</b> <a href="CoreAddresses.md#0x1_CoreAddresses">0x1::CoreAddresses</a>;
+<b>use</b> <a href="Errors.md#0x1_Errors">0x1::Errors</a>;
+<b>use</b> <a href="LibraTimestamp.md#0x1_LibraTimestamp">0x1::LibraTimestamp</a>;
+<b>use</b> <a href="Signer.md#0x1_Signer">0x1::Signer</a>;
+</code></pre>
+
 
 
 <a name="0x1_Roles_RoleId"></a>
@@ -92,21 +83,12 @@ to an account as a top-level resource, and is otherwise immovable.
 
 </details>
 
-<a name="0x1_Roles_EROLE_ID"></a>
+<a name="@Constants_0"></a>
 
-## Const `EROLE_ID`
-
-A <code><a href="Roles.md#0x1_Roles_RoleId">RoleId</a></code> resource was in an unexpected state
-
-
-<pre><code><b>const</b> <a href="Roles.md#0x1_Roles_EROLE_ID">EROLE_ID</a>: u64 = 0;
-</code></pre>
-
+## Constants
 
 
 <a name="0x1_Roles_ELIBRA_ROOT"></a>
-
-## Const `ELIBRA_ROOT`
 
 The signer didn't have the required Libra Root role
 
@@ -118,8 +100,6 @@ The signer didn't have the required Libra Root role
 
 <a name="0x1_Roles_ETREASURY_COMPLIANCE"></a>
 
-## Const `ETREASURY_COMPLIANCE`
-
 The signer didn't have the required Treasury & Compliance role
 
 
@@ -128,9 +108,35 @@ The signer didn't have the required Treasury & Compliance role
 
 
 
-<a name="0x1_Roles_EPARENT_VASP"></a>
+<a name="0x1_Roles_CHILD_VASP_ROLE_ID"></a>
 
-## Const `EPARENT_VASP`
+
+
+<pre><code><b>const</b> <a href="Roles.md#0x1_Roles_CHILD_VASP_ROLE_ID">CHILD_VASP_ROLE_ID</a>: u64 = 6;
+</code></pre>
+
+
+
+<a name="0x1_Roles_DESIGNATED_DEALER_ROLE_ID"></a>
+
+
+
+<pre><code><b>const</b> <a href="Roles.md#0x1_Roles_DESIGNATED_DEALER_ROLE_ID">DESIGNATED_DEALER_ROLE_ID</a>: u64 = 2;
+</code></pre>
+
+
+
+<a name="0x1_Roles_EDESIGNATED_DEALER"></a>
+
+The signer didn't have the required Designated Dealer role
+
+
+<pre><code><b>const</b> <a href="Roles.md#0x1_Roles_EDESIGNATED_DEALER">EDESIGNATED_DEALER</a>: u64 = 6;
+</code></pre>
+
+
+
+<a name="0x1_Roles_EPARENT_VASP"></a>
 
 The signer didn't have the required Parent VASP role
 
@@ -142,8 +148,6 @@ The signer didn't have the required Parent VASP role
 
 <a name="0x1_Roles_EPARENT_VASP_OR_CHILD_VASP"></a>
 
-## Const `EPARENT_VASP_OR_CHILD_VASP`
-
 The signer didn't have the required ParentVASP or ChildVASP role
 
 
@@ -154,8 +158,6 @@ The signer didn't have the required ParentVASP or ChildVASP role
 
 <a name="0x1_Roles_EPARENT_VASP_OR_DESIGNATED_DEALER"></a>
 
-## Const `EPARENT_VASP_OR_DESIGNATED_DEALER`
-
 The signer didn't have the required Parent VASP or Designated Dealer role
 
 
@@ -164,21 +166,17 @@ The signer didn't have the required Parent VASP or Designated Dealer role
 
 
 
-<a name="0x1_Roles_EDESIGNATED_DEALER"></a>
+<a name="0x1_Roles_EROLE_ID"></a>
 
-## Const `EDESIGNATED_DEALER`
-
-The signer didn't have the required Designated Dealer role
+A <code><a href="Roles.md#0x1_Roles_RoleId">RoleId</a></code> resource was in an unexpected state
 
 
-<pre><code><b>const</b> <a href="Roles.md#0x1_Roles_EDESIGNATED_DEALER">EDESIGNATED_DEALER</a>: u64 = 6;
+<pre><code><b>const</b> <a href="Roles.md#0x1_Roles_EROLE_ID">EROLE_ID</a>: u64 = 0;
 </code></pre>
 
 
 
 <a name="0x1_Roles_EVALIDATOR"></a>
-
-## Const `EVALIDATOR`
 
 The signer didn't have the required Validator role
 
@@ -190,8 +188,6 @@ The signer didn't have the required Validator role
 
 <a name="0x1_Roles_EVALIDATOR_OPERATOR"></a>
 
-## Const `EVALIDATOR_OPERATOR`
-
 The signer didn't have the required Validator Operator role
 
 
@@ -202,8 +198,6 @@ The signer didn't have the required Validator Operator role
 
 <a name="0x1_Roles_LIBRA_ROOT_ROLE_ID"></a>
 
-## Const `LIBRA_ROOT_ROLE_ID`
-
 
 
 <pre><code><b>const</b> <a href="Roles.md#0x1_Roles_LIBRA_ROOT_ROLE_ID">LIBRA_ROOT_ROLE_ID</a>: u64 = 0;
@@ -211,53 +205,7 @@ The signer didn't have the required Validator Operator role
 
 
 
-<a name="0x1_Roles_TREASURY_COMPLIANCE_ROLE_ID"></a>
-
-## Const `TREASURY_COMPLIANCE_ROLE_ID`
-
-
-
-<pre><code><b>const</b> <a href="Roles.md#0x1_Roles_TREASURY_COMPLIANCE_ROLE_ID">TREASURY_COMPLIANCE_ROLE_ID</a>: u64 = 1;
-</code></pre>
-
-
-
-<a name="0x1_Roles_DESIGNATED_DEALER_ROLE_ID"></a>
-
-## Const `DESIGNATED_DEALER_ROLE_ID`
-
-
-
-<pre><code><b>const</b> <a href="Roles.md#0x1_Roles_DESIGNATED_DEALER_ROLE_ID">DESIGNATED_DEALER_ROLE_ID</a>: u64 = 2;
-</code></pre>
-
-
-
-<a name="0x1_Roles_VALIDATOR_ROLE_ID"></a>
-
-## Const `VALIDATOR_ROLE_ID`
-
-
-
-<pre><code><b>const</b> <a href="Roles.md#0x1_Roles_VALIDATOR_ROLE_ID">VALIDATOR_ROLE_ID</a>: u64 = 3;
-</code></pre>
-
-
-
-<a name="0x1_Roles_VALIDATOR_OPERATOR_ROLE_ID"></a>
-
-## Const `VALIDATOR_OPERATOR_ROLE_ID`
-
-
-
-<pre><code><b>const</b> <a href="Roles.md#0x1_Roles_VALIDATOR_OPERATOR_ROLE_ID">VALIDATOR_OPERATOR_ROLE_ID</a>: u64 = 4;
-</code></pre>
-
-
-
 <a name="0x1_Roles_PARENT_VASP_ROLE_ID"></a>
-
-## Const `PARENT_VASP_ROLE_ID`
 
 
 
@@ -266,13 +214,29 @@ The signer didn't have the required Validator Operator role
 
 
 
-<a name="0x1_Roles_CHILD_VASP_ROLE_ID"></a>
-
-## Const `CHILD_VASP_ROLE_ID`
+<a name="0x1_Roles_TREASURY_COMPLIANCE_ROLE_ID"></a>
 
 
 
-<pre><code><b>const</b> <a href="Roles.md#0x1_Roles_CHILD_VASP_ROLE_ID">CHILD_VASP_ROLE_ID</a>: u64 = 6;
+<pre><code><b>const</b> <a href="Roles.md#0x1_Roles_TREASURY_COMPLIANCE_ROLE_ID">TREASURY_COMPLIANCE_ROLE_ID</a>: u64 = 1;
+</code></pre>
+
+
+
+<a name="0x1_Roles_VALIDATOR_OPERATOR_ROLE_ID"></a>
+
+
+
+<pre><code><b>const</b> <a href="Roles.md#0x1_Roles_VALIDATOR_OPERATOR_ROLE_ID">VALIDATOR_OPERATOR_ROLE_ID</a>: u64 = 4;
+</code></pre>
+
+
+
+<a name="0x1_Roles_VALIDATOR_ROLE_ID"></a>
+
+
+
+<pre><code><b>const</b> <a href="Roles.md#0x1_Roles_VALIDATOR_ROLE_ID">VALIDATOR_ROLE_ID</a>: u64 = 3;
 </code></pre>
 
 
@@ -281,10 +245,7 @@ The signer didn't have the required Validator Operator role
 
 ## Function `grant_libra_root_role`
 
-Granted in genesis. So there cannot be any pre-existing privileges
-and roles. This is _not_ called from within LibraAccount -- these
-privileges need to be created before accounts can be made
-(specifically, initialization of currency)
+Publishes libra root role. Granted only in genesis.
 
 
 <pre><code><b>public</b> <b>fun</b> <a href="Roles.md#0x1_Roles_grant_libra_root_role">grant_libra_root_role</a>(lr_account: &signer)
@@ -300,6 +261,8 @@ privileges need to be created before accounts can be made
     lr_account: &signer,
 ) {
     <a href="LibraTimestamp.md#0x1_LibraTimestamp_assert_genesis">LibraTimestamp::assert_genesis</a>();
+    // Checks actual <a href="Libra.md#0x1_Libra">Libra</a> root because <a href="Libra.md#0x1_Libra">Libra</a> root role is not set
+    // until next line of code.
     <a href="CoreAddresses.md#0x1_CoreAddresses_assert_libra_root">CoreAddresses::assert_libra_root</a>(lr_account);
     // Grant the role <b>to</b> the libra root account
     <a href="Roles.md#0x1_Roles_grant_role">grant_role</a>(lr_account, <a href="Roles.md#0x1_Roles_LIBRA_ROOT_ROLE_ID">LIBRA_ROOT_ROLE_ID</a>);
@@ -317,7 +280,7 @@ privileges need to be created before accounts can be made
 
 <pre><code><b>include</b> <a href="LibraTimestamp.md#0x1_LibraTimestamp_AbortsIfNotGenesis">LibraTimestamp::AbortsIfNotGenesis</a>;
 <b>include</b> <a href="CoreAddresses.md#0x1_CoreAddresses_AbortsIfNotLibraRoot">CoreAddresses::AbortsIfNotLibraRoot</a>{account: lr_account};
-<b>include</b> <a href="Roles.md#0x1_Roles_GrantRole">GrantRole</a>{account: lr_account, role_id: <a href="Roles.md#0x1_Roles_LIBRA_ROOT_ROLE_ID">LIBRA_ROOT_ROLE_ID</a>};
+<b>include</b> <a href="Roles.md#0x1_Roles_GrantRole">GrantRole</a>{addr: <a href="Signer.md#0x1_Signer_address_of">Signer::address_of</a>(lr_account), role_id: <a href="Roles.md#0x1_Roles_LIBRA_ROOT_ROLE_ID">LIBRA_ROOT_ROLE_ID</a>};
 </code></pre>
 
 
@@ -328,9 +291,7 @@ privileges need to be created before accounts can be made
 
 ## Function `grant_treasury_compliance_role`
 
-NB: currency-related privileges are defined in the <code><a href="Libra.md#0x1_Libra">Libra</a></code> module.
-Granted in genesis. So there cannot be any pre-existing privileges
-and roles.
+Publishes treasury compliance role. Granted only in genesis.
 
 
 <pre><code><b>public</b> <b>fun</b> <a href="Roles.md#0x1_Roles_grant_treasury_compliance_role">grant_treasury_compliance_role</a>(treasury_compliance_account: &signer, lr_account: &signer)
@@ -366,7 +327,7 @@ and roles.
 <pre><code><b>include</b> <a href="LibraTimestamp.md#0x1_LibraTimestamp_AbortsIfNotGenesis">LibraTimestamp::AbortsIfNotGenesis</a>;
 <b>include</b> <a href="CoreAddresses.md#0x1_CoreAddresses_AbortsIfNotTreasuryCompliance">CoreAddresses::AbortsIfNotTreasuryCompliance</a>{account: treasury_compliance_account};
 <b>include</b> <a href="Roles.md#0x1_Roles_AbortsIfNotLibraRoot">AbortsIfNotLibraRoot</a>{account: lr_account};
-<b>include</b> <a href="Roles.md#0x1_Roles_GrantRole">GrantRole</a>{account: treasury_compliance_account, role_id: <a href="Roles.md#0x1_Roles_TREASURY_COMPLIANCE_ROLE_ID">TREASURY_COMPLIANCE_ROLE_ID</a>};
+<b>include</b> <a href="Roles.md#0x1_Roles_GrantRole">GrantRole</a>{addr: <a href="Signer.md#0x1_Signer_address_of">Signer::address_of</a>(treasury_compliance_account), role_id: <a href="Roles.md#0x1_Roles_TREASURY_COMPLIANCE_ROLE_ID">TREASURY_COMPLIANCE_ROLE_ID</a>};
 </code></pre>
 
 
@@ -377,13 +338,8 @@ and roles.
 
 ## Function `new_designated_dealer_role`
 
-Generic new role creation (for role ids != LIBRA_ROOT_ROLE_ID
-and TREASURY_COMPLIANCE_ROLE_ID).
-
-TODO: There is some common code here that can be factored out.
-
-Publish a DesignatedDealer <code><a href="Roles.md#0x1_Roles_RoleId">RoleId</a></code> under <code>new_account</code>.
-The <code>creating_account</code> must be TreasuryCompliance
+Publishes a DesignatedDealer <code><a href="Roles.md#0x1_Roles_RoleId">RoleId</a></code> under <code>new_account</code>.
+The <code>creating_account</code> must be treasury compliance.
 
 
 <pre><code><b>public</b> <b>fun</b> <a href="Roles.md#0x1_Roles_new_designated_dealer_role">new_designated_dealer_role</a>(creating_account: &signer, new_account: &signer)
@@ -414,7 +370,7 @@ The <code>creating_account</code> must be TreasuryCompliance
 
 
 <pre><code><b>include</b> <a href="Roles.md#0x1_Roles_AbortsIfNotTreasuryCompliance">AbortsIfNotTreasuryCompliance</a>{account: creating_account};
-<b>include</b> <a href="Roles.md#0x1_Roles_GrantRole">GrantRole</a>{account: new_account, role_id: <a href="Roles.md#0x1_Roles_DESIGNATED_DEALER_ROLE_ID">DESIGNATED_DEALER_ROLE_ID</a>};
+<b>include</b> <a href="Roles.md#0x1_Roles_GrantRole">GrantRole</a>{addr: <a href="Signer.md#0x1_Signer_address_of">Signer::address_of</a>(new_account), role_id: <a href="Roles.md#0x1_Roles_DESIGNATED_DEALER_ROLE_ID">DESIGNATED_DEALER_ROLE_ID</a>};
 </code></pre>
 
 
@@ -426,7 +382,7 @@ The <code>creating_account</code> must be TreasuryCompliance
 ## Function `new_validator_role`
 
 Publish a Validator <code><a href="Roles.md#0x1_Roles_RoleId">RoleId</a></code> under <code>new_account</code>.
-The <code>creating_account</code> must be LibraRoot
+The <code>creating_account</code> must be libra root.
 
 
 <pre><code><b>public</b> <b>fun</b> <a href="Roles.md#0x1_Roles_new_validator_role">new_validator_role</a>(creating_account: &signer, new_account: &signer)
@@ -457,7 +413,7 @@ The <code>creating_account</code> must be LibraRoot
 
 
 <pre><code><b>include</b> <a href="Roles.md#0x1_Roles_AbortsIfNotLibraRoot">AbortsIfNotLibraRoot</a>{account: creating_account};
-<b>include</b> <a href="Roles.md#0x1_Roles_GrantRole">GrantRole</a>{account: new_account, role_id: <a href="Roles.md#0x1_Roles_VALIDATOR_ROLE_ID">VALIDATOR_ROLE_ID</a>};
+<b>include</b> <a href="Roles.md#0x1_Roles_GrantRole">GrantRole</a>{addr: <a href="Signer.md#0x1_Signer_address_of">Signer::address_of</a>(new_account), role_id: <a href="Roles.md#0x1_Roles_VALIDATOR_ROLE_ID">VALIDATOR_ROLE_ID</a>};
 </code></pre>
 
 
@@ -500,7 +456,7 @@ The <code>creating_account</code> must be LibraRoot
 
 
 <pre><code><b>include</b> <a href="Roles.md#0x1_Roles_AbortsIfNotLibraRoot">AbortsIfNotLibraRoot</a>{account: creating_account};
-<b>include</b> <a href="Roles.md#0x1_Roles_GrantRole">GrantRole</a>{account: new_account, role_id: <a href="Roles.md#0x1_Roles_VALIDATOR_OPERATOR_ROLE_ID">VALIDATOR_OPERATOR_ROLE_ID</a>};
+<b>include</b> <a href="Roles.md#0x1_Roles_GrantRole">GrantRole</a>{addr: <a href="Signer.md#0x1_Signer_address_of">Signer::address_of</a>(new_account), role_id: <a href="Roles.md#0x1_Roles_VALIDATOR_OPERATOR_ROLE_ID">VALIDATOR_OPERATOR_ROLE_ID</a>};
 </code></pre>
 
 
@@ -543,7 +499,7 @@ The <code>creating_account</code> must be TreasuryCompliance
 
 
 <pre><code><b>include</b> <a href="Roles.md#0x1_Roles_AbortsIfNotTreasuryCompliance">AbortsIfNotTreasuryCompliance</a>{account: creating_account};
-<b>include</b> <a href="Roles.md#0x1_Roles_GrantRole">GrantRole</a>{account: new_account, role_id: <a href="Roles.md#0x1_Roles_PARENT_VASP_ROLE_ID">PARENT_VASP_ROLE_ID</a>};
+<b>include</b> <a href="Roles.md#0x1_Roles_GrantRole">GrantRole</a>{addr: <a href="Signer.md#0x1_Signer_address_of">Signer::address_of</a>(new_account), role_id: <a href="Roles.md#0x1_Roles_PARENT_VASP_ROLE_ID">PARENT_VASP_ROLE_ID</a>};
 </code></pre>
 
 
@@ -586,7 +542,7 @@ The <code>creating_account</code> must be a ParentVASP
 
 
 <pre><code><b>include</b> <a href="Roles.md#0x1_Roles_AbortsIfNotParentVasp">AbortsIfNotParentVasp</a>{account: creating_account};
-<b>include</b> <a href="Roles.md#0x1_Roles_GrantRole">GrantRole</a>{account: new_account, role_id: <a href="Roles.md#0x1_Roles_CHILD_VASP_ROLE_ID">CHILD_VASP_ROLE_ID</a>};
+<b>include</b> <a href="Roles.md#0x1_Roles_GrantRole">GrantRole</a>{addr: <a href="Signer.md#0x1_Signer_address_of">Signer::address_of</a>(new_account), role_id: <a href="Roles.md#0x1_Roles_CHILD_VASP_ROLE_ID">CHILD_VASP_ROLE_ID</a>};
 </code></pre>
 
 
@@ -624,9 +580,9 @@ Helper function to grant a role.
 
 
 
-<pre><code>pragma opaque;
-<b>include</b> <a href="Roles.md#0x1_Roles_GrantRole">GrantRole</a>;
-<a name="0x1_Roles_addr$47"></a>
+<pre><code><b>pragma</b> opaque;
+<b>include</b> <a href="Roles.md#0x1_Roles_GrantRole">GrantRole</a>{addr: <a href="Signer.md#0x1_Signer_address_of">Signer::address_of</a>(account)};
+<a name="0x1_Roles_addr$44"></a>
 <b>let</b> addr = <a href="Signer.md#0x1_Signer_spec_address_of">Signer::spec_address_of</a>(account);
 <b>requires</b> role_id == <a href="Roles.md#0x1_Roles_LIBRA_ROOT_ROLE_ID">LIBRA_ROOT_ROLE_ID</a> ==&gt; addr == <a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>();
 <b>requires</b> role_id == <a href="Roles.md#0x1_Roles_TREASURY_COMPLIANCE_ROLE_ID">TREASURY_COMPLIANCE_ROLE_ID</a> ==&gt; addr == <a href="CoreAddresses.md#0x1_CoreAddresses_TREASURY_COMPLIANCE_ADDRESS">CoreAddresses::TREASURY_COMPLIANCE_ADDRESS</a>();
@@ -639,10 +595,8 @@ Helper function to grant a role.
 
 
 <pre><code><b>schema</b> <a href="Roles.md#0x1_Roles_GrantRole">GrantRole</a> {
-    account: signer;
+    addr: address;
     role_id: num;
-    <a name="0x1_Roles_addr$38"></a>
-    <b>let</b> addr = <a href="Signer.md#0x1_Signer_spec_address_of">Signer::spec_address_of</a>(account);
     <b>aborts_if</b> <b>exists</b>&lt;<a href="Roles.md#0x1_Roles_RoleId">RoleId</a>&gt;(addr) <b>with</b> <a href="Errors.md#0x1_Errors_ALREADY_PUBLISHED">Errors::ALREADY_PUBLISHED</a>;
     <b>ensures</b> <b>exists</b>&lt;<a href="Roles.md#0x1_Roles_RoleId">RoleId</a>&gt;(addr);
     <b>ensures</b> <b>global</b>&lt;<a href="Roles.md#0x1_Roles_RoleId">RoleId</a>&gt;(addr).role_id == role_id;
@@ -658,13 +612,6 @@ Helper function to grant a role.
 
 ## Function `has_role`
 
-Naming conventions: Many of the "has_*_privilege" functions do have the same body
-because the spreadsheet grants all such privileges to addresses (usually a single
-address) with that role. In effect, having the privilege is equivalent to having the
-role, but the function names document the specific privilege involved.  Also, modules
-that use these functions as a privilege check can hide specific roles, so that a change
-in the privilege/role relationship can be implemented by changing Roles and not the
-module that uses it.
 
 
 <pre><code><b>fun</b> <a href="Roles.md#0x1_Roles_has_role">has_role</a>(account: &signer, role_id: u64): bool
@@ -916,11 +863,6 @@ Return true if <code>addr</code> is allowed to receive and send <code><a href="L
 
 Assert that the account is libra root.
 
-TODO(wrwg): previously throughout the framework, we had functions which only check for the role, and
-functions which check both for role and address. This is now unified via this function to always
-check for both. However, the address check might be considered redundant, as we already have a global
-invariant that the role of libra root and TC can only be at a specific address.
-
 
 <pre><code><b>public</b> <b>fun</b> <a href="Roles.md#0x1_Roles_assert_libra_root">assert_libra_root</a>(account: &signer)
 </code></pre>
@@ -948,7 +890,7 @@ invariant that the role of libra root and TC can only be at a specific address.
 
 
 
-<pre><code>pragma opaque;
+<pre><code><b>pragma</b> opaque;
 <b>include</b> <a href="CoreAddresses.md#0x1_CoreAddresses_AbortsIfNotLibraRoot">CoreAddresses::AbortsIfNotLibraRoot</a>;
 <b>include</b> <a href="Roles.md#0x1_Roles_AbortsIfNotLibraRoot">AbortsIfNotLibraRoot</a>;
 </code></pre>
@@ -962,8 +904,6 @@ invariant that the role of libra root and TC can only be at a specific address.
 ## Function `assert_treasury_compliance`
 
 Assert that the account is treasury compliance.
-
-TODO(wrwg): see discussion for <code>assert_libra_root</code>
 
 
 <pre><code><b>public</b> <b>fun</b> <a href="Roles.md#0x1_Roles_assert_treasury_compliance">assert_treasury_compliance</a>(account: &signer)
@@ -995,7 +935,7 @@ TODO(wrwg): see discussion for <code>assert_libra_root</code>
 
 
 
-<pre><code>pragma opaque;
+<pre><code><b>pragma</b> opaque;
 <b>include</b> <a href="Roles.md#0x1_Roles_AbortsIfNotTreasuryCompliance">AbortsIfNotTreasuryCompliance</a>;
 </code></pre>
 
@@ -1038,7 +978,7 @@ Assert that the account has the parent vasp role.
 
 
 
-<pre><code>pragma opaque;
+<pre><code><b>pragma</b> opaque;
 <b>include</b> <a href="Roles.md#0x1_Roles_AbortsIfNotParentVasp">AbortsIfNotParentVasp</a>;
 </code></pre>
 
@@ -1081,7 +1021,7 @@ Assert that the account has the designated dealer role.
 
 
 
-<pre><code>pragma opaque;
+<pre><code><b>pragma</b> opaque;
 <b>include</b> <a href="Roles.md#0x1_Roles_AbortsIfNotDesignatedDealer">AbortsIfNotDesignatedDealer</a>;
 </code></pre>
 
@@ -1124,8 +1064,8 @@ Assert that the account has the validator role.
 
 
 
-<pre><code>pragma opaque;
-<b>include</b> <a href="Roles.md#0x1_Roles_AbortsIfNotValidator">AbortsIfNotValidator</a>;
+<pre><code><b>pragma</b> opaque;
+<b>include</b> <a href="Roles.md#0x1_Roles_AbortsIfNotValidator">AbortsIfNotValidator</a>{validator_addr: <a href="Signer.md#0x1_Signer_address_of">Signer::address_of</a>(validator_account)};
 </code></pre>
 
 
@@ -1167,8 +1107,8 @@ Assert that the account has the validator operator role.
 
 
 
-<pre><code>pragma opaque;
-<b>include</b> <a href="Roles.md#0x1_Roles_AbortsIfNotValidatorOperator">AbortsIfNotValidatorOperator</a>;
+<pre><code><b>pragma</b> opaque;
+<b>include</b> <a href="Roles.md#0x1_Roles_AbortsIfNotValidatorOperator">AbortsIfNotValidatorOperator</a>{validator_operator_addr: <a href="Signer.md#0x1_Signer_spec_address_of">Signer::spec_address_of</a>(validator_operator_account)};
 </code></pre>
 
 
@@ -1211,7 +1151,7 @@ Assert that the account has either the parent vasp or designated dealer role.
 
 
 
-<pre><code>pragma opaque;
+<pre><code><b>pragma</b> opaque;
 <b>include</b> <a href="Roles.md#0x1_Roles_AbortsIfNotParentVaspOrDesignatedDealer">AbortsIfNotParentVaspOrDesignatedDealer</a>;
 </code></pre>
 
@@ -1254,15 +1194,193 @@ Assert that the account has either the parent vasp or designated dealer role.
 
 
 
-<pre><code>pragma opaque;
+<pre><code><b>pragma</b> opaque;
 <b>include</b> <a href="Roles.md#0x1_Roles_AbortsIfNotParentVaspOrChildVasp">AbortsIfNotParentVaspOrChildVasp</a>;
 </code></pre>
 
 
 
-<a name="@Helper_Functions_and_Schemas_0"></a>
+</details>
 
-#### Helper Functions and Schemas
+<a name="@Module_Specification_1"></a>
+
+## Module Specification
+
+
+
+<a name="@Persistence_of_Roles_2"></a>
+
+### Persistence of Roles
+
+Once an account at an address is granted a role it will remain an account role for all time.
+
+
+<pre><code><b>invariant</b> <b>update</b> [<b>global</b>]
+    <b>forall</b> addr: address <b>where</b> <b>old</b>(<b>exists</b>&lt;<a href="Roles.md#0x1_Roles_RoleId">RoleId</a>&gt;(addr)):
+        <b>exists</b>&lt;<a href="Roles.md#0x1_Roles_RoleId">RoleId</a>&gt;(addr) && <b>old</b>(<b>global</b>&lt;<a href="Roles.md#0x1_Roles_RoleId">RoleId</a>&gt;(addr).role_id) == <b>global</b>&lt;<a href="Roles.md#0x1_Roles_RoleId">RoleId</a>&gt;(addr).role_id;
+</code></pre>
+
+
+
+<a name="@Access_Control_3"></a>
+
+### Access Control
+
+In this section, the conditions from the [requirements for access control][ACCESS_CONTROL] are systematically
+applied to the functions in this module. While some of those conditions have already been
+included in individual function specifications, listing them here again gives additional
+assurance that that all requirements are covered.
+
+The LibraRoot role is only granted in genesis [[A1]][ROLE]. A new <code><a href="Roles.md#0x1_Roles_RoleId">RoleId</a></code> with <code><a href="Roles.md#0x1_Roles_LIBRA_ROOT_ROLE_ID">LIBRA_ROOT_ROLE_ID</a></code> is only
+published through <code>grant_libra_root_role</code> which aborts if it is not invoked in genesis.
+
+
+<pre><code><b>apply</b> <a href="Roles.md#0x1_Roles_ThisRoleIsNotNewlyPublished">ThisRoleIsNotNewlyPublished</a>{this: <a href="Roles.md#0x1_Roles_LIBRA_ROOT_ROLE_ID">LIBRA_ROOT_ROLE_ID</a>} <b>to</b> * <b>except</b> grant_libra_root_role, grant_role;
+<b>apply</b> <a href="LibraTimestamp.md#0x1_LibraTimestamp_AbortsIfNotGenesis">LibraTimestamp::AbortsIfNotGenesis</a> <b>to</b> grant_libra_root_role;
+</code></pre>
+
+
+TreasuryCompliance role is only granted in genesis [[A2]][ROLE]. A new <code><a href="Roles.md#0x1_Roles_RoleId">RoleId</a></code> with <code><a href="Roles.md#0x1_Roles_TREASURY_COMPLIANCE_ROLE_ID">TREASURY_COMPLIANCE_ROLE_ID</a></code> is only
+published through <code>grant_treasury_compliance_role</code> which aborts if it is not invoked in genesis.
+
+
+<pre><code><b>apply</b> <a href="Roles.md#0x1_Roles_ThisRoleIsNotNewlyPublished">ThisRoleIsNotNewlyPublished</a>{this: <a href="Roles.md#0x1_Roles_TREASURY_COMPLIANCE_ROLE_ID">TREASURY_COMPLIANCE_ROLE_ID</a>} <b>to</b> *
+    <b>except</b> grant_treasury_compliance_role, grant_role;
+<b>apply</b> <a href="LibraTimestamp.md#0x1_LibraTimestamp_AbortsIfNotGenesis">LibraTimestamp::AbortsIfNotGenesis</a> <b>to</b> grant_treasury_compliance_role;
+</code></pre>
+
+
+Validator roles are only granted by LibraRoot [[A3]][ROLE]. A new <code><a href="Roles.md#0x1_Roles_RoleId">RoleId</a></code> with <code><a href="Roles.md#0x1_Roles_VALIDATOR_ROLE_ID">VALIDATOR_ROLE_ID</a></code> is only
+published through <code>new_validator_role</code> which aborts if <code>creating_account</code> does not have the LibraRoot role.
+
+
+<pre><code><b>apply</b> <a href="Roles.md#0x1_Roles_ThisRoleIsNotNewlyPublished">ThisRoleIsNotNewlyPublished</a>{this: <a href="Roles.md#0x1_Roles_VALIDATOR_ROLE_ID">VALIDATOR_ROLE_ID</a>} <b>to</b> * <b>except</b> new_validator_role, grant_role;
+<b>apply</b> <a href="Roles.md#0x1_Roles_AbortsIfNotLibraRoot">AbortsIfNotLibraRoot</a>{account: creating_account} <b>to</b> new_validator_role;
+</code></pre>
+
+
+ValidatorOperator roles are only granted by LibraRoot [[A4]][ROLE]. A new <code><a href="Roles.md#0x1_Roles_RoleId">RoleId</a></code> with <code><a href="Roles.md#0x1_Roles_VALIDATOR_OPERATOR_ROLE_ID">VALIDATOR_OPERATOR_ROLE_ID</a></code> is only
+published through <code>new_validator_operator_role</code> which aborts if <code>creating_account</code> does not have the LibraRoot role.
+
+
+<pre><code><b>apply</b> <a href="Roles.md#0x1_Roles_ThisRoleIsNotNewlyPublished">ThisRoleIsNotNewlyPublished</a>{this: <a href="Roles.md#0x1_Roles_VALIDATOR_OPERATOR_ROLE_ID">VALIDATOR_OPERATOR_ROLE_ID</a>} <b>to</b> *
+    <b>except</b> new_validator_operator_role, grant_role;
+<b>apply</b> <a href="Roles.md#0x1_Roles_AbortsIfNotLibraRoot">AbortsIfNotLibraRoot</a>{account: creating_account} <b>to</b> new_validator_operator_role;
+</code></pre>
+
+
+DesignatedDealer roles are only granted by TreasuryCompliance [[A5]][ROLE]. A new <code><a href="Roles.md#0x1_Roles_RoleId">RoleId</a></code> with <code><a href="Roles.md#0x1_Roles_DESIGNATED_DEALER_ROLE_ID">DESIGNATED_DEALER_ROLE_ID</a>()</code>
+is only published through <code>new_designated_dealer_role</code> which aborts if <code>creating_account</code> does not have the
+TreasuryCompliance role.
+
+
+<pre><code><b>apply</b> <a href="Roles.md#0x1_Roles_ThisRoleIsNotNewlyPublished">ThisRoleIsNotNewlyPublished</a>{this: <a href="Roles.md#0x1_Roles_DESIGNATED_DEALER_ROLE_ID">DESIGNATED_DEALER_ROLE_ID</a>} <b>to</b> *
+    <b>except</b> new_designated_dealer_role, grant_role;
+<b>apply</b> <a href="Roles.md#0x1_Roles_AbortsIfNotTreasuryCompliance">AbortsIfNotTreasuryCompliance</a>{account: creating_account} <b>to</b> new_designated_dealer_role;
+</code></pre>
+
+
+ParentVASP roles are only granted by LibraRoot [[A6]][ROLE]. A new <code><a href="Roles.md#0x1_Roles_RoleId">RoleId</a></code> with <code><a href="Roles.md#0x1_Roles_PARENT_VASP_ROLE_ID">PARENT_VASP_ROLE_ID</a>()</code> is only
+published through <code>new_parent_vasp_role</code> which aborts if <code>creating_account</code> does not have the TreasuryCompliance role.
+
+
+<pre><code><b>apply</b> <a href="Roles.md#0x1_Roles_ThisRoleIsNotNewlyPublished">ThisRoleIsNotNewlyPublished</a>{this: <a href="Roles.md#0x1_Roles_PARENT_VASP_ROLE_ID">PARENT_VASP_ROLE_ID</a>} <b>to</b> * <b>except</b> new_parent_vasp_role, grant_role;
+<b>apply</b> <a href="Roles.md#0x1_Roles_AbortsIfNotTreasuryCompliance">AbortsIfNotTreasuryCompliance</a>{account: creating_account} <b>to</b> new_parent_vasp_role;
+</code></pre>
+
+
+ChildVASP roles are only granted by ParentVASP [[A7]][ROLE]. A new <code><a href="Roles.md#0x1_Roles_RoleId">RoleId</a></code> with <code><a href="Roles.md#0x1_Roles_CHILD_VASP_ROLE_ID">CHILD_VASP_ROLE_ID</a></code> is only
+published through <code>new_child_vasp_role</code> which aborts if <code>creating_account</code> does not have the ParentVASP role.
+
+
+<pre><code><b>apply</b> <a href="Roles.md#0x1_Roles_ThisRoleIsNotNewlyPublished">ThisRoleIsNotNewlyPublished</a>{this: <a href="Roles.md#0x1_Roles_CHILD_VASP_ROLE_ID">CHILD_VASP_ROLE_ID</a>} <b>to</b> * <b>except</b> new_child_vasp_role, grant_role;
+<b>apply</b> <a href="Roles.md#0x1_Roles_AbortsIfNotParentVasp">AbortsIfNotParentVasp</a>{account: creating_account} <b>to</b> new_child_vasp_role;
+</code></pre>
+
+
+The LibraRoot role is globally unique [[B1]][ROLE], and is published at LIBRA_ROOT_ADDRESS [[C1]][ROLE].
+In other words, a <code><a href="Roles.md#0x1_Roles_RoleId">RoleId</a></code> with <code><a href="Roles.md#0x1_Roles_LIBRA_ROOT_ROLE_ID">LIBRA_ROOT_ROLE_ID</a></code> uniquely exists at <code>LIBRA_ROOT_ADDRESS</code>.
+
+
+<pre><code><b>invariant</b> [<b>global</b>, isolated] <b>forall</b> addr: address <b>where</b> <a href="Roles.md#0x1_Roles_spec_has_libra_root_role_addr">spec_has_libra_root_role_addr</a>(addr):
+  addr == <a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>();
+<b>invariant</b> [<b>global</b>, isolated]
+    <a href="LibraTimestamp.md#0x1_LibraTimestamp_is_operating">LibraTimestamp::is_operating</a>() ==&gt; <a href="Roles.md#0x1_Roles_spec_has_libra_root_role_addr">spec_has_libra_root_role_addr</a>(<a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>());
+</code></pre>
+
+
+The TreasuryCompliance role is globally unique [[B2]][ROLE], and is published at TREASURY_COMPLIANCE_ADDRESS [[C2]][ROLE].
+In other words, a <code><a href="Roles.md#0x1_Roles_RoleId">RoleId</a></code> with <code><a href="Roles.md#0x1_Roles_TREASURY_COMPLIANCE_ROLE_ID">TREASURY_COMPLIANCE_ROLE_ID</a></code> uniquely exists at <code>TREASURY_COMPLIANCE_ADDRESS</code>.
+
+
+<pre><code><b>invariant</b> [<b>global</b>, isolated] <b>forall</b> addr: address <b>where</b> <a href="Roles.md#0x1_Roles_spec_has_treasury_compliance_role_addr">spec_has_treasury_compliance_role_addr</a>(addr):
+  addr == <a href="CoreAddresses.md#0x1_CoreAddresses_TREASURY_COMPLIANCE_ADDRESS">CoreAddresses::TREASURY_COMPLIANCE_ADDRESS</a>();
+<b>invariant</b> [<b>global</b>, isolated]
+    <a href="LibraTimestamp.md#0x1_LibraTimestamp_is_operating">LibraTimestamp::is_operating</a>() ==&gt;
+        <a href="Roles.md#0x1_Roles_spec_has_treasury_compliance_role_addr">spec_has_treasury_compliance_role_addr</a>(<a href="CoreAddresses.md#0x1_CoreAddresses_TREASURY_COMPLIANCE_ADDRESS">CoreAddresses::TREASURY_COMPLIANCE_ADDRESS</a>());
+</code></pre>
+
+
+LibraRoot cannot have balances [[D1]][ROLE].
+
+
+<pre><code><b>invariant</b> [<b>global</b>, isolated] <b>forall</b> addr: address <b>where</b> <a href="Roles.md#0x1_Roles_spec_has_libra_root_role_addr">spec_has_libra_root_role_addr</a>(addr):
+    !<a href="Roles.md#0x1_Roles_spec_can_hold_balance_addr">spec_can_hold_balance_addr</a>(addr);
+</code></pre>
+
+
+TreasuryCompliance cannot have balances [[D2]][ROLE].
+
+
+<pre><code><b>invariant</b> [<b>global</b>, isolated] <b>forall</b> addr: address <b>where</b> <a href="Roles.md#0x1_Roles_spec_has_treasury_compliance_role_addr">spec_has_treasury_compliance_role_addr</a>(addr):
+    !<a href="Roles.md#0x1_Roles_spec_can_hold_balance_addr">spec_can_hold_balance_addr</a>(addr);
+</code></pre>
+
+
+Validator cannot have balances [[D3]][ROLE].
+
+
+<pre><code><b>invariant</b> [<b>global</b>, isolated] <b>forall</b> addr: address <b>where</b> <a href="Roles.md#0x1_Roles_spec_has_validator_role_addr">spec_has_validator_role_addr</a>(addr):
+    !<a href="Roles.md#0x1_Roles_spec_can_hold_balance_addr">spec_can_hold_balance_addr</a>(addr);
+</code></pre>
+
+
+ValidatorOperator cannot have balances [[D4]][ROLE].
+
+
+<pre><code><b>invariant</b> [<b>global</b>, isolated] <b>forall</b> addr: address <b>where</b> <a href="Roles.md#0x1_Roles_spec_has_validator_operator_role_addr">spec_has_validator_operator_role_addr</a>(addr):
+    !<a href="Roles.md#0x1_Roles_spec_can_hold_balance_addr">spec_can_hold_balance_addr</a>(addr);
+</code></pre>
+
+
+DesignatedDealer have balances [[D5]][ROLE].
+
+
+<pre><code><b>invariant</b> [<b>global</b>, isolated] <b>forall</b> addr: address <b>where</b> <a href="Roles.md#0x1_Roles_spec_has_designated_dealer_role_addr">spec_has_designated_dealer_role_addr</a>(addr):
+    <a href="Roles.md#0x1_Roles_spec_can_hold_balance_addr">spec_can_hold_balance_addr</a>(addr);
+</code></pre>
+
+
+ParentVASP have balances [[D6]][ROLE].
+
+
+<pre><code><b>invariant</b> [<b>global</b>, isolated] <b>forall</b> addr: address <b>where</b> <a href="Roles.md#0x1_Roles_spec_has_parent_VASP_role_addr">spec_has_parent_VASP_role_addr</a>(addr):
+    <a href="Roles.md#0x1_Roles_spec_can_hold_balance_addr">spec_can_hold_balance_addr</a>(addr);
+</code></pre>
+
+
+ChildVASP have balances [[D7]][ROLE].
+
+
+<pre><code><b>invariant</b> [<b>global</b>, isolated] <b>forall</b> addr: address <b>where</b> <a href="Roles.md#0x1_Roles_spec_has_child_VASP_role_addr">spec_has_child_VASP_role_addr</a>(addr):
+    <a href="Roles.md#0x1_Roles_spec_can_hold_balance_addr">spec_can_hold_balance_addr</a>(addr);
+</code></pre>
+
+
+
+<a name="@Helper_Functions_and_Schemas_4"></a>
+
+### Helper Functions and Schemas
 
 
 
@@ -1366,7 +1484,7 @@ Assert that the account has either the parent vasp or designated dealer role.
 
 <pre><code><b>schema</b> <a href="Roles.md#0x1_Roles_AbortsIfNotParentVasp">AbortsIfNotParentVasp</a> {
     account: signer;
-    <a name="0x1_Roles_addr$39"></a>
+    <a name="0x1_Roles_addr$38"></a>
     <b>let</b> addr = <a href="Signer.md#0x1_Signer_spec_address_of">Signer::spec_address_of</a>(account);
     <b>aborts_if</b> !<b>exists</b>&lt;<a href="Roles.md#0x1_Roles_RoleId">RoleId</a>&gt;(addr) <b>with</b> <a href="Errors.md#0x1_Errors_NOT_PUBLISHED">Errors::NOT_PUBLISHED</a>;
     <b>aborts_if</b> <b>global</b>&lt;<a href="Roles.md#0x1_Roles_RoleId">RoleId</a>&gt;(addr).role_id != <a href="Roles.md#0x1_Roles_PARENT_VASP_ROLE_ID">PARENT_VASP_ROLE_ID</a> <b>with</b> <a href="Errors.md#0x1_Errors_REQUIRES_ROLE">Errors::REQUIRES_ROLE</a>;
@@ -1381,7 +1499,7 @@ Assert that the account has either the parent vasp or designated dealer role.
 
 <pre><code><b>schema</b> <a href="Roles.md#0x1_Roles_AbortsIfNotDesignatedDealer">AbortsIfNotDesignatedDealer</a> {
     account: signer;
-    <a name="0x1_Roles_addr$40"></a>
+    <a name="0x1_Roles_addr$39"></a>
     <b>let</b> addr = <a href="Signer.md#0x1_Signer_spec_address_of">Signer::spec_address_of</a>(account);
     <b>aborts_if</b> !<b>exists</b>&lt;<a href="Roles.md#0x1_Roles_RoleId">RoleId</a>&gt;(addr) <b>with</b> <a href="Errors.md#0x1_Errors_NOT_PUBLISHED">Errors::NOT_PUBLISHED</a>;
     <b>aborts_if</b> <b>global</b>&lt;<a href="Roles.md#0x1_Roles_RoleId">RoleId</a>&gt;(addr).role_id != <a href="Roles.md#0x1_Roles_DESIGNATED_DEALER_ROLE_ID">DESIGNATED_DEALER_ROLE_ID</a> <b>with</b> <a href="Errors.md#0x1_Errors_REQUIRES_ROLE">Errors::REQUIRES_ROLE</a>;
@@ -1396,10 +1514,10 @@ Assert that the account has either the parent vasp or designated dealer role.
 
 <pre><code><b>schema</b> <a href="Roles.md#0x1_Roles_AbortsIfNotParentVaspOrDesignatedDealer">AbortsIfNotParentVaspOrDesignatedDealer</a> {
     account: signer;
-    <a name="0x1_Roles_addr$41"></a>
+    <a name="0x1_Roles_addr$40"></a>
     <b>let</b> addr = <a href="Signer.md#0x1_Signer_spec_address_of">Signer::spec_address_of</a>(account);
     <b>aborts_if</b> !<b>exists</b>&lt;<a href="Roles.md#0x1_Roles_RoleId">RoleId</a>&gt;(addr) <b>with</b> <a href="Errors.md#0x1_Errors_NOT_PUBLISHED">Errors::NOT_PUBLISHED</a>;
-    <a name="0x1_Roles_role_id$42"></a>
+    <a name="0x1_Roles_role_id$41"></a>
     <b>let</b> role_id = <b>global</b>&lt;<a href="Roles.md#0x1_Roles_RoleId">RoleId</a>&gt;(addr).role_id;
     <b>aborts_if</b> role_id != <a href="Roles.md#0x1_Roles_PARENT_VASP_ROLE_ID">PARENT_VASP_ROLE_ID</a> && role_id != <a href="Roles.md#0x1_Roles_DESIGNATED_DEALER_ROLE_ID">DESIGNATED_DEALER_ROLE_ID</a>
         <b>with</b> <a href="Errors.md#0x1_Errors_REQUIRES_ROLE">Errors::REQUIRES_ROLE</a>;
@@ -1414,10 +1532,10 @@ Assert that the account has either the parent vasp or designated dealer role.
 
 <pre><code><b>schema</b> <a href="Roles.md#0x1_Roles_AbortsIfNotParentVaspOrChildVasp">AbortsIfNotParentVaspOrChildVasp</a> {
     account: signer;
-    <a name="0x1_Roles_addr$43"></a>
+    <a name="0x1_Roles_addr$42"></a>
     <b>let</b> addr = <a href="Signer.md#0x1_Signer_spec_address_of">Signer::spec_address_of</a>(account);
     <b>aborts_if</b> !<b>exists</b>&lt;<a href="Roles.md#0x1_Roles_RoleId">RoleId</a>&gt;(addr) <b>with</b> <a href="Errors.md#0x1_Errors_NOT_PUBLISHED">Errors::NOT_PUBLISHED</a>;
-    <a name="0x1_Roles_role_id$44"></a>
+    <a name="0x1_Roles_role_id$43"></a>
     <b>let</b> role_id = <b>global</b>&lt;<a href="Roles.md#0x1_Roles_RoleId">RoleId</a>&gt;(addr).role_id;
     <b>aborts_if</b> role_id != <a href="Roles.md#0x1_Roles_PARENT_VASP_ROLE_ID">PARENT_VASP_ROLE_ID</a> && role_id != <a href="Roles.md#0x1_Roles_CHILD_VASP_ROLE_ID">CHILD_VASP_ROLE_ID</a>
         <b>with</b> <a href="Errors.md#0x1_Errors_REQUIRES_ROLE">Errors::REQUIRES_ROLE</a>;
@@ -1431,9 +1549,7 @@ Assert that the account has either the parent vasp or designated dealer role.
 
 
 <pre><code><b>schema</b> <a href="Roles.md#0x1_Roles_AbortsIfNotValidator">AbortsIfNotValidator</a> {
-    validator_account: signer;
-    <a name="0x1_Roles_validator_addr$45"></a>
-    <b>let</b> validator_addr = <a href="Signer.md#0x1_Signer_spec_address_of">Signer::spec_address_of</a>(validator_account);
+    validator_addr: address;
     <b>aborts_if</b> !<b>exists</b>&lt;<a href="Roles.md#0x1_Roles_RoleId">RoleId</a>&gt;(validator_addr) <b>with</b> <a href="Errors.md#0x1_Errors_NOT_PUBLISHED">Errors::NOT_PUBLISHED</a>;
     <b>aborts_if</b> <b>global</b>&lt;<a href="Roles.md#0x1_Roles_RoleId">RoleId</a>&gt;(validator_addr).role_id != <a href="Roles.md#0x1_Roles_VALIDATOR_ROLE_ID">VALIDATOR_ROLE_ID</a> <b>with</b> <a href="Errors.md#0x1_Errors_REQUIRES_ROLE">Errors::REQUIRES_ROLE</a>;
 }
@@ -1446,9 +1562,7 @@ Assert that the account has either the parent vasp or designated dealer role.
 
 
 <pre><code><b>schema</b> <a href="Roles.md#0x1_Roles_AbortsIfNotValidatorOperator">AbortsIfNotValidatorOperator</a> {
-    validator_operator_account: signer;
-    <a name="0x1_Roles_validator_operator_addr$46"></a>
-    <b>let</b> validator_operator_addr = <a href="Signer.md#0x1_Signer_spec_address_of">Signer::spec_address_of</a>(validator_operator_account);
+    validator_operator_addr: address;
     <b>aborts_if</b> !<b>exists</b>&lt;<a href="Roles.md#0x1_Roles_RoleId">RoleId</a>&gt;(validator_operator_addr) <b>with</b> <a href="Errors.md#0x1_Errors_NOT_PUBLISHED">Errors::NOT_PUBLISHED</a>;
     <b>aborts_if</b> <b>global</b>&lt;<a href="Roles.md#0x1_Roles_RoleId">RoleId</a>&gt;(validator_operator_addr).role_id != <a href="Roles.md#0x1_Roles_VALIDATOR_OPERATOR_ROLE_ID">VALIDATOR_OPERATOR_ROLE_ID</a>
         <b>with</b> <a href="Errors.md#0x1_Errors_REQUIRES_ROLE">Errors::REQUIRES_ROLE</a>;
@@ -1456,174 +1570,7 @@ Assert that the account has either the parent vasp or designated dealer role.
 </code></pre>
 
 
-
-<a name="@Persistence_of_Roles_1"></a>
-
-#### Persistence of Roles
-
-**Informally:** Once an account at address <code>A</code> is granted a role <code>R</code> it
-will remain an account with role <code>R</code> for all time.
-
-
-<pre><code><b>invariant</b> <b>update</b> [<b>global</b>]
-    <b>forall</b> addr: address <b>where</b> <b>old</b>(<b>exists</b>&lt;<a href="Roles.md#0x1_Roles_RoleId">RoleId</a>&gt;(addr)):
-        <b>exists</b>&lt;<a href="Roles.md#0x1_Roles_RoleId">RoleId</a>&gt;(addr) && <b>old</b>(<b>global</b>&lt;<a href="Roles.md#0x1_Roles_RoleId">RoleId</a>&gt;(addr).role_id) == <b>global</b>&lt;<a href="Roles.md#0x1_Roles_RoleId">RoleId</a>&gt;(addr).role_id;
-</code></pre>
-
-
-
-<a name="@Conditions_from_Requirements_2"></a>
-
-#### Conditions from Requirements
-
-In this section, the conditions from the requirements for access control are systematically
-applied to the functions in this module. While some of those conditions have already been
-included in individual function specifications, listing them here again gives additional
-assurance that that all requirements are covered.
-TODO(wrwg): link to requirements
-
-The LibraRoot role is only granted in genesis [B2]. A new <code><a href="Roles.md#0x1_Roles_RoleId">RoleId</a></code> with <code><a href="Roles.md#0x1_Roles_LIBRA_ROOT_ROLE_ID">LIBRA_ROOT_ROLE_ID</a></code> is only
-published through <code>grant_libra_root_role</code> which aborts if it is not invoked in genesis.
-
-
-<pre><code><b>apply</b> <a href="Roles.md#0x1_Roles_ThisRoleIsNotNewlyPublished">ThisRoleIsNotNewlyPublished</a>{this: <a href="Roles.md#0x1_Roles_LIBRA_ROOT_ROLE_ID">LIBRA_ROOT_ROLE_ID</a>} <b>to</b> * <b>except</b> grant_libra_root_role, grant_role;
-<b>apply</b> <a href="LibraTimestamp.md#0x1_LibraTimestamp_AbortsIfNotGenesis">LibraTimestamp::AbortsIfNotGenesis</a> <b>to</b> grant_libra_root_role;
-</code></pre>
-
-
-TreasuryCompliance role is only granted in genesis [B3]. A new <code><a href="Roles.md#0x1_Roles_RoleId">RoleId</a></code> with <code><a href="Roles.md#0x1_Roles_TREASURY_COMPLIANCE_ROLE_ID">TREASURY_COMPLIANCE_ROLE_ID</a></code> is only
-published through <code>grant_treasury_compliance_role</code> which aborts if it is not invoked in genesis.
-
-
-<pre><code><b>apply</b> <a href="Roles.md#0x1_Roles_ThisRoleIsNotNewlyPublished">ThisRoleIsNotNewlyPublished</a>{this: <a href="Roles.md#0x1_Roles_TREASURY_COMPLIANCE_ROLE_ID">TREASURY_COMPLIANCE_ROLE_ID</a>} <b>to</b> * <b>except</b> grant_treasury_compliance_role, grant_role;
-<b>apply</b> <a href="LibraTimestamp.md#0x1_LibraTimestamp_AbortsIfNotGenesis">LibraTimestamp::AbortsIfNotGenesis</a> <b>to</b> grant_treasury_compliance_role;
-</code></pre>
-
-
-Validator roles are only granted by LibraRoot [B4]. A new <code><a href="Roles.md#0x1_Roles_RoleId">RoleId</a></code> with <code><a href="Roles.md#0x1_Roles_VALIDATOR_ROLE_ID">VALIDATOR_ROLE_ID</a></code> is only
-published through <code>new_validator_role</code> which aborts if <code>creating_account</code> does not have the LibraRoot role.
-
-
-<pre><code><b>apply</b> <a href="Roles.md#0x1_Roles_ThisRoleIsNotNewlyPublished">ThisRoleIsNotNewlyPublished</a>{this: <a href="Roles.md#0x1_Roles_VALIDATOR_ROLE_ID">VALIDATOR_ROLE_ID</a>} <b>to</b> * <b>except</b> new_validator_role, grant_role;
-<b>apply</b> <a href="Roles.md#0x1_Roles_AbortsIfNotLibraRoot">AbortsIfNotLibraRoot</a>{account: creating_account} <b>to</b> new_validator_role;
-</code></pre>
-
-
-ValidatorOperator roles are only granted by LibraRoot [B5]. A new <code><a href="Roles.md#0x1_Roles_RoleId">RoleId</a></code> with <code><a href="Roles.md#0x1_Roles_VALIDATOR_OPERATOR_ROLE_ID">VALIDATOR_OPERATOR_ROLE_ID</a></code> is only
-published through <code>new_validator_operator_role</code> which aborts if <code>creating_account</code> does not have the LibraRoot role.
-
-
-<pre><code><b>apply</b> <a href="Roles.md#0x1_Roles_ThisRoleIsNotNewlyPublished">ThisRoleIsNotNewlyPublished</a>{this: <a href="Roles.md#0x1_Roles_VALIDATOR_OPERATOR_ROLE_ID">VALIDATOR_OPERATOR_ROLE_ID</a>} <b>to</b> * <b>except</b> new_validator_operator_role, grant_role;
-<b>apply</b> <a href="Roles.md#0x1_Roles_AbortsIfNotLibraRoot">AbortsIfNotLibraRoot</a>{account: creating_account} <b>to</b> new_validator_operator_role;
-</code></pre>
-
-
-DesignatedDealer roles are only granted by TreasuryCompliance [B6]. A new <code><a href="Roles.md#0x1_Roles_RoleId">RoleId</a></code> with <code><a href="Roles.md#0x1_Roles_DESIGNATED_DEALER_ROLE_ID">DESIGNATED_DEALER_ROLE_ID</a>()</code>
-is only published through <code>new_designated_dealer_role</code> which aborts if <code>creating_account</code> does not have the
-TreasuryCompliance role.
-
-
-<pre><code><b>apply</b> <a href="Roles.md#0x1_Roles_ThisRoleIsNotNewlyPublished">ThisRoleIsNotNewlyPublished</a>{this: <a href="Roles.md#0x1_Roles_DESIGNATED_DEALER_ROLE_ID">DESIGNATED_DEALER_ROLE_ID</a>} <b>to</b> * <b>except</b> new_designated_dealer_role, grant_role;
-<b>apply</b> <a href="Roles.md#0x1_Roles_AbortsIfNotTreasuryCompliance">AbortsIfNotTreasuryCompliance</a>{account: creating_account} <b>to</b> new_designated_dealer_role;
-</code></pre>
-
-
-ParentVASP roles are only granted by LibraRoot [B7]. A new <code><a href="Roles.md#0x1_Roles_RoleId">RoleId</a></code> with <code><a href="Roles.md#0x1_Roles_PARENT_VASP_ROLE_ID">PARENT_VASP_ROLE_ID</a>()</code> is only
-published through <code>new_parent_vasp_role</code> which aborts if <code>creating_account</code> does not have the TreasuryCompliance role.
-
-
-<pre><code><b>apply</b> <a href="Roles.md#0x1_Roles_ThisRoleIsNotNewlyPublished">ThisRoleIsNotNewlyPublished</a>{this: <a href="Roles.md#0x1_Roles_PARENT_VASP_ROLE_ID">PARENT_VASP_ROLE_ID</a>} <b>to</b> * <b>except</b> new_parent_vasp_role, grant_role;
-<b>apply</b> <a href="Roles.md#0x1_Roles_AbortsIfNotTreasuryCompliance">AbortsIfNotTreasuryCompliance</a>{account: creating_account} <b>to</b> new_parent_vasp_role;
-</code></pre>
-
-
-ChildVASP roles are only granted by ParentVASP [B8]. A new <code><a href="Roles.md#0x1_Roles_RoleId">RoleId</a></code> with <code><a href="Roles.md#0x1_Roles_CHILD_VASP_ROLE_ID">CHILD_VASP_ROLE_ID</a></code> is only
-published through <code>new_child_vasp_role</code> which aborts if <code>creating_account</code> does not have the ParentVASP role.
-
-
-<pre><code><b>apply</b> <a href="Roles.md#0x1_Roles_ThisRoleIsNotNewlyPublished">ThisRoleIsNotNewlyPublished</a>{this: <a href="Roles.md#0x1_Roles_CHILD_VASP_ROLE_ID">CHILD_VASP_ROLE_ID</a>} <b>to</b> * <b>except</b> new_child_vasp_role, grant_role;
-<b>apply</b> <a href="Roles.md#0x1_Roles_AbortsIfNotParentVasp">AbortsIfNotParentVasp</a>{account: creating_account} <b>to</b> new_child_vasp_role;
-</code></pre>
-
-
-The LibraRoot role is globally unique [C2], and is published at LIBRA_ROOT_ADDRESS [D2].
-In other words, a <code><a href="Roles.md#0x1_Roles_RoleId">RoleId</a></code> with <code><a href="Roles.md#0x1_Roles_LIBRA_ROOT_ROLE_ID">LIBRA_ROOT_ROLE_ID</a></code> uniquely exists at <code>LIBRA_ROOT_ADDRESS</code>.
-
-
-<pre><code><b>invariant</b> [<b>global</b>, isolated] <b>forall</b> addr: address <b>where</b> <a href="Roles.md#0x1_Roles_spec_has_libra_root_role_addr">spec_has_libra_root_role_addr</a>(addr):
-  addr == <a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>();
-<b>invariant</b> [<b>global</b>, isolated]
-    <a href="LibraTimestamp.md#0x1_LibraTimestamp_is_operating">LibraTimestamp::is_operating</a>() ==&gt; <a href="Roles.md#0x1_Roles_spec_has_libra_root_role_addr">spec_has_libra_root_role_addr</a>(<a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>());
-</code></pre>
-
-
-The TreasuryCompliance role is globally unique [C3], and is published at TREASURY_COMPLIANCE_ADDRESS [D3].
-In other words, a <code><a href="Roles.md#0x1_Roles_RoleId">RoleId</a></code> with <code><a href="Roles.md#0x1_Roles_TREASURY_COMPLIANCE_ROLE_ID">TREASURY_COMPLIANCE_ROLE_ID</a></code> uniquely exists at <code>TREASURY_COMPLIANCE_ADDRESS</code>.
-
-
-<pre><code><b>invariant</b> [<b>global</b>, isolated] <b>forall</b> addr: address <b>where</b> <a href="Roles.md#0x1_Roles_spec_has_treasury_compliance_role_addr">spec_has_treasury_compliance_role_addr</a>(addr):
-  addr == <a href="CoreAddresses.md#0x1_CoreAddresses_TREASURY_COMPLIANCE_ADDRESS">CoreAddresses::TREASURY_COMPLIANCE_ADDRESS</a>();
-<b>invariant</b> [<b>global</b>, isolated]
-    <a href="LibraTimestamp.md#0x1_LibraTimestamp_is_operating">LibraTimestamp::is_operating</a>() ==&gt;
-        <a href="Roles.md#0x1_Roles_spec_has_treasury_compliance_role_addr">spec_has_treasury_compliance_role_addr</a>(<a href="CoreAddresses.md#0x1_CoreAddresses_TREASURY_COMPLIANCE_ADDRESS">CoreAddresses::TREASURY_COMPLIANCE_ADDRESS</a>());
-</code></pre>
-
-
-LibraRoot cannot have balances [E2].
-
-
-<pre><code><b>invariant</b> [<b>global</b>, isolated] <b>forall</b> addr: address <b>where</b> <a href="Roles.md#0x1_Roles_spec_has_libra_root_role_addr">spec_has_libra_root_role_addr</a>(addr):
-    !<a href="Roles.md#0x1_Roles_spec_can_hold_balance_addr">spec_can_hold_balance_addr</a>(addr);
-</code></pre>
-
-
-TreasuryCompliance cannot have balances [E3].
-
-
-<pre><code><b>invariant</b> [<b>global</b>, isolated] <b>forall</b> addr: address <b>where</b> <a href="Roles.md#0x1_Roles_spec_has_treasury_compliance_role_addr">spec_has_treasury_compliance_role_addr</a>(addr):
-    !<a href="Roles.md#0x1_Roles_spec_can_hold_balance_addr">spec_can_hold_balance_addr</a>(addr);
-</code></pre>
-
-
-Validator cannot have balances [E4].
-
-
-<pre><code><b>invariant</b> [<b>global</b>, isolated] <b>forall</b> addr: address <b>where</b> <a href="Roles.md#0x1_Roles_spec_has_validator_role_addr">spec_has_validator_role_addr</a>(addr):
-    !<a href="Roles.md#0x1_Roles_spec_can_hold_balance_addr">spec_can_hold_balance_addr</a>(addr);
-</code></pre>
-
-
-ValidatorOperator cannot have balances [E5].
-
-
-<pre><code><b>invariant</b> [<b>global</b>, isolated] <b>forall</b> addr: address <b>where</b> <a href="Roles.md#0x1_Roles_spec_has_validator_operator_role_addr">spec_has_validator_operator_role_addr</a>(addr):
-    !<a href="Roles.md#0x1_Roles_spec_can_hold_balance_addr">spec_can_hold_balance_addr</a>(addr);
-</code></pre>
-
-
-DesignatedDealer have balances [E6].
-
-
-<pre><code><b>invariant</b> [<b>global</b>, isolated] <b>forall</b> addr: address <b>where</b> <a href="Roles.md#0x1_Roles_spec_has_designated_dealer_role_addr">spec_has_designated_dealer_role_addr</a>(addr):
-    <a href="Roles.md#0x1_Roles_spec_can_hold_balance_addr">spec_can_hold_balance_addr</a>(addr);
-</code></pre>
-
-
-ParentVASP have balances [E7].
-
-
-<pre><code><b>invariant</b> [<b>global</b>, isolated] <b>forall</b> addr: address <b>where</b> <a href="Roles.md#0x1_Roles_spec_has_parent_VASP_role_addr">spec_has_parent_VASP_role_addr</a>(addr):
-    <a href="Roles.md#0x1_Roles_spec_can_hold_balance_addr">spec_can_hold_balance_addr</a>(addr);
-</code></pre>
-
-
-ChildVASP have balances [E8].
-
-
-<pre><code><b>invariant</b> [<b>global</b>, isolated] <b>forall</b> addr: address <b>where</b> <a href="Roles.md#0x1_Roles_spec_has_child_VASP_role_addr">spec_has_child_VASP_role_addr</a>(addr):
-    <a href="Roles.md#0x1_Roles_spec_can_hold_balance_addr">spec_can_hold_balance_addr</a>(addr);
-</code></pre>
-
-
-
-</details>
+[//]: # ("File containing references which can be used from documentation")
+[ACCESS_CONTROL]: https://github.com/libra/lip/blob/master/lips/lip-2.md
+[ROLE]: https://github.com/libra/lip/blob/master/lips/lip-2.md#roles
+[PERMISSION]: https://github.com/libra/lip/blob/master/lips/lip-2.md#permissions

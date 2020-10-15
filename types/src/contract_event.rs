@@ -3,9 +3,10 @@
 
 use crate::{
     account_config::{
-        BaseUrlRotationEvent, BurnEvent, CancelBurnEvent, ComplianceKeyRotationEvent, MintEvent,
-        NewBlockEvent, NewEpochEvent, PreburnEvent, ReceivedMintEvent, ReceivedPaymentEvent,
-        SentPaymentEvent, ToLBRExchangeRateUpdateEvent, UpgradeEvent,
+        AdminTransactionEvent, BaseUrlRotationEvent, BurnEvent, CancelBurnEvent,
+        ComplianceKeyRotationEvent, CreateAccountEvent, MintEvent, NewBlockEvent, NewEpochEvent,
+        PreburnEvent, ReceivedMintEvent, ReceivedPaymentEvent, SentPaymentEvent,
+        ToLBRExchangeRateUpdateEvent,
     },
     event::EventKey,
     ledger_info::LedgerInfo,
@@ -190,12 +191,12 @@ impl TryFrom<&ContractEvent> for CancelBurnEvent {
     }
 }
 
-impl TryFrom<&ContractEvent> for UpgradeEvent {
+impl TryFrom<&ContractEvent> for AdminTransactionEvent {
     type Error = Error;
 
     fn try_from(event: &ContractEvent) -> Result<Self> {
         if event.type_tag != TypeTag::Struct(Self::struct_tag()) {
-            anyhow::bail!("Expected UpgradeEvent")
+            anyhow::bail!("Expected AdminTransactionEvent")
         }
         Self::try_from_bytes(&event.event_data)
     }
@@ -238,6 +239,16 @@ impl TryFrom<&ContractEvent> for BaseUrlRotationEvent {
     fn try_from(event: &ContractEvent) -> Result<Self> {
         if event.type_tag != TypeTag::Struct(Self::struct_tag()) {
             anyhow::bail!("Expected BaseUrlRotationEvent")
+        }
+        Self::try_from_bytes(&event.event_data)
+    }
+}
+
+impl TryFrom<&ContractEvent> for CreateAccountEvent {
+    type Error = Error;
+    fn try_from(event: &ContractEvent) -> Result<Self> {
+        if event.type_tag != TypeTag::Struct(Self::struct_tag()) {
+            anyhow::bail!("Expected CreateAccountEvent")
         }
         Self::try_from_bytes(&event.event_data)
     }

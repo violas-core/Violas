@@ -28,10 +28,12 @@ use 0x1::SlidingNonce;
 /// # Common Abort Conditions
 /// | Error Category              | Error Reason                            | Description                                                                                |
 /// | ----------------            | --------------                          | -------------                                                                              |
+/// | `Errors::NOT_PUBLISHED`     | `SlidingNonce::ESLIDING_NONCE`          | A `SlidingNonce` resource is not published under `lr_account`.                             |
 /// | `Errors::INVALID_ARGUMENT`  | `SlidingNonce::ENONCE_TOO_OLD`          | The `sliding_nonce` is too old and it's impossible to determine if it's duplicated or not. |
 /// | `Errors::INVALID_ARGUMENT`  | `SlidingNonce::ENONCE_TOO_NEW`          | The `sliding_nonce` is too far in the future.                                              |
 /// | `Errors::INVALID_ARGUMENT`  | `SlidingNonce::ENONCE_ALREADY_RECORDED` | The `sliding_nonce` has been previously recorded.                                          |
 /// | `Errors::REQUIRES_ADDRESS`  | `CoreAddresses::ELIBRA_ROOT`            | The sending account is not the Libra Root account.                                         |
+/// | `Errors::REQUIRES_ROLE`     | `Roles::ELIBRA_ROOT`                    | The sending account is not the Libra Root account.                                         |
 /// | `Errors::ALREADY_PUBLISHED` | `Roles::EROLE_ID`                       | The `new_account_address` address is already taken.                                        |
 ///
 /// # Related Scripts
@@ -57,5 +59,34 @@ fun create_validator_account(
         auth_key_prefix,
         human_name,
     );
+  }
+
+
+/// Only Libra root may create Validator accounts
+/// Authentication: ValidatorAccountAbortsIf includes AbortsIfNotLibraRoot.
+/// Checks that above table includes all error categories.
+/// The verifier finds an abort that is not documented, and cannot occur in practice:
+/// * REQUIRES_ROLE comes from `Roles::assert_libra_root`. However, assert_libra_root checks the literal
+///   Libra root address before checking the role, and the role abort is unreachable in practice, since
+///   only Libra root has the Libra root role.
+spec fun create_validator_account {
+    use 0x1::Errors;
+    use 0x1::Roles;
+
+    include LibraAccount::TransactionChecks{sender: lr_account}; // properties checked by the prologue.
+    include SlidingNonce::RecordNonceAbortsIf{seq_nonce: sliding_nonce, account: lr_account};
+    include LibraAccount::CreateValidatorAccountAbortsIf;
+    include LibraAccount::CreateValidatorAccountEnsures;
+
+    aborts_with [check]
+        Errors::INVALID_ARGUMENT,
+        Errors::NOT_PUBLISHED,
+        Errors::REQUIRES_ADDRESS,
+        Errors::ALREADY_PUBLISHED,
+        Errors::REQUIRES_ROLE;
+
+    /// Access Control
+    /// Only the Libra Root account can create Validator accounts [[A3]][ROLE].
+    include Roles::AbortsIfNotLibraRoot{account: lr_account};
 }
 }

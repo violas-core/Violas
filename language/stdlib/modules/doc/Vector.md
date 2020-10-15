@@ -3,33 +3,49 @@
 
 # Module `0x1::Vector`
 
-A variable-sized container that can hold both unrestricted types and resources.
+A variable-sized container that can hold any type. Indexing is 0-based, and
+vectors are growable. This module has many native functions.
+Verification of modules that use this one uses model functions that are implemented
+directly in Boogie. The specification language has built-in functions operations such
+as <code>singleton_vector</code>. There are some helper functions defined here for specifications in other
+modules as well.
+
+>Note: We did not verify most of the
+Move functions here because many have loops, requiring loop invariants to prove, and
+the return on investment didn't seem worth it for these simple functions.
 
 
--  [Const <code><a href="Vector.md#0x1_Vector_EINDEX_OUT_OF_BOUNDS">EINDEX_OUT_OF_BOUNDS</a></code>](#0x1_Vector_EINDEX_OUT_OF_BOUNDS)
--  [Function <code>empty</code>](#0x1_Vector_empty)
--  [Function <code>length</code>](#0x1_Vector_length)
--  [Function <code>borrow</code>](#0x1_Vector_borrow)
--  [Function <code>push_back</code>](#0x1_Vector_push_back)
--  [Function <code>borrow_mut</code>](#0x1_Vector_borrow_mut)
--  [Function <code>pop_back</code>](#0x1_Vector_pop_back)
--  [Function <code>destroy_empty</code>](#0x1_Vector_destroy_empty)
--  [Function <code>swap</code>](#0x1_Vector_swap)
--  [Function <code>singleton</code>](#0x1_Vector_singleton)
--  [Function <code>reverse</code>](#0x1_Vector_reverse)
--  [Function <code>append</code>](#0x1_Vector_append)
--  [Function <code>is_empty</code>](#0x1_Vector_is_empty)
--  [Function <code>contains</code>](#0x1_Vector_contains)
--  [Function <code>index_of</code>](#0x1_Vector_index_of)
--  [Function <code>remove</code>](#0x1_Vector_remove)
--  [Function <code>swap_remove</code>](#0x1_Vector_swap_remove)
--  [Module Specification](#@Module_Specification_0)
-    -  [Module specifications](#@Module_specifications_1)
+-  [Constants](#@Constants_0)
+-  [Function `empty`](#0x1_Vector_empty)
+-  [Function `length`](#0x1_Vector_length)
+-  [Function `borrow`](#0x1_Vector_borrow)
+-  [Function `push_back`](#0x1_Vector_push_back)
+-  [Function `borrow_mut`](#0x1_Vector_borrow_mut)
+-  [Function `pop_back`](#0x1_Vector_pop_back)
+-  [Function `destroy_empty`](#0x1_Vector_destroy_empty)
+-  [Function `swap`](#0x1_Vector_swap)
+-  [Function `singleton`](#0x1_Vector_singleton)
+-  [Function `reverse`](#0x1_Vector_reverse)
+-  [Function `append`](#0x1_Vector_append)
+-  [Function `is_empty`](#0x1_Vector_is_empty)
+-  [Function `contains`](#0x1_Vector_contains)
+-  [Function `index_of`](#0x1_Vector_index_of)
+-  [Function `remove`](#0x1_Vector_remove)
+-  [Function `swap_remove`](#0x1_Vector_swap_remove)
+-  [Module Specification](#@Module_Specification_1)
+    -  [Helper Functions](#@Helper_Functions_2)
+
+
+<pre><code></code></pre>
+
+
+
+<a name="@Constants_0"></a>
+
+## Constants
 
 
 <a name="0x1_Vector_EINDEX_OUT_OF_BOUNDS"></a>
-
-## Const `EINDEX_OUT_OF_BOUNDS`
 
 The index into the vector is out of bounds
 
@@ -318,7 +334,7 @@ Reverses the order of the elements in the vector <code>v</code> in place.
 
 
 
-<pre><code>pragma intrinsic = <b>true</b>;
+<pre><code><b>pragma</b> intrinsic = <b>true</b>;
 </code></pre>
 
 
@@ -329,7 +345,7 @@ Reverses the order of the elements in the vector <code>v</code> in place.
 
 ## Function `append`
 
-Moves all of the elements of the <code>other</code> vector into the <code>lhs</code> vector.
+Pushes all of the elements of the <code>other</code> vector into the <code>lhs</code> vector.
 
 
 <pre><code><b>public</b> <b>fun</b> <a href="Vector.md#0x1_Vector_append">append</a>&lt;Element&gt;(lhs: &<b>mut</b> vector&lt;Element&gt;, other: vector&lt;Element&gt;)
@@ -357,7 +373,7 @@ Moves all of the elements of the <code>other</code> vector into the <code>lhs</c
 
 
 
-<pre><code>pragma intrinsic = <b>true</b>;
+<pre><code><b>pragma</b> intrinsic = <b>true</b>;
 </code></pre>
 
 
@@ -394,7 +410,7 @@ Return <code><b>true</b></code> if the vector <code>v</code> has no elements and
 
 
 
-<pre><code>pragma intrinsic = <b>true</b>;
+<pre><code><b>pragma</b> intrinsic = <b>true</b>;
 </code></pre>
 
 
@@ -437,7 +453,7 @@ Return true if <code>e</code> is in the vector <code>v</code>.
 
 
 
-<pre><code>pragma intrinsic = <b>true</b>;
+<pre><code><b>pragma</b> intrinsic = <b>true</b>;
 </code></pre>
 
 
@@ -481,7 +497,7 @@ Otherwise, returns <code>(<b>false</b>, 0)</code>.
 
 
 
-<pre><code>pragma intrinsic = <b>true</b>;
+<pre><code><b>pragma</b> intrinsic = <b>true</b>;
 </code></pre>
 
 
@@ -526,7 +542,7 @@ Aborts if <code>i</code> is out of bounds.
 
 
 
-<pre><code>pragma intrinsic = <b>true</b>;
+<pre><code><b>pragma</b> intrinsic = <b>true</b>;
 </code></pre>
 
 
@@ -567,24 +583,25 @@ Aborts if <code>i</code> is out of bounds.
 
 
 
-<pre><code>pragma intrinsic = <b>true</b>;
+<pre><code><b>pragma</b> intrinsic = <b>true</b>;
 </code></pre>
 
 
 
 </details>
 
-<a name="@Module_Specification_0"></a>
+<a name="@Module_Specification_1"></a>
 
 ## Module Specification
 
 
-<a name="@Module_specifications_1"></a>
 
-### Module specifications
+<a name="@Helper_Functions_2"></a>
+
+### Helper Functions
 
 
-Auxiliary function to check whether a vector contains an element.
+Check whether a vector contains an element.
 
 
 <a name="0x1_Vector_spec_contains"></a>
@@ -596,7 +613,7 @@ Auxiliary function to check whether a vector contains an element.
 </code></pre>
 
 
-Auxiliary function to check if <code>v1</code> is equal to the result of adding <code>e</code> at the end of <code>v2</code>
+Check if <code>v1</code> is equal to the result of adding <code>e</code> at the end of <code>v2</code>
 
 
 <a name="0x1_Vector_eq_push_back"></a>
@@ -610,7 +627,7 @@ Auxiliary function to check if <code>v1</code> is equal to the result of adding 
 </code></pre>
 
 
-Auxiliary function to check if <code>v</code> is equal to the result of concatenating <code>v1</code> and <code>v2</code>
+Check if <code>v</code> is equal to the result of concatenating <code>v1</code> and <code>v2</code>
 
 
 <a name="0x1_Vector_eq_append"></a>
@@ -621,9 +638,23 @@ Auxiliary function to check if <code>v</code> is equal to the result of concaten
     v[0..len(v1)] == v1 &&
     v[len(v1)..len(v)] == v2
 }
+</code></pre>
+
+
+Check <code>v1</code> is equal to the result of removing the first element of <code>v2</code>
+
+
 <a name="0x1_Vector_eq_pop_front"></a>
-<b>define</b> <a href="Vector.md#0x1_Vector_eq_pop_front">eq_pop_front</a>&lt;Element&gt;(v1: vector&lt;Element&gt;, v2: vector&lt;Element&gt;): bool {
+
+
+<pre><code><b>define</b> <a href="Vector.md#0x1_Vector_eq_pop_front">eq_pop_front</a>&lt;Element&gt;(v1: vector&lt;Element&gt;, v2: vector&lt;Element&gt;): bool {
     len(v1) + 1 == len(v2) &&
     v1 == v2[1..len(v2)]
 }
 </code></pre>
+
+
+[//]: # ("File containing references which can be used from documentation")
+[ACCESS_CONTROL]: https://github.com/libra/lip/blob/master/lips/lip-2.md
+[ROLE]: https://github.com/libra/lip/blob/master/lips/lip-2.md#roles
+[PERMISSION]: https://github.com/libra/lip/blob/master/lips/lip-2.md#permissions

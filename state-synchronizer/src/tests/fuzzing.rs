@@ -17,6 +17,7 @@ use libra_config::{
     config::{NodeConfig, PeerNetworkId, RoleType},
     network_id::{NetworkId, NodeNetworkId},
 };
+use libra_infallible::RwLock;
 use libra_types::{
     ledger_info::LedgerInfoWithSignatures, transaction::TransactionListWithProof,
     waypoint::Waypoint, PeerId,
@@ -32,11 +33,7 @@ use proptest::{
     prelude::*,
     strategy::Strategy,
 };
-use std::{
-    collections::HashMap,
-    num::NonZeroUsize,
-    sync::{Arc, RwLock},
-};
+use std::{collections::HashMap, num::NonZeroUsize, sync::Arc};
 
 static PEER_ID: Lazy<PeerId> = Lazy::new(|| PeerId::new([0u8; PeerId::LENGTH]));
 
@@ -55,7 +52,7 @@ pub fn test_state_sync_msg_fuzzer_impl(msg: StateSynchronizerMsg) {
     let (mempool_sender, _mempool_receiver) = mpsc::channel(1_024);
     let config = NodeConfig::default_for_validator();
 
-    let (signers, validator_info, _keys) = SynchronizerEnvHelper::initial_setup(1);
+    let (signers, validator_info, _keys, _addrs) = SynchronizerEnvHelper::initial_setup(1);
     let genesis_li = SynchronizerEnvHelper::genesis_li(&validator_info);
     let storage_inner = MockStorage::new(genesis_li, signers[0].clone());
     let initial_state = storage_inner.get_local_storage_state();

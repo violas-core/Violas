@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use libra_metrics::{
-    register_histogram, register_int_counter, register_int_counter_vec, register_int_gauge,
-    Histogram, IntCounter, IntCounterVec, IntGauge,
+    register_histogram, register_int_counter, register_int_counter_vec, Histogram, IntCounter,
+    IntCounterVec,
 };
 use once_cell::sync::Lazy;
 
@@ -38,10 +38,10 @@ pub static SYSTEM_TRANSACTIONS_EXECUTED: Lazy<IntCounter> = Lazy::new(|| {
     .unwrap()
 });
 
-pub static BLOCK_TRANSACTION_COUNT: Lazy<IntGauge> = Lazy::new(|| {
-    register_int_gauge!(
-        "libra_vm_block_transaction_count",
-        "Number of transaction per block"
+pub static BLOCK_TRANSACTION_COUNT: Lazy<Histogram> = Lazy::new(|| {
+    register_histogram!(
+        "libra_vm_num_txns_per_block",
+        "Number of transactions per block"
     )
     .unwrap()
 });
@@ -49,7 +49,7 @@ pub static BLOCK_TRANSACTION_COUNT: Lazy<IntGauge> = Lazy::new(|| {
 pub static TXN_TOTAL_SECONDS: Lazy<Histogram> = Lazy::new(|| {
     register_histogram!(
         "libra_vm_txn_total_seconds",
-        "Histogram of total time per transaction"
+        "Execution time per user transaction"
     )
     .unwrap()
 });
@@ -57,17 +57,13 @@ pub static TXN_TOTAL_SECONDS: Lazy<Histogram> = Lazy::new(|| {
 pub static TXN_VALIDATION_SECONDS: Lazy<Histogram> = Lazy::new(|| {
     register_histogram!(
         "libra_vm_txn_validation_seconds",
-        "Histogram of validation time per transaction"
+        "Validation time per user transaction"
     )
     .unwrap()
 });
 
 pub static TXN_GAS_USAGE: Lazy<Histogram> = Lazy::new(|| {
-    register_histogram!(
-        "libra_vm_txn_gas_usage",
-        "Histogram for the gas used for txns"
-    )
-    .unwrap()
+    register_histogram!("libra_vm_txn_gas_usage", "Gas used per transaction").unwrap()
 });
 
 /// Count the number of critical errors. This is not intended for display

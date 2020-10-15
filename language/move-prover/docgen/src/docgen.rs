@@ -77,6 +77,7 @@ const WEAK_KEYWORDS: &[&str] = &[
     "include",
     "mut",
     "old",
+    "pragma",
     "pack",
     "unpack",
     "update",
@@ -111,10 +112,10 @@ pub struct DocgenOptions {
     pub output_directory: String,
     /// In which directories to look for references.
     pub doc_path: Vec<String>,
-    /// An optional path to a file containing a template for a root document for the generated
+    /// A list of paths to files containing templates for root documents for the generated
     /// documentation.
     ///
-    /// The root document is a markdown file which contains placeholders for generated
+    /// A root document is a markdown file which contains placeholders for generated
     /// documentation content. It is also processed following the same rules than
     /// documentation comments in Move, including creation of cross-references and
     /// Move code highlighting.
@@ -134,7 +135,10 @@ pub struct DocgenOptions {
     /// For a module or script which is included in the root document, no
     /// separate file is generated. References between the included and the standalone
     /// module/script content work transparently.
-    pub root_doc_template: Option<String>,
+    pub root_doc_templates: Vec<String>,
+    /// An optional file containing reference definitions. The content of this file will
+    /// be added to each generated markdown doc.
+    pub references_file: Option<String>,
 }
 
 impl Default for DocgenOptions {
@@ -149,7 +153,8 @@ impl Default for DocgenOptions {
             collapsed_sections: true,
             output_directory: "doc".to_string(),
             doc_path: vec!["doc".to_string()],
-            root_doc_template: None,
+            root_doc_templates: vec![],
+            references_file: None,
         }
     }
 }
@@ -237,37 +242,40 @@ impl<'env> Docgen<'env> {
         // Compute missing information about schemas.
         self.compute_declared_schemas();
 
-        // If there is a root template, parse it.
-        let root_template = if let Some(file_name) = &self.options.root_doc_template {
-            let root_out_name = PathBuf::from(file_name)
-                .file_name()
-                .unwrap()
-                .to_str()
-                .unwrap()
-                .replace("_template", "");
-            match self.parse_root_template(file_name) {
-                Ok(elements) => Some((root_out_name, elements)),
-                Err(_) => {
-                    self.env.error(
-                        &self.env.unknown_loc(),
-                        &format!("cannot read root template `{}`", file_name),
-                    );
-                    None
+        // If there is a root templates, parse them.
+        let root_templates = self
+            .options
+            .root_doc_templates
+            .iter()
+            .filter_map(|file_name| {
+                let root_out_name = PathBuf::from(file_name)
+                    .file_name()
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+                    .replace("_template", "");
+                match self.parse_root_template(file_name) {
+                    Ok(elements) => Some((root_out_name, elements)),
+                    Err(_) => {
+                        self.env.error(
+                            &self.env.unknown_loc(),
+                            &format!("cannot read root template `{}`", file_name),
+                        );
+                        None
+                    }
                 }
-            }
-        } else {
-            None
-        };
+            })
+            .collect_vec();
 
         // Compute module infos.
-        self.compute_module_infos(&root_template);
+        self.compute_module_infos(&root_templates);
 
-        // If there is a root template, expand it.
-        if let Some((out_file, elements)) = root_template {
+        // Expand all root templates.
+        for (out_file, elements) in root_templates {
             self.expand_root_template(&out_file, elements);
         }
 
-        // Generate documentation for standalone modules which are not included in the template.
+        // Generate documentation for standalone modules which are not included in the templates.
         for (id, info) in self.infos.clone() {
             let m = self.env.get_module(id);
             if !info.is_included && !m.is_dependency() {
@@ -278,6 +286,29 @@ impl<'env> Docgen<'env> {
                     path.to_string_lossy().to_string(),
                     self.writer.extract_result(),
                 ));
+            }
+        }
+
+        // If there is a references_file, append it's content to each generated output.
+        if let Some(fname) = &self.options.references_file {
+            let mut content = String::new();
+            if File::open(fname)
+                .and_then(|mut file| file.read_to_string(&mut content))
+                .is_ok()
+            {
+                let trimmed_content = content.trim();
+                if !trimmed_content.is_empty() {
+                    for (_, out) in self.output.iter_mut() {
+                        out.push_str("\n\n");
+                        out.push_str(trimmed_content);
+                        out.push_str("\n");
+                    }
+                }
+            } else {
+                self.env.error(
+                    &self.env.unknown_loc(),
+                    &format!("cannot read references file `{}`", fname),
+                );
             }
         }
 
@@ -342,6 +373,7 @@ impl<'env> Docgen<'env> {
     /// Expand the root template.
     fn expand_root_template(&mut self, output_file_name: &str, elements: Vec<TemplateElement>) {
         self.writer = CodeWriter::new(self.env.unknown_loc());
+        *self.label_counter.borrow_mut() = 0;
         let mut toc_label = None;
         for elem in elements {
             match elem {
@@ -394,7 +426,7 @@ impl<'env> Docgen<'env> {
     }
 
     /// Compute ModuleInfo for all modules, considering root template content.
-    fn compute_module_infos(&mut self, template: &Option<(String, Vec<TemplateElement>)>) {
+    fn compute_module_infos(&mut self, templates: &[(String, Vec<TemplateElement>)]) {
         let mut out_dir = self.options.output_directory.to_string();
         if out_dir.is_empty() {
             out_dir = ".".to_string();
@@ -415,7 +447,7 @@ impl<'env> Docgen<'env> {
         };
         // First process infos for modules included via template.
         let mut included = BTreeSet::new();
-        if let Some((template_out_file, elements)) = template {
+        for (template_out_file, elements) in templates {
             for element in elements {
                 if let TemplateElement::IncludeModule(name) = element {
                     // TODO: currently we only support simple names, we may want to add support for
@@ -557,6 +589,29 @@ impl<'env> Docgen<'env> {
             None
         };
 
+        // Generate usage information.
+        // We currently only include modules used in bytecode -- including specs
+        // creates a large usage list because of schema inclusion quickly pulling in
+        // many modules.
+        self.begin_code();
+        let used_modules = module_env
+            .get_used_modules(/*include_specs*/ false)
+            .iter()
+            .filter(|id| **id != module_env.get_id())
+            .map(|id| {
+                module_env
+                    .env
+                    .get_module(*id)
+                    .get_name()
+                    .display_full(module_env.symbol_pool())
+                    .to_string()
+            })
+            .sorted();
+        for used_module in used_modules {
+            self.code_text(&format!("use {};", used_module));
+        }
+        self.end_code();
+
         let spec_block_map = self.organize_spec_blocks(module_env);
 
         if !module_env.get_structs().count() > 0 {
@@ -568,11 +623,9 @@ impl<'env> Docgen<'env> {
             }
         }
 
-        for c in module_env
-            .get_named_constants()
-            .sorted_by(|a, b| Ord::cmp(&a.get_loc(), &b.get_loc()))
-        {
-            self.gen_named_constant(&c);
+        if module_env.get_named_constant_count() > 0 {
+            // Introduce a Constant section
+            self.gen_named_constants();
         }
 
         let funs = module_env
@@ -674,7 +727,7 @@ impl<'env> Docgen<'env> {
         for (id, _) in sorted_infos {
             let module_env = self.env.get_module(*id);
             self.item_text(&format!(
-                "[{}]({})",
+                "[`{}`]({})",
                 module_env.get_name().display_full(module_env.symbol_pool()),
                 self.ref_for_module(&module_env)
             ))
@@ -682,16 +735,16 @@ impl<'env> Docgen<'env> {
         self.end_items();
     }
 
-    /// Generates documentation for a named constant
-    fn gen_named_constant(&self, const_env: &NamedConstantEnv<'_>) {
-        let name = const_env.get_name();
-        self.section_header(
-            &self.named_constant_title(const_env),
-            &self.label_for_module_item(&const_env.module_env, name),
-        );
+    /// Generates documentation for all named constants.
+    fn gen_named_constants(&self) {
+        self.section_header("Constants", &self.label_for_section("Constants"));
         self.increment_section_nest();
-        self.doc_text(const_env.get_doc());
-        self.code_block(&self.named_constant_display(const_env));
+        for const_env in self.current_module.as_ref().unwrap().get_named_constants() {
+            self.label(&self.label_for_module_item(&const_env.module_env, const_env.get_name()));
+            self.doc_text(const_env.get_doc());
+            self.code_block(&self.named_constant_display(&const_env));
+        }
+
         self.decrement_section_nest();
     }
 
@@ -723,11 +776,6 @@ impl<'env> Docgen<'env> {
             );
         }
         self.decrement_section_nest();
-    }
-
-    /// Returns "Const `N`"
-    fn named_constant_title(&self, const_env: &NamedConstantEnv<'_>) -> String {
-        format!("Const `{}`", self.name_string(const_env.get_name()))
     }
 
     /// Returns "Struct `N`" or "Resource `N`".
@@ -945,9 +993,12 @@ impl<'env> Docgen<'env> {
         for block in module_env.get_spec_block_infos() {
             let may_merge_with_current = match &block.target {
                 SpecBlockTarget::Schema(..) => true,
-                SpecBlockTarget::Module if !self.is_single_liner(&block.loc) => {
+                SpecBlockTarget::Module
+                    if !block.member_locs.is_empty() || !self.is_single_liner(&block.loc) =>
+                {
                     // This is a bit of a hack: if spec module is on a single line,
-                    // we consider it as a marker to switch doc context back to module level.
+                    // we consider it as a marker to switch doc context back to module level,
+                    // otherwise (the case in this branch), we merge it with the predecessor.
                     true
                 }
                 _ => false,
@@ -1438,7 +1489,7 @@ impl<'env> Docgen<'env> {
 
     /// Emit an item.
     fn item_text(&self, text: &str) {
-        emitln!(self.writer, "-  {}", self.decorate_text(text));
+        emitln!(self.writer, "-  {}", text);
     }
 
     /// Begin a definition list.
@@ -1508,7 +1559,11 @@ impl<'env> Docgen<'env> {
                 ))
                 .unwrap_or("");
             let newl_at = source_before.rfind('\n').unwrap_or(0);
-            let indent = source_before.len() - newl_at - 1;
+            let mut indent = source_before.len() - newl_at - 1;
+            if indent >= 4 && source_before.ends_with("spec ") {
+                // Special case for `spec define` and similar constructs.
+                indent -= 4;
+            }
             // Remove the indent from all lines.
             source
                 .lines()

@@ -1,33 +1,23 @@
 // Copyright (c) The Libra Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::compiler::compile_units;
+use crate::compiler::{as_module, as_script, compile_units};
 use move_core_types::{
     account_address::AccountAddress,
     gas_schedule::{GasAlgebra, GasUnits},
     identifier::Identifier,
     language_storage::{ModuleId, StructTag},
-    vm_status::StatusType,
+    vm_status::{StatusCode, StatusType},
 };
-use move_lang::compiled_unit::CompiledUnit;
-use move_vm_runtime::move_vm::MoveVM;
-use move_vm_test_utils::{convert_txn_effects_to_move_changeset_and_events, InMemoryStorage};
-use move_vm_types::gas_schedule::{zero_cost_schedule, CostStrategy};
-use vm::file_format::{CompiledModule, CompiledScript};
-
-fn as_module(unit: CompiledUnit) -> CompiledModule {
-    match unit {
-        CompiledUnit::Module { module, .. } => module,
-        CompiledUnit::Script { .. } => panic!("expected module got script"),
-    }
-}
-
-fn as_script(unit: CompiledUnit) -> CompiledScript {
-    match unit {
-        CompiledUnit::Module { .. } => panic!("expected script got module"),
-        CompiledUnit::Script { script, .. } => script,
-    }
-}
+use move_vm_runtime::{data_cache::RemoteCache, logging::NoContextLog, move_vm::MoveVM};
+use move_vm_test_utils::{
+    convert_txn_effects_to_move_changeset_and_events, ChangeSet, DeltaStorage, InMemoryStorage,
+};
+use move_vm_types::{
+    gas_schedule::{zero_cost_schedule, CostStrategy},
+    values::Value,
+};
+use vm::errors::{Location, PartialVMError, PartialVMResult, VMResult};
 
 const TEST_ADDR: AccountAddress = AccountAddress::new([42; AccountAddress::LENGTH]);
 
@@ -98,6 +88,7 @@ fn test_malformed_resource() {
 
     let vm = MoveVM::new();
 
+    let log_context = NoContextLog::new();
     let cost_table = zero_cost_schedule();
     let mut cost_strategy = CostStrategy::system(&cost_table, GasUnits::new(0));
 
@@ -111,6 +102,7 @@ fn test_malformed_resource() {
         vec![],
         vec![TEST_ADDR],
         &mut cost_strategy,
+        &log_context,
     )
     .unwrap();
     let (changeset, _) =
@@ -130,6 +122,7 @@ fn test_malformed_resource() {
             vec![],
             vec![TEST_ADDR],
             &mut cost_strategy,
+            &log_context,
         )
         .unwrap();
     }
@@ -157,9 +150,10 @@ fn test_malformed_resource() {
                 vec![],
                 vec![TEST_ADDR],
                 &mut cost_strategy,
+                &log_context,
             )
             .unwrap_err();
-        assert!(err.status_type() == StatusType::InvariantViolation);
+        assert_eq!(err.status_type(), StatusType::InvariantViolation);
     }
 }
 
@@ -182,6 +176,7 @@ fn test_malformed_module() {
 
     let module_id = ModuleId::new(TEST_ADDR, Identifier::new("M").unwrap());
     let fun_name = Identifier::new("foo").unwrap();
+    let log_context = NoContextLog::new();
     let cost_table = zero_cost_schedule();
     let mut cost_strategy = CostStrategy::system(&cost_table, GasUnits::new(0));
 
@@ -198,6 +193,7 @@ fn test_malformed_module() {
             vec![],
             TEST_ADDR,
             &mut cost_strategy,
+            &log_context,
         )
         .unwrap();
     }
@@ -225,9 +221,10 @@ fn test_malformed_module() {
                 vec![],
                 TEST_ADDR,
                 &mut cost_strategy,
+                &log_context,
             )
             .unwrap_err();
-        assert!(err.status_type() == StatusType::InvariantViolation);
+        assert_eq!(err.status_type(), StatusType::InvariantViolation);
     }
 }
 
@@ -243,6 +240,7 @@ fn test_unverifiable_module() {
     let mut units = compile_units(TEST_ADDR, &code).unwrap();
     let m = as_module(units.pop().unwrap());
 
+    let log_context = NoContextLog::new();
     let cost_table = zero_cost_schedule();
     let mut cost_strategy = CostStrategy::system(&cost_table, GasUnits::new(0));
     let module_id = ModuleId::new(TEST_ADDR, Identifier::new("M").unwrap());
@@ -266,6 +264,7 @@ fn test_unverifiable_module() {
             vec![],
             TEST_ADDR,
             &mut cost_strategy,
+            &log_context,
         )
         .unwrap();
     }
@@ -293,10 +292,11 @@ fn test_unverifiable_module() {
                 vec![],
                 TEST_ADDR,
                 &mut cost_strategy,
+                &log_context,
             )
             .unwrap_err();
 
-        assert!(err.status_type() == StatusType::InvariantViolation);
+        assert_eq!(err.status_type(), StatusType::InvariantViolation);
     }
 }
 
@@ -324,6 +324,7 @@ fn test_missing_module_dependency() {
     let mut blob_n = vec![];
     n.serialize(&mut blob_n).unwrap();
 
+    let log_context = NoContextLog::new();
     let cost_table = zero_cost_schedule();
     let mut cost_strategy = CostStrategy::system(&cost_table, GasUnits::new(0));
 
@@ -347,6 +348,7 @@ fn test_missing_module_dependency() {
             vec![],
             TEST_ADDR,
             &mut cost_strategy,
+            &log_context,
         )
         .unwrap();
     }
@@ -368,10 +370,11 @@ fn test_missing_module_dependency() {
                 vec![],
                 TEST_ADDR,
                 &mut cost_strategy,
+                &log_context,
             )
             .unwrap_err();
 
-        assert!(err.status_type() == StatusType::InvariantViolation);
+        assert_eq!(err.status_type(), StatusType::InvariantViolation);
     }
 }
 
@@ -399,6 +402,7 @@ fn test_malformed_module_denpency() {
     let mut blob_n = vec![];
     n.serialize(&mut blob_n).unwrap();
 
+    let log_context = NoContextLog::new();
     let cost_table = zero_cost_schedule();
     let mut cost_strategy = CostStrategy::system(&cost_table, GasUnits::new(0));
 
@@ -422,6 +426,7 @@ fn test_malformed_module_denpency() {
             vec![],
             TEST_ADDR,
             &mut cost_strategy,
+            &log_context,
         )
         .unwrap();
     }
@@ -449,10 +454,11 @@ fn test_malformed_module_denpency() {
                 vec![],
                 TEST_ADDR,
                 &mut cost_strategy,
+                &log_context,
             )
             .unwrap_err();
 
-        assert!(err.status_type() == StatusType::InvariantViolation);
+        assert_eq!(err.status_type(), StatusType::InvariantViolation);
     }
 }
 
@@ -478,6 +484,7 @@ fn test_unverifiable_module_dependency() {
     let mut blob_n = vec![];
     n.serialize(&mut blob_n).unwrap();
 
+    let log_context = NoContextLog::new();
     let cost_table = zero_cost_schedule();
     let mut cost_strategy = CostStrategy::system(&cost_table, GasUnits::new(0));
 
@@ -504,6 +511,7 @@ fn test_unverifiable_module_dependency() {
             vec![],
             TEST_ADDR,
             &mut cost_strategy,
+            &log_context,
         )
         .unwrap();
     }
@@ -532,9 +540,150 @@ fn test_unverifiable_module_dependency() {
                 vec![],
                 TEST_ADDR,
                 &mut cost_strategy,
+                &log_context,
             )
             .unwrap_err();
 
-        assert!(err.status_type() == StatusType::InvariantViolation);
+        assert_eq!(err.status_type(), StatusType::InvariantViolation);
+    }
+}
+
+struct BogusStorage {
+    bad_status_code: StatusCode,
+}
+
+impl RemoteCache for BogusStorage {
+    fn get_module(&self, _module_id: &ModuleId) -> VMResult<Option<Vec<u8>>> {
+        Err(PartialVMError::new(self.bad_status_code).finish(Location::Undefined))
+    }
+
+    fn get_resource(
+        &self,
+        _address: &AccountAddress,
+        _tag: &StructTag,
+    ) -> PartialVMResult<Option<Vec<u8>>> {
+        Err(PartialVMError::new(self.bad_status_code))
+    }
+}
+
+const LIST_OF_ERROR_CODES: &[StatusCode] = &[
+    StatusCode::UNKNOWN_VALIDATION_STATUS,
+    StatusCode::INVALID_SIGNATURE,
+    StatusCode::UNKNOWN_VERIFICATION_ERROR,
+    StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR,
+    StatusCode::UNKNOWN_BINARY_ERROR,
+    StatusCode::UNKNOWN_RUNTIME_STATUS,
+    StatusCode::UNKNOWN_STATUS,
+];
+
+#[test]
+fn test_storage_returns_bogus_error_when_loading_module() {
+    let log_context = NoContextLog::new();
+    let cost_table = zero_cost_schedule();
+    let mut cost_strategy = CostStrategy::system(&cost_table, GasUnits::new(0));
+    let module_id = ModuleId::new(TEST_ADDR, Identifier::new("N").unwrap());
+    let fun_name = Identifier::new("bar").unwrap();
+
+    for error_code in LIST_OF_ERROR_CODES {
+        let storage = BogusStorage {
+            bad_status_code: *error_code,
+        };
+        let vm = MoveVM::new();
+        let mut sess = vm.new_session(&storage);
+
+        let err = sess
+            .execute_function(
+                &module_id,
+                &fun_name,
+                vec![],
+                vec![],
+                TEST_ADDR,
+                &mut cost_strategy,
+                &log_context,
+            )
+            .unwrap_err();
+
+        assert_eq!(err.status_type(), StatusType::InvariantViolation);
+    }
+}
+
+#[test]
+fn test_storage_returns_bogus_error_when_loading_resource() {
+    let log_context = NoContextLog::new();
+    let cost_table = zero_cost_schedule();
+    let mut cost_strategy = CostStrategy::system(&cost_table, GasUnits::new(0));
+
+    let code = r#"
+        address 0x1 {
+            module Signer {
+                native public fun borrow_address(s: &signer): &address;
+
+                public fun address_of(s: &signer): address {
+                    *borrow_address(s)
+                }
+            }
+        }
+
+        module M {
+            use 0x1::Signer;
+
+            resource struct R {}
+
+            public fun foo() {}
+
+            public fun bar(sender: &signer) acquires R {
+                _ = borrow_global<R>(Signer::address_of(sender));
+            }
+        }
+    "#;
+
+    let mut units = compile_units(TEST_ADDR, &code).unwrap();
+    let m = as_module(units.pop().unwrap());
+    let s = as_module(units.pop().unwrap());
+    let mut m_blob = vec![];
+    let mut s_blob = vec![];
+    m.serialize(&mut m_blob).unwrap();
+    s.serialize(&mut s_blob).unwrap();
+    let mut delta = ChangeSet::new();
+    delta.publish_module(m.self_id(), m_blob).unwrap();
+    delta.publish_module(s.self_id(), s_blob).unwrap();
+
+    let m_id = m.self_id();
+    let foo_name = Identifier::new("foo").unwrap();
+    let bar_name = Identifier::new("bar").unwrap();
+
+    for error_code in LIST_OF_ERROR_CODES {
+        let storage = BogusStorage {
+            bad_status_code: *error_code,
+        };
+        let storage = DeltaStorage::new(&storage, &delta);
+
+        let vm = MoveVM::new();
+        let mut sess = vm.new_session(&storage);
+
+        sess.execute_function(
+            &m_id,
+            &foo_name,
+            vec![],
+            vec![],
+            TEST_ADDR,
+            &mut cost_strategy,
+            &log_context,
+        )
+        .unwrap();
+
+        let err = sess
+            .execute_function(
+                &m_id,
+                &bar_name,
+                vec![],
+                vec![Value::transaction_argument_signer_reference(TEST_ADDR)],
+                TEST_ADDR,
+                &mut cost_strategy,
+                &log_context,
+            )
+            .unwrap_err();
+
+        assert_eq!(err.status_type(), StatusType::InvariantViolation);
     }
 }

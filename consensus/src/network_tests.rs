@@ -17,6 +17,7 @@ use consensus_types::{
     vote_msg::VoteMsg,
 };
 use futures::{channel::mpsc, SinkExt, StreamExt};
+use libra_infallible::{Mutex, RwLock};
 use libra_types::{block_info::BlockInfo, PeerId};
 use network::{
     peer_manager::{
@@ -32,7 +33,7 @@ use network::{
 use std::{
     collections::{HashMap, HashSet},
     num::NonZeroUsize,
-    sync::{Arc, Mutex, RwLock},
+    sync::Arc,
     time::Duration,
 };
 use tokio::runtime::Handle;
@@ -132,24 +133,19 @@ impl NetworkPlayground {
                 // delivery, we'd have to spawn the sending behaviour on a
                 // separate task, which is inconvenient.
                 PeerManagerRequest::SendRpc(dst, outbound_req) => {
-                    let dst_twin_ids = author_to_twin_ids.read().unwrap().get_twin_ids(dst);
+                    let dst_twin_ids = author_to_twin_ids.read().get_twin_ids(dst);
 
                     let dst_twin_id = match dst_twin_ids.iter().find(|dst_twin_id| {
                         !drop_config
                             .read()
-                            .unwrap()
                             .is_message_dropped(&src_twin_id, dst_twin_id)
                     }) {
                         Some(id) => id,
                         None => continue, // drop rpc
                     };
 
-                    let mut node_consensus_tx = node_consensus_txs
-                        .lock()
-                        .unwrap()
-                        .get(&dst_twin_id)
-                        .unwrap()
-                        .clone();
+                    let mut node_consensus_tx =
+                        node_consensus_txs.lock().get(&dst_twin_id).unwrap().clone();
 
                     let inbound_req = InboundRpcRequest {
                         protocol_id: outbound_req.protocol_id,
@@ -186,11 +182,8 @@ impl NetworkPlayground {
         network_reqs_rx: libra_channel::Receiver<(PeerId, ProtocolId), PeerManagerRequest>,
         conn_mgr_reqs_rx: channel::Receiver<network::ConnectivityRequest>,
     ) {
-        self.node_consensus_txs
-            .lock()
-            .unwrap()
-            .insert(twin_id, consensus_tx);
-        self.drop_config.write().unwrap().add_node(twin_id);
+        self.node_consensus_txs.lock().insert(twin_id, consensus_tx);
+        self.drop_config.write().add_node(twin_id);
 
         self.extend_author_to_twin_ids(twin_id.author, twin_id);
 
@@ -218,7 +211,6 @@ impl NetworkPlayground {
         let mut node_consensus_tx = self
             .node_consensus_txs
             .lock()
-            .unwrap()
             .get(&dst_twin_id)
             .unwrap()
             .clone();
@@ -234,12 +226,10 @@ impl NetworkPlayground {
                 msg_notif
             ),
         };
-        node_consensus_tx
-            .push(
-                (src_twin_id.author, ProtocolId::ConsensusDirectSend),
-                msg_notif,
-            )
-            .unwrap();
+        let _ = node_consensus_tx.push(
+            (src_twin_id.author, ProtocolId::ConsensusDirectSend),
+            msg_notif,
+        );
         msg_copy
     }
 
@@ -323,19 +313,15 @@ impl NetworkPlayground {
     pub fn extend_author_to_twin_ids(&mut self, author: Author, twin_id: TwinId) {
         self.author_to_twin_ids
             .write()
-            .unwrap()
             .extend_author_to_twin_ids(author, twin_id);
     }
 
     pub fn get_twin_ids(&self, author: Author) -> Vec<TwinId> {
-        self.author_to_twin_ids.read().unwrap().get_twin_ids(author)
+        self.author_to_twin_ids.read().get_twin_ids(author)
     }
 
     fn is_message_dropped(&self, src: &TwinId, dst: &TwinId, msg: ConsensusMsg) -> bool {
-        self.drop_config
-            .read()
-            .unwrap()
-            .is_message_dropped(src, dst)
+        self.drop_config.read().is_message_dropped(src, dst)
             || Self::get_message_round(msg).map_or(false, |r| {
                 self.drop_config_round.is_message_dropped(src, dst, r)
             })
@@ -348,7 +334,6 @@ impl NetworkPlayground {
     ) -> bool {
         self.drop_config
             .write()
-            .unwrap()
             .split_network(&partition_first, &partition_second)
     }
 
@@ -483,11 +468,14 @@ impl DropConfigRound {
 mod tests {
     use super::*;
     use crate::network::NetworkTask;
+    use bytes::Bytes;
     use consensus_types::block_retrieval::{
         BlockRetrievalRequest, BlockRetrievalResponse, BlockRetrievalStatus,
     };
+    use futures::{channel::oneshot, future};
     use libra_crypto::HashValue;
     use libra_types::validator_verifier::random_validator_verifier;
+    use network::protocols::direct_send::Message;
 
     #[test]
     fn test_split_network_round() {
@@ -716,5 +704,67 @@ mod tests {
                 .unwrap();
             assert_eq!(response.status(), BlockRetrievalStatus::IdNotFound);
         });
+    }
+
+    #[test]
+    fn test_bad_message() {
+        let (mut peer_mgr_notifs_tx, peer_mgr_notifs_rx) =
+            libra_channel::new(QueueStyle::FIFO, NonZeroUsize::new(8).unwrap(), None);
+        let (connection_notifs_tx, connection_notifs_rx) =
+            libra_channel::new(QueueStyle::FIFO, NonZeroUsize::new(8).unwrap(), None);
+        let consensus_network_events =
+            ConsensusNetworkEvents::new(peer_mgr_notifs_rx, connection_notifs_rx);
+        let (self_sender, self_receiver) = channel::new_test(8);
+
+        let (network_task, mut network_receivers) =
+            NetworkTask::new(consensus_network_events, self_receiver);
+
+        let peer_id = PeerId::random();
+        let protocol_id = ProtocolId::ConsensusDirectSend;
+        let bad_msg = PeerManagerNotification::RecvMessage(
+            peer_id,
+            Message {
+                protocol_id,
+                mdata: Bytes::from_static(b"\xde\xad\xbe\xef"),
+            },
+        );
+
+        peer_mgr_notifs_tx
+            .push((peer_id, protocol_id), bad_msg)
+            .unwrap();
+
+        let liveness_check_msg = ConsensusMsg::BlockRetrievalRequest(Box::new(
+            BlockRetrievalRequest::new(HashValue::random(), 1),
+        ));
+
+        let protocol_id = ProtocolId::ConsensusRpc;
+        let (res_tx, _res_rx) = oneshot::channel();
+        let liveness_check_msg = PeerManagerNotification::RecvRpc(
+            peer_id,
+            InboundRpcRequest {
+                protocol_id,
+                data: Bytes::from(lcs::to_bytes(&liveness_check_msg).unwrap()),
+                res_tx,
+            },
+        );
+
+        peer_mgr_notifs_tx
+            .push((peer_id, protocol_id), liveness_check_msg)
+            .unwrap();
+
+        let f_check = async move {
+            assert!(network_receivers.block_retrieval.next().await.is_some());
+
+            drop(peer_mgr_notifs_tx);
+            drop(connection_notifs_tx);
+            drop(self_sender);
+
+            assert!(network_receivers.block_retrieval.next().await.is_none());
+            assert!(network_receivers.consensus_messages.next().await.is_none());
+        };
+        let f_network_task = network_task.start();
+
+        let mut runtime = consensus_runtime();
+        timed_block_on(&mut runtime, future::join(f_network_task, f_check));
     }
 }

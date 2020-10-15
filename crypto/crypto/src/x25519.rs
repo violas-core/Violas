@@ -29,9 +29,9 @@
 //! # }
 //! ```
 //!
-#[cfg(feature = "vanilla")]
+#[cfg(any(feature = "vanilla-u64", feature = "vanilla-u32"))]
 use vanilla_curve25519_dalek as curve25519_dalek;
-#[cfg(feature = "vanilla")]
+#[cfg(any(feature = "vanilla-u64", feature = "vanilla-u32"))]
 use vanilla_ed25519_dalek as ed25519_dalek;
 
 use crate::{
@@ -53,9 +53,9 @@ use proptest_derive::Arbitrary;
 // This makes it easier to uniformalize build dalek-x25519 in libra-core.
 //
 
-#[cfg(feature = "vanilla")]
+#[cfg(any(feature = "vanilla-u64", feature = "vanilla-u32"))]
 pub use vanilla_x25519_dalek as x25519_dalek;
-#[cfg(not(feature = "vanilla"))]
+#[cfg(not(any(feature = "vanilla-u64", feature = "vanilla-u32")))]
 pub use x25519_dalek;
 
 //
@@ -256,13 +256,13 @@ impl traits::ValidCryptoMaterial for PublicKey {
 
 impl std::fmt::Display for PublicKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "[X25519 public key: {}]", hex::encode(self.0))
+        write!(f, "{}", hex::encode(&self.0))
     }
 }
 
 impl std::fmt::Debug for PublicKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "[X25519 public key: {}]", hex::encode(self.0))
+        write!(f, "x25519::PublicKey({})", self)
     }
 }
 

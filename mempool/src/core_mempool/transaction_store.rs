@@ -334,6 +334,7 @@ impl TransactionStore {
 
     /// removes transaction from all indexes
     fn index_remove(&mut self, txn: &MempoolTransaction) {
+        counters::CORE_MEMPOOL_REMOVED_TXNS.inc();
         self.system_ttl_index.remove(&txn);
         self.expiration_time_index.remove(&txn);
         self.priority_index.remove(&txn);
@@ -348,18 +349,16 @@ impl TransactionStore {
         &mut self,
         timeline_id: u64,
         count: usize,
-    ) -> (Vec<(u64, SignedTransaction)>, u64) {
+    ) -> (Vec<SignedTransaction>, u64) {
         let mut batch = vec![];
         let mut last_timeline_id = timeline_id;
-        for (id, (address, sequence_number)) in
-            self.timeline_index.read_timeline(timeline_id, count)
-        {
+        for (address, sequence_number) in self.timeline_index.read_timeline(timeline_id, count) {
             if let Some(txn) = self
                 .transactions
                 .get_mut(&address)
                 .and_then(|txns| txns.get(&sequence_number))
             {
-                batch.push((id, txn.txn.clone()));
+                batch.push(txn.txn.clone());
                 if let TimelineState::Ready(timeline_id) = txn.timeline_state {
                     last_timeline_id = timeline_id;
                 }
@@ -368,27 +367,15 @@ impl TransactionStore {
         (batch, last_timeline_id)
     }
 
-    /// Returns transactions with timeline ID in `timeline_ids`
-    /// as list of (timeline_id, transaction)
-    pub(crate) fn filter_read_timeline(
-        &mut self,
-        timeline_ids: Vec<u64>,
-    ) -> Vec<(u64, SignedTransaction)> {
-        timeline_ids
-            .into_iter()
-            .filter_map(|timeline_id| {
-                if let Some((address, sequence_number)) =
-                    self.timeline_index.get_timeline_entry(timeline_id)
-                {
-                    if let Some(txn) = self
-                        .transactions
-                        .get_mut(&address)
-                        .and_then(|txns| txns.get(&sequence_number))
-                    {
-                        return Some((timeline_id, txn.txn.clone()));
-                    }
-                }
-                None
+    pub(crate) fn timeline_range(&mut self, start_id: u64, end_id: u64) -> Vec<SignedTransaction> {
+        self.timeline_index
+            .timeline_range(start_id, end_id)
+            .iter()
+            .filter_map(|(account, sequence_number)| {
+                self.transactions
+                    .get(account)
+                    .and_then(|txns| txns.get(sequence_number))
+                    .map(|txn| txn.txn.clone())
             })
             .collect()
     }
@@ -398,7 +385,7 @@ impl TransactionStore {
         &mut self,
         metrics_cache: &TtlCache<(AccountAddress, u64), SystemTime>,
     ) {
-        let now = libra_time::duration_since_epoch();
+        let now = libra_infallible::duration_since_epoch();
 
         self.gc(now, true, metrics_cache);
     }
@@ -486,6 +473,25 @@ impl TransactionStore {
 
     pub(crate) fn iter_queue(&self) -> PriorityQueueIter {
         self.priority_index.iter()
+    }
+
+    pub(crate) fn gen_snapshot(
+        &self,
+        metrics_cache: &TtlCache<(AccountAddress, u64), SystemTime>,
+    ) -> TxnsLog {
+        let mut txns_log = TxnsLog::new();
+        for (account, txns) in self.transactions.iter() {
+            for (seq_num, _txn) in txns.iter() {
+                let status = if self.parking_lot_index.contains(account, seq_num) {
+                    "parked"
+                } else {
+                    "ready"
+                };
+                let timestamp = metrics_cache.get(&(*account, *seq_num)).cloned();
+                txns_log.add_full_metadata(*account, *seq_num, status, timestamp);
+            }
+        }
+        txns_log
     }
 
     #[cfg(test)]

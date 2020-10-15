@@ -1,17 +1,16 @@
 // Copyright (c) The Libra Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::{test_utils::setup_swarm_and_client_proxy, workspace_builder};
-use libra_config::config::NodeConfig;
+use crate::{
+    test_utils::{libra_swarm_utils::get_libra_debugger, setup_swarm_and_client_proxy},
+    workspace_builder,
+};
 use libra_json_rpc::views::VMStatusView as JsonVMStatusView;
-use libra_transaction_replay::LibraDebugger;
 
 #[test]
 fn test_replay_tooling() {
     let (swarm, mut client_proxy) = setup_swarm_and_client_proxy(1, 0);
-    let validator_config = NodeConfig::load(&swarm.validator_swarm.config.config_files[0]).unwrap();
-    let swarm_rpc_endpoint = format!("http://localhost:{}", validator_config.rpc.address.port());
-    let json_debugger = LibraDebugger::json_rpc(swarm_rpc_endpoint.as_str()).unwrap();
+    let json_debugger = get_libra_debugger(&swarm.validator_swarm, 0);
 
     client_proxy.create_next_account(false).unwrap();
     client_proxy.create_next_account(false).unwrap();
@@ -42,7 +41,7 @@ fn test_replay_tooling() {
         .get_account_address_from_parameter("0")
         .unwrap();
     let script_path = workspace_builder::workspace_root()
-        .join("language/tools/transaction-replay/examples/account_exists.move");
+        .join("language/libra-tools/transaction-replay/examples/account_exists.move");
 
     let bisect_result = json_debugger
         .bisect_transactions_by_script(script_path.to_str().unwrap(), account, 0, txn.version)

@@ -36,13 +36,21 @@ fun add_currency_to_account<Currency>(account: &signer) {
 }
 spec fun add_currency_to_account {
     use 0x1::Errors;
+    use 0x1::Signer;
+    use 0x1::Roles;
 
+    include LibraAccount::TransactionChecks{sender: account}; // properties checked by the prologue.
     include LibraAccount::AddCurrencyAbortsIf<Currency>;
-    include LibraAccount::AddCurrencyEnsures<Currency>;
+    include LibraAccount::AddCurrencyEnsures<Currency>{addr: Signer::spec_address_of(account)};
 
     aborts_with [check]
         Errors::NOT_PUBLISHED,
         Errors::INVALID_ARGUMENT,
         Errors::ALREADY_PUBLISHED;
+
+    /// Access Control
+    /// The account must be allowed to hold balances. Only Designated Dealers, Parent VASPs,
+    /// and Child VASPs can hold balances [[D1]][ROLE][[D2]][ROLE][[D3]][ROLE][[D4]][ROLE][[D5]][ROLE][[D6]][ROLE][[D7]][ROLE].
+    aborts_if !Roles::can_hold_balance(account) with Errors::INVALID_ARGUMENT;
 }
 }

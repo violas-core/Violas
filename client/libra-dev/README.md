@@ -17,7 +17,7 @@ As mentioned above, some transactions between VASPs must use off-chain protocols
 
 ### Currencies
 
-There are three currencies in testnet: `Coin1`, `Coin2` (stablecoins), and `LBR` (synthetic currency composed of 50% `Coin1` and 50% `Coin2`). At the Move level, these are different generic instantiation of the same `Libra` type (i.e.`Libra<Coin1>`, `Libra<Coin2>`, `Libra<LBR>`).
+There are two currencies in testnet: `Coin1` (stablecoin), and `LBR` (synthetic currency that is currently a stub and will be updated once the final composition is determined). At the Move level, these are different generic instantiation of the same `Libra` type (i.e.`Libra<Coin1>`, `Libra<LBR>`).
 
 ### Addresses, Authentication Keys, and Cryptographic Keys
 
@@ -82,6 +82,6 @@ Every parent VASP created by the faucet has a dummy `base_url` and  `compliance_
 * `amount`: number of coins to send. Encoding: LCS `u64`
 * `reference_id`: an identifier for the payment in the off-chain protocol. This is not inspected on-chain, so dummy value suffices for testing.  Encoding: LCS `[u8;12]`
 
-The payee VASP should sign the [LCS](https://libra.github.io/libra/libra_canonical_serialization/index.html)-encoded (see types above) message `reference_id | payer_vasp_address | amount | @@$$LIBRA_ATTEST$$@@`. to produce a `payee_signature`. The `@@$$LIBRA_ATTEST$$@@` part is a domain separator intended to  prevent misusing a  different signature from the same key (e.g., interpreting a KYC signature as a travel rule signature).
+The payee VASP should sign the [LCS](https://developers.libra.org/docs/rustdocs/libra_canonical_serialization/index.html)-encoded (see types above) message `reference_id | payer_vasp_address | amount | @@$$LIBRA_ATTEST$$@@`. to produce a `payee_signature`. The `@@$$LIBRA_ATTEST$$@@` part is a domain separator intended to  prevent misusing a  different signature from the same key (e.g., interpreting a KYC signature as a travel rule signature).
 
 Finally, send a transaction from payer_vasp_address using the payment [script](https://github.com/libra/libra/blob/master/language/stdlib/transaction_scripts/peer_to_peer_with_metadata.move) mentioned above with `payee = payee_vasp_address, amount = amount, metadata = reference_id, metadata_signature = payee_signature`.

@@ -5,7 +5,7 @@ use crate::{
     core_mempool::CoreMempool,
     network::{MempoolNetworkEvents, MempoolNetworkSender},
     shared_mempool::{
-        coordinator::{coordinator, gc_coordinator},
+        coordinator::{coordinator, gc_coordinator, snapshot_job},
         peer_manager::PeerManager,
         types::{SharedMempool, SharedMempoolNotification},
     },
@@ -18,11 +18,9 @@ use futures::channel::{
     oneshot,
 };
 use libra_config::{config::NodeConfig, network_id::NodeNetworkId};
+use libra_infallible::{Mutex, RwLock};
 use libra_types::{on_chain_config::OnChainConfigPayload, transaction::SignedTransaction};
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex, RwLock},
-};
+use std::{collections::HashMap, sync::Arc};
 use storage_interface::DbReader;
 use tokio::runtime::{Builder, Handle, Runtime};
 use vm_validator::vm_validator::{TransactionValidation, VMValidator};
@@ -50,7 +48,7 @@ pub(crate) fn start_shared_mempool<V>(
     V: TransactionValidation + 'static,
 {
     let upstream_config = config.upstream.clone();
-    let peer_manager = Arc::new(PeerManager::new(upstream_config));
+    let peer_manager = Arc::new(PeerManager::new(config.mempool.clone(), upstream_config));
 
     let mut all_network_events = vec![];
     let mut network_senders = HashMap::new();
@@ -80,8 +78,13 @@ pub(crate) fn start_shared_mempool<V>(
     ));
 
     executor.spawn(gc_coordinator(
-        mempool,
+        mempool.clone(),
         config.mempool.system_transaction_gc_interval_ms,
+    ));
+
+    executor.spawn(snapshot_job(
+        mempool,
+        config.mempool.mempool_snapshot_interval_secs,
     ));
 }
 
@@ -98,7 +101,7 @@ pub fn bootstrap(
     mempool_reconfig_events: libra_channel::Receiver<(), OnChainConfigPayload>,
 ) -> Runtime {
     let runtime = Builder::new()
-        .thread_name("shared-mem-")
+        .thread_name("shared-mem")
         .threaded_scheduler()
         .enable_all()
         .build()

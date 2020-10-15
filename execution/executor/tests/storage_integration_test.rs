@@ -11,8 +11,9 @@ use executor_test_helpers::{
 use executor_types::BlockExecutor;
 use libra_crypto::{ed25519::*, HashValue, PrivateKey, Uniform};
 use libra_types::{
-    account_config::{coin1_tag, libra_root_address, treasury_compliance_account_address},
+    account_config::{coin1_tmp_tag, libra_root_address, treasury_compliance_account_address},
     account_state::AccountState,
+    block_metadata::BlockMetadata,
     transaction::{Script, Transaction, WriteSetPayload},
     trusted_state::{TrustedState, TrustedStateChange},
     validator_signer::ValidatorSigner,
@@ -101,7 +102,7 @@ fn test_reconfiguration() {
         genesis_key.clone(),
         genesis_key.public_key(),
         Some(encode_peer_to_peer_with_metadata_script(
-            coin1_tag(),
+            coin1_tmp_tag(),
             validator_account,
             1_000_000,
             vec![],
@@ -109,7 +110,13 @@ fn test_reconfiguration() {
         )),
     );
     // txn2 = a dummy block prologue to bump the timer.
-    let txn2 = encode_block_prologue_script(gen_block_metadata(1, validator_account));
+    let txn2 = encode_block_prologue_script(BlockMetadata::new(
+        gen_block_id(1),
+        1,
+        300000001,
+        vec![],
+        validator_account,
+    ));
 
     // txn3 = rotate the validator's consensus pubkey
     let operator_key = validators[0].key.clone();
@@ -248,7 +255,7 @@ fn test_change_publishing_option_to_custom() {
         genesis_key.clone(),
         genesis_key.public_key(),
         Some(encode_peer_to_peer_with_metadata_script(
-            coin1_tag(),
+            coin1_tmp_tag(),
             validator_account,
             1_000_000,
             vec![],
@@ -429,7 +436,7 @@ fn test_extend_allowlist() {
         genesis_key.clone(),
         genesis_key.public_key(),
         Some(encode_peer_to_peer_with_metadata_script(
-            coin1_tag(),
+            coin1_tmp_tag(),
             validator_account,
             1_000_000,
             vec![],

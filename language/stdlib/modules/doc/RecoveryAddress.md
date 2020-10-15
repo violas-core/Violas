@@ -3,24 +3,29 @@
 
 # Module `0x1::RecoveryAddress`
 
+This module defines an account recovery mechanism that can be used by VASPs.
 
 
--  [Resource <code><a href="RecoveryAddress.md#0x1_RecoveryAddress">RecoveryAddress</a></code>](#0x1_RecoveryAddress_RecoveryAddress)
--  [Const <code><a href="RecoveryAddress.md#0x1_RecoveryAddress_ENOT_A_VASP">ENOT_A_VASP</a></code>](#0x1_RecoveryAddress_ENOT_A_VASP)
--  [Const <code><a href="RecoveryAddress.md#0x1_RecoveryAddress_EKEY_ROTATION_DEPENDENCY_CYCLE">EKEY_ROTATION_DEPENDENCY_CYCLE</a></code>](#0x1_RecoveryAddress_EKEY_ROTATION_DEPENDENCY_CYCLE)
--  [Const <code><a href="RecoveryAddress.md#0x1_RecoveryAddress_ECANNOT_ROTATE_KEY">ECANNOT_ROTATE_KEY</a></code>](#0x1_RecoveryAddress_ECANNOT_ROTATE_KEY)
--  [Const <code><a href="RecoveryAddress.md#0x1_RecoveryAddress_EINVALID_KEY_ROTATION_DELEGATION">EINVALID_KEY_ROTATION_DELEGATION</a></code>](#0x1_RecoveryAddress_EINVALID_KEY_ROTATION_DELEGATION)
--  [Const <code><a href="RecoveryAddress.md#0x1_RecoveryAddress_EACCOUNT_NOT_RECOVERABLE">EACCOUNT_NOT_RECOVERABLE</a></code>](#0x1_RecoveryAddress_EACCOUNT_NOT_RECOVERABLE)
--  [Const <code><a href="RecoveryAddress.md#0x1_RecoveryAddress_ERECOVERY_ADDRESS">ERECOVERY_ADDRESS</a></code>](#0x1_RecoveryAddress_ERECOVERY_ADDRESS)
--  [Function <code>publish</code>](#0x1_RecoveryAddress_publish)
--  [Function <code>rotate_authentication_key</code>](#0x1_RecoveryAddress_rotate_authentication_key)
--  [Function <code>add_rotation_capability</code>](#0x1_RecoveryAddress_add_rotation_capability)
--  [Module Specification](#@Module_Specification_0)
-    -  [Module specifications](#@Module_specifications_1)
-        -  [RecoveryAddress has its own KeyRotationCapability](#@RecoveryAddress_has_its_own_KeyRotationCapability_2)
-        -  [RecoveryAddress resource stays](#@RecoveryAddress_resource_stays_3)
-        -  [RecoveryAddress remains same](#@RecoveryAddress_remains_same_4)
-        -  [Only VASPs can be RecoveryAddress](#@Only_VASPs_can_be_RecoveryAddress_5)
+-  [Resource `RecoveryAddress`](#0x1_RecoveryAddress_RecoveryAddress)
+-  [Constants](#@Constants_0)
+-  [Function `publish`](#0x1_RecoveryAddress_publish)
+-  [Function `rotate_authentication_key`](#0x1_RecoveryAddress_rotate_authentication_key)
+-  [Function `add_rotation_capability`](#0x1_RecoveryAddress_add_rotation_capability)
+-  [Module Specification](#@Module_Specification_1)
+    -  [Initialization](#@Initialization_2)
+    -  [Persistence of Resource](#@Persistence_of_Resource_3)
+    -  [Persistence of KeyRotationCapability](#@Persistence_of_KeyRotationCapability_4)
+    -  [Consistency Between Resources and Roles](#@Consistency_Between_Resources_and_Roles_5)
+    -  [Helper Functions](#@Helper_Functions_6)
+
+
+<pre><code><b>use</b> <a href="Errors.md#0x1_Errors">0x1::Errors</a>;
+<b>use</b> <a href="LibraAccount.md#0x1_LibraAccount">0x1::LibraAccount</a>;
+<b>use</b> <a href="Signer.md#0x1_Signer">0x1::Signer</a>;
+<b>use</b> <a href="VASP.md#0x1_VASP">0x1::VASP</a>;
+<b>use</b> <a href="Vector.md#0x1_Vector">0x1::Vector</a>;
+</code></pre>
+
 
 
 <a name="0x1_RecoveryAddress_RecoveryAddress"></a>
@@ -58,9 +63,12 @@ recover one of accounts in <code>rotation_caps</code> arises.
 
 </details>
 
-<a name="0x1_RecoveryAddress_ENOT_A_VASP"></a>
+<a name="@Constants_0"></a>
 
-## Const `ENOT_A_VASP`
+## Constants
+
+
+<a name="0x1_RecoveryAddress_ENOT_A_VASP"></a>
 
 Only VASPs can create a recovery address
 
@@ -70,21 +78,17 @@ Only VASPs can create a recovery address
 
 
 
-<a name="0x1_RecoveryAddress_EKEY_ROTATION_DEPENDENCY_CYCLE"></a>
+<a name="0x1_RecoveryAddress_EACCOUNT_NOT_RECOVERABLE"></a>
 
-## Const `EKEY_ROTATION_DEPENDENCY_CYCLE`
-
-A cycle would have been created would be created
+The account address couldn't be found in the account recovery resource
 
 
-<pre><code><b>const</b> <a href="RecoveryAddress.md#0x1_RecoveryAddress_EKEY_ROTATION_DEPENDENCY_CYCLE">EKEY_ROTATION_DEPENDENCY_CYCLE</a>: u64 = 1;
+<pre><code><b>const</b> <a href="RecoveryAddress.md#0x1_RecoveryAddress_EACCOUNT_NOT_RECOVERABLE">EACCOUNT_NOT_RECOVERABLE</a>: u64 = 4;
 </code></pre>
 
 
 
 <a name="0x1_RecoveryAddress_ECANNOT_ROTATE_KEY"></a>
-
-## Const `ECANNOT_ROTATE_KEY`
 
 The signer doesn't have the appropriate privileges to rotate the account's key
 
@@ -96,8 +100,6 @@ The signer doesn't have the appropriate privileges to rotate the account's key
 
 <a name="0x1_RecoveryAddress_EINVALID_KEY_ROTATION_DELEGATION"></a>
 
-## Const `EINVALID_KEY_ROTATION_DELEGATION`
-
 Only accounts belonging to the same VASP can delegate their key rotation capability
 
 
@@ -106,21 +108,17 @@ Only accounts belonging to the same VASP can delegate their key rotation capabil
 
 
 
-<a name="0x1_RecoveryAddress_EACCOUNT_NOT_RECOVERABLE"></a>
+<a name="0x1_RecoveryAddress_EKEY_ROTATION_DEPENDENCY_CYCLE"></a>
 
-## Const `EACCOUNT_NOT_RECOVERABLE`
-
-The account address couldn't be found in the account recovery resource
+A cycle would have been created would be created
 
 
-<pre><code><b>const</b> <a href="RecoveryAddress.md#0x1_RecoveryAddress_EACCOUNT_NOT_RECOVERABLE">EACCOUNT_NOT_RECOVERABLE</a>: u64 = 4;
+<pre><code><b>const</b> <a href="RecoveryAddress.md#0x1_RecoveryAddress_EKEY_ROTATION_DEPENDENCY_CYCLE">EKEY_ROTATION_DEPENDENCY_CYCLE</a>: u64 = 1;
 </code></pre>
 
 
 
 <a name="0x1_RecoveryAddress_ERECOVERY_ADDRESS"></a>
-
-## Const `ERECOVERY_ADDRESS`
 
 A <code><a href="RecoveryAddress.md#0x1_RecoveryAddress">RecoveryAddress</a></code> resource was in an unexpected state
 
@@ -309,11 +307,11 @@ Aborts if <code>recovery_address</code> does not have the <code>KeyRotationCapab
     to_recover: address;
     new_key: vector&lt;u8&gt;;
     <b>aborts_if</b> !<a href="RecoveryAddress.md#0x1_RecoveryAddress_spec_is_recovery_address">spec_is_recovery_address</a>(recovery_address) <b>with</b> <a href="Errors.md#0x1_Errors_NOT_PUBLISHED">Errors::NOT_PUBLISHED</a>;
-    <b>aborts_if</b> !<b>exists</b>&lt;<a href="LibraAccount.md#0x1_LibraAccount_LibraAccount">LibraAccount::LibraAccount</a>&gt;(to_recover) <b>with</b> <a href="Errors.md#0x1_Errors_NOT_PUBLISHED">Errors::NOT_PUBLISHED</a>;
-    <b>aborts_if</b> len(new_key) != 32;
-    <b>aborts_if</b> !<a href="RecoveryAddress.md#0x1_RecoveryAddress_spec_holds_key_rotation_cap_for">spec_holds_key_rotation_cap_for</a>(recovery_address, to_recover);
+    <b>aborts_if</b> !<a href="LibraAccount.md#0x1_LibraAccount_exists_at">LibraAccount::exists_at</a>(to_recover) <b>with</b> <a href="Errors.md#0x1_Errors_NOT_PUBLISHED">Errors::NOT_PUBLISHED</a>;
+    <b>aborts_if</b> len(new_key) != 32 <b>with</b> <a href="Errors.md#0x1_Errors_INVALID_ARGUMENT">Errors::INVALID_ARGUMENT</a>;
+    <b>aborts_if</b> !<a href="RecoveryAddress.md#0x1_RecoveryAddress_spec_holds_key_rotation_cap_for">spec_holds_key_rotation_cap_for</a>(recovery_address, to_recover) <b>with</b> <a href="Errors.md#0x1_Errors_INVALID_ARGUMENT">Errors::INVALID_ARGUMENT</a>;
     <b>aborts_if</b> !(<a href="Signer.md#0x1_Signer_spec_address_of">Signer::spec_address_of</a>(account) == recovery_address
-                || <a href="Signer.md#0x1_Signer_spec_address_of">Signer::spec_address_of</a>(account) == to_recover);
+                || <a href="Signer.md#0x1_Signer_spec_address_of">Signer::spec_address_of</a>(account) == to_recover) <b>with</b> <a href="Errors.md#0x1_Errors_INVALID_ARGUMENT">Errors::INVALID_ARGUMENT</a>;
 }
 </code></pre>
 
@@ -326,7 +324,7 @@ Aborts if <code>recovery_address</code> does not have the <code>KeyRotationCapab
 <pre><code><b>schema</b> <a href="RecoveryAddress.md#0x1_RecoveryAddress_RotateAuthenticationKeyEnsures">RotateAuthenticationKeyEnsures</a> {
     to_recover: address;
     new_key: vector&lt;u8&gt;;
-    <b>ensures</b> <b>global</b>&lt;<a href="LibraAccount.md#0x1_LibraAccount_LibraAccount">LibraAccount::LibraAccount</a>&gt;(to_recover).authentication_key == new_key;
+    <b>ensures</b> <a href="LibraAccount.md#0x1_LibraAccount_authentication_key">LibraAccount::authentication_key</a>(to_recover) == new_key;
 }
 </code></pre>
 
@@ -395,10 +393,7 @@ Aborts if <code>to_recover.address</code> and <code>recovery_address belong <b>t
     <b>aborts_if</b> !<a href="RecoveryAddress.md#0x1_RecoveryAddress_spec_is_recovery_address">spec_is_recovery_address</a>(recovery_address) <b>with</b> <a href="Errors.md#0x1_Errors_NOT_PUBLISHED">Errors::NOT_PUBLISHED</a>;
     <a name="0x1_RecoveryAddress_to_recover_address$8"></a>
     <b>let</b> to_recover_address = <a href="LibraAccount.md#0x1_LibraAccount_key_rotation_capability_address">LibraAccount::key_rotation_capability_address</a>(to_recover);
-    <b>aborts_if</b> !<a href="VASP.md#0x1_VASP_is_vasp">VASP::is_vasp</a>(recovery_address) <b>with</b> <a href="Errors.md#0x1_Errors_INVALID_ARGUMENT">Errors::INVALID_ARGUMENT</a>;
-    <b>aborts_if</b> !<a href="VASP.md#0x1_VASP_is_vasp">VASP::is_vasp</a>(to_recover_address) <b>with</b> <a href="Errors.md#0x1_Errors_INVALID_ARGUMENT">Errors::INVALID_ARGUMENT</a>;
-    <b>aborts_if</b> <a href="VASP.md#0x1_VASP_spec_parent_address">VASP::spec_parent_address</a>(recovery_address) != <a href="VASP.md#0x1_VASP_spec_parent_address">VASP::spec_parent_address</a>(to_recover_address)
-        <b>with</b> <a href="Errors.md#0x1_Errors_INVALID_ARGUMENT">Errors::INVALID_ARGUMENT</a>;
+    <b>aborts_if</b> !<a href="VASP.md#0x1_VASP_spec_is_same_vasp">VASP::spec_is_same_vasp</a>(recovery_address, to_recover_address) <b>with</b> <a href="Errors.md#0x1_Errors_INVALID_ARGUMENT">Errors::INVALID_ARGUMENT</a>;
 }
 </code></pre>
 
@@ -411,8 +406,9 @@ Aborts if <code>to_recover.address</code> and <code>recovery_address belong <b>t
 <pre><code><b>schema</b> <a href="RecoveryAddress.md#0x1_RecoveryAddress_AddRotationCapabilityEnsures">AddRotationCapabilityEnsures</a> {
     to_recover: KeyRotationCapability;
     recovery_address: address;
-    <b>ensures</b> <a href="RecoveryAddress.md#0x1_RecoveryAddress_spec_get_rotation_caps">spec_get_rotation_caps</a>(recovery_address)[
-        len(<a href="RecoveryAddress.md#0x1_RecoveryAddress_spec_get_rotation_caps">spec_get_rotation_caps</a>(recovery_address)) - 1] == to_recover;
+    <a name="0x1_RecoveryAddress_num_rotation_caps$9"></a>
+    <b>let</b> num_rotation_caps = len(<a href="RecoveryAddress.md#0x1_RecoveryAddress_spec_get_rotation_caps">spec_get_rotation_caps</a>(recovery_address));
+    <b>ensures</b> <a href="RecoveryAddress.md#0x1_RecoveryAddress_spec_get_rotation_caps">spec_get_rotation_caps</a>(recovery_address)[num_rotation_caps - 1] == to_recover;
 }
 </code></pre>
 
@@ -420,15 +416,77 @@ Aborts if <code>to_recover.address</code> and <code>recovery_address belong <b>t
 
 </details>
 
-<a name="@Module_Specification_0"></a>
+<a name="@Module_Specification_1"></a>
 
 ## Module Specification
 
 
 
-<a name="@Module_specifications_1"></a>
+<a name="@Initialization_2"></a>
 
-### Module specifications
+### Initialization
+
+
+A RecoveryAddress has its own <code>KeyRotationCapability</code>.
+
+
+<pre><code><b>invariant</b> [<b>global</b>, isolated]
+    <b>forall</b> addr1: address <b>where</b> <a href="RecoveryAddress.md#0x1_RecoveryAddress_spec_is_recovery_address">spec_is_recovery_address</a>(addr1):
+        len(<a href="RecoveryAddress.md#0x1_RecoveryAddress_spec_get_rotation_caps">spec_get_rotation_caps</a>(addr1)) &gt; 0 &&
+        <a href="RecoveryAddress.md#0x1_RecoveryAddress_spec_get_rotation_caps">spec_get_rotation_caps</a>(addr1)[0].account_address == addr1;
+</code></pre>
+
+
+
+<a name="@Persistence_of_Resource_3"></a>
+
+### Persistence of Resource
+
+
+
+<pre><code><b>invariant</b> <b>update</b> [<b>global</b>]
+   <b>forall</b> addr: address:
+       <b>old</b>(<a href="RecoveryAddress.md#0x1_RecoveryAddress_spec_is_recovery_address">spec_is_recovery_address</a>(addr)) ==&gt; <a href="RecoveryAddress.md#0x1_RecoveryAddress_spec_is_recovery_address">spec_is_recovery_address</a>(addr);
+</code></pre>
+
+
+
+<a name="@Persistence_of_KeyRotationCapability_4"></a>
+
+### Persistence of KeyRotationCapability
+
+
+If <code>recovery_addr</code> holds the <code>KeyRotationCapability</code> of <code>to_recovery_addr</code>
+in the previous state, then it continues to hold the capability after the update.
+
+
+<pre><code><b>invariant</b> <b>update</b> [<b>global</b>]
+    <b>forall</b> recovery_addr: address, to_recovery_addr: address
+    <b>where</b> <b>old</b>(<a href="RecoveryAddress.md#0x1_RecoveryAddress_spec_is_recovery_address">spec_is_recovery_address</a>(recovery_addr)):
+        <b>old</b>(<a href="RecoveryAddress.md#0x1_RecoveryAddress_spec_holds_key_rotation_cap_for">spec_holds_key_rotation_cap_for</a>(recovery_addr, to_recovery_addr))
+        ==&gt; <a href="RecoveryAddress.md#0x1_RecoveryAddress_spec_holds_key_rotation_cap_for">spec_holds_key_rotation_cap_for</a>(recovery_addr, to_recovery_addr);
+</code></pre>
+
+
+
+<a name="@Consistency_Between_Resources_and_Roles_5"></a>
+
+### Consistency Between Resources and Roles
+
+
+Only VASPs can hold <code>RecoverAddress</code> resources.
+
+
+<pre><code><b>invariant</b> [<b>global</b>, isolated]
+    <b>forall</b> recovery_addr: address <b>where</b> <a href="RecoveryAddress.md#0x1_RecoveryAddress_spec_is_recovery_address">spec_is_recovery_address</a>(recovery_addr):
+        <a href="VASP.md#0x1_VASP_is_vasp">VASP::is_vasp</a>(recovery_addr);
+</code></pre>
+
+
+
+<a name="@Helper_Functions_6"></a>
+
+### Helper Functions
 
 
 Returns true if <code>addr</code> is a recovery address.
@@ -469,9 +527,6 @@ Returns true if <code>recovery_address</code> holds the
     recovery_address: address,
     addr: address): bool
 {
-    // BUG: the commented out version will <b>break</b> the postconditions.
-    // <b>exists</b> i in 0..len(<a href="RecoveryAddress.md#0x1_RecoveryAddress_spec_get_rotation_caps">spec_get_rotation_caps</a>(recovery_address)):
-    //     <a href="RecoveryAddress.md#0x1_RecoveryAddress_spec_get_rotation_caps">spec_get_rotation_caps</a>(recovery_address)[i].account_address == addr
     <b>exists</b> i: u64
         <b>where</b> 0 &lt;= i && i &lt; len(<a href="RecoveryAddress.md#0x1_RecoveryAddress_spec_get_rotation_caps">spec_get_rotation_caps</a>(recovery_address)):
             <a href="RecoveryAddress.md#0x1_RecoveryAddress_spec_get_rotation_caps">spec_get_rotation_caps</a>(recovery_address)[i].account_address == addr
@@ -479,56 +534,7 @@ Returns true if <code>recovery_address</code> holds the
 </code></pre>
 
 
-
-<a name="@RecoveryAddress_has_its_own_KeyRotationCapability_2"></a>
-
-#### RecoveryAddress has its own KeyRotationCapability
-
-
-
-<pre><code><b>invariant</b> [<b>global</b>, isolated]
-    <b>forall</b> addr1: address <b>where</b> <a href="RecoveryAddress.md#0x1_RecoveryAddress_spec_is_recovery_address">spec_is_recovery_address</a>(addr1):
-        len(<a href="RecoveryAddress.md#0x1_RecoveryAddress_spec_get_rotation_caps">spec_get_rotation_caps</a>(addr1)) &gt; 0 &&
-        <a href="RecoveryAddress.md#0x1_RecoveryAddress_spec_get_rotation_caps">spec_get_rotation_caps</a>(addr1)[0].account_address == addr1;
-</code></pre>
-
-
-
-<a name="@RecoveryAddress_resource_stays_3"></a>
-
-#### RecoveryAddress resource stays
-
-
-
-<pre><code><b>invariant</b> <b>update</b> [<b>global</b>]
-   <b>forall</b> addr1: address:
-       <b>old</b>(<a href="RecoveryAddress.md#0x1_RecoveryAddress_spec_is_recovery_address">spec_is_recovery_address</a>(addr1)) ==&gt; <a href="RecoveryAddress.md#0x1_RecoveryAddress_spec_is_recovery_address">spec_is_recovery_address</a>(addr1);
-</code></pre>
-
-
-
-<a name="@RecoveryAddress_remains_same_4"></a>
-
-#### RecoveryAddress remains same
-
-
-
-<pre><code><b>invariant</b> <b>update</b> [<b>global</b>]
-    <b>forall</b> recovery_addr: address, to_recovery_addr: address
-    <b>where</b> <b>old</b>(<a href="RecoveryAddress.md#0x1_RecoveryAddress_spec_is_recovery_address">spec_is_recovery_address</a>(recovery_addr)):
-        <b>old</b>(<a href="RecoveryAddress.md#0x1_RecoveryAddress_spec_holds_key_rotation_cap_for">spec_holds_key_rotation_cap_for</a>(recovery_addr, to_recovery_addr))
-        ==&gt; <a href="RecoveryAddress.md#0x1_RecoveryAddress_spec_holds_key_rotation_cap_for">spec_holds_key_rotation_cap_for</a>(recovery_addr, to_recovery_addr);
-</code></pre>
-
-
-
-<a name="@Only_VASPs_can_be_RecoveryAddress_5"></a>
-
-#### Only VASPs can be RecoveryAddress
-
-
-
-<pre><code><b>invariant</b> [<b>global</b>, isolated]
-    <b>forall</b> recovery_addr: address <b>where</b> <a href="RecoveryAddress.md#0x1_RecoveryAddress_spec_is_recovery_address">spec_is_recovery_address</a>(recovery_addr):
-        <a href="VASP.md#0x1_VASP_is_vasp">VASP::is_vasp</a>(recovery_addr);
-</code></pre>
+[//]: # ("File containing references which can be used from documentation")
+[ACCESS_CONTROL]: https://github.com/libra/lip/blob/master/lips/lip-2.md
+[ROLE]: https://github.com/libra/lip/blob/master/lips/lip-2.md#roles
+[PERMISSION]: https://github.com/libra/lip/blob/master/lips/lip-2.md#permissions

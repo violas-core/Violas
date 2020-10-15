@@ -9,16 +9,17 @@ use libra_crypto::{
     ed25519::{Ed25519PrivateKey, Ed25519PublicKey, Ed25519Signature},
     hash::CryptoHash,
 };
+use libra_infallible::RwLock;
 use libra_secure_time::{RealTimeService, TimeService};
 use libra_vault_client::{self as vault, Client};
 use serde::{de::DeserializeOwned, Serialize};
 use std::{
     collections::HashMap,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        RwLock,
-    },
+    sync::atomic::{AtomicU64, Ordering},
 };
+
+#[cfg(any(test, feature = "testing"))]
+use libra_vault_client::ReadResponse;
 
 const LIBRA_DEFAULT: &str = "libra_default";
 
@@ -125,6 +126,14 @@ impl VaultStorage {
     #[cfg(any(test, feature = "testing"))]
     pub fn revoke_token_self(&self) -> Result<(), Error> {
         Ok(self.client.revoke_token_self()?)
+    }
+
+    #[cfg(any(test, feature = "testing"))]
+    pub fn get_all_key_versions(
+        &self,
+        name: &str,
+    ) -> Result<Vec<ReadResponse<Ed25519PublicKey>>, Error> {
+        Ok(self.client().read_ed25519_key(name)?)
     }
 
     /// Creates a token but uses the namespace for policies
@@ -241,7 +250,6 @@ impl KVStorage for VaultStorage {
         let value: T = serde_json::from_value(resp.value)?;
         self.secret_versions
             .write()
-            .unwrap()
             .insert(key.to_string(), resp.version);
         Ok(GetResponse { last_update, value })
     }
@@ -249,7 +257,7 @@ impl KVStorage for VaultStorage {
     fn set<T: Serialize>(&mut self, key: &str, value: T) -> Result<(), Error> {
         let secret = self.secret_name(key);
         let version = if self.use_cas {
-            self.secret_versions.read().unwrap().get(key).copied()
+            self.secret_versions.read().get(key).copied()
         } else {
             None
         };
@@ -258,14 +266,13 @@ impl KVStorage for VaultStorage {
                 .write_secret(&secret, key, &serde_json::to_value(&value)?, version)?;
         self.secret_versions
             .write()
-            .unwrap()
             .insert(key.to_string(), new_version);
         Ok(())
     }
 
     #[cfg(any(test, feature = "testing"))]
     fn reset_and_clear(&mut self) -> Result<(), Error> {
-        self.secret_versions.write().unwrap().clear();
+        self.secret_versions.write().clear();
         self.reset_kv("")?;
         self.reset_crypto()?;
         self.reset_policies()
@@ -350,7 +357,7 @@ impl CryptoStorage for VaultStorage {
     fn rotate_key(&mut self, name: &str) -> Result<Ed25519PublicKey, Error> {
         let ns_name = self.crypto_name(name);
         self.client().rotate_key(&ns_name)?;
-        self.get_public_key(name).map(|v| v.public_key)
+        Ok(self.client().trim_key_versions(&ns_name)?)
     }
 
     fn sign<T: CryptoHash + Serialize>(

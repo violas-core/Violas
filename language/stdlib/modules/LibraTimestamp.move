@@ -9,6 +9,10 @@ address 0x1 {
 /// * LibraBlock: to reach consensus on the global wall clock time
 /// * AccountLimits: to limit the time of account limits
 ///
+/// This module moreover enables code to assert that it is running in genesis (`Self::assert_genesis`) or after
+/// genesis (`Self::assert_operating`). These are essentially distinct states of the system. Specifically,
+/// if `Self::assert_operating` succeeds, assumptions about invariants over the global state can be made
+/// which reflect that the system has been successfully initialized.
 module LibraTimestamp {
     use 0x1::CoreAddresses;
     use 0x1::Errors;
@@ -28,18 +32,6 @@ module LibraTimestamp {
     /// An invalid timestamp was provided
     const ETIMESTAMP: u64 = 2;
 
-    spec module {
-        /// All functions which do not have an `aborts_if` specification in this module are implicitly declared
-        /// to never abort.
-        pragma aborts_if_is_strict;
-    }
-
-    spec module {
-        /// After genesis, time progresses monotonically.
-        invariant update [global]
-            old(is_operating()) ==> old(spec_now_microseconds()) <= spec_now_microseconds();
-    }
-
     /// Marks that time has started and genesis has finished. This can only be called from genesis and with the root
     /// account.
     public fun set_time_has_started(lr_account: &signer) {
@@ -49,6 +41,10 @@ module LibraTimestamp {
         move_to(lr_account, timer);
     }
     spec fun set_time_has_started {
+        /// Verification of this function is turned off because it cannot be verified without genesis execution
+        /// context. After time has started, all invariants guarded by `LibraTimestamp::is_operating` will become
+        /// activated and need to hold.
+        pragma verify = false;
         include AbortsIfNotGenesis;
         include CoreAddresses::AbortsIfNotLibraRoot{account: lr_account};
         ensures is_operating();
@@ -156,6 +152,24 @@ module LibraTimestamp {
     spec schema AbortsIfNotOperating {
         aborts_if !is_operating() with Errors::INVALID_STATE;
     }
+
+    // ====================
+    // Module Specification
+    spec module {} // switch documentation context to module level
+
+    spec module {
+        /// After genesis, time progresses monotonically.
+        invariant update [global]
+            old(is_operating()) ==> old(spec_now_microseconds()) <= spec_now_microseconds();
+    }
+
+    spec module {
+        /// All functions which do not have an `aborts_if` specification in this module are implicitly declared
+        /// to never abort.
+        pragma aborts_if_is_strict;
+    }
+
+
 }
 
 }

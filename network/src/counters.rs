@@ -72,6 +72,23 @@ pub fn peer_connected(network_context: &NetworkContext, remote_peer_id: &PeerId,
     }
 }
 
+/// Increments the counter based on `NetworkContext`
+pub fn inc_by_with_context(
+    counter: &IntCounterVec,
+    network_context: &NetworkContext,
+    label: &str,
+    val: i64,
+) {
+    counter
+        .with_label_values(&[
+            network_context.role().as_str(),
+            network_context.network_id().as_str(),
+            network_context.peer_id().short_str().as_str(),
+            label,
+        ])
+        .inc_by(val)
+}
+
 pub static LIBRA_NETWORK_PENDING_CONNECTION_UPGRADES: Lazy<IntGaugeVec> = Lazy::new(|| {
     register_int_gauge_vec!(
         "libra_network_pending_connection_upgrades",
@@ -171,8 +188,23 @@ pub fn rpc_bytes(
     ])
 }
 
-// TODO(philiphayes): somehow get per-peer latency metrics without using a
-// separate peer_id label ==> cardinality explosion.
+pub static INVALID_NETWORK_MESSAGES: Lazy<IntCounterVec> = Lazy::new(|| {
+    register_int_counter_vec!(
+        "libra_network_invalid_messages",
+        "Number of invalid messages (RPC/direct_send)",
+        &["role_type", "network_id", "peer_id", "type"]
+    )
+    .unwrap()
+});
+
+pub static PEER_SEND_FAILURES: Lazy<IntCounterVec> = Lazy::new(|| {
+    register_int_counter_vec!(
+        "libra_network_peer_send_failures",
+        "Number of messages failed to send to peer",
+        &["role_type", "network_id", "peer_id", "protocol_id"]
+    )
+    .unwrap()
+});
 
 pub static LIBRA_NETWORK_OUTBOUND_RPC_REQUEST_LATENCY: Lazy<HistogramVec> = Lazy::new(|| {
     register_histogram_vec!(

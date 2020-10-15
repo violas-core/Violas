@@ -22,6 +22,7 @@ use 0x1::SlidingNonce;
 /// # Common Abort Conditions
 /// | Error Category             | Error Reason                                               | Description                                                                                                |
 /// | ----------------           | --------------                                             | -------------                                                                                              |
+/// | `Errors::NOT_PUBLISHED`    | `SlidingNonce::ESLIDING_NONCE`                             | A `SlidingNonce` resource is not published under `lr_account`.                                             |
 /// | `Errors::INVALID_ARGUMENT` | `SlidingNonce::ENONCE_TOO_OLD`                             | The `sliding_nonce` in `lr_account` is too old and it's impossible to determine if it's duplicated or not. |
 /// | `Errors::INVALID_ARGUMENT` | `SlidingNonce::ENONCE_TOO_NEW`                             | The `sliding_nonce` in `lr_account` is too far in the future.                                              |
 /// | `Errors::INVALID_ARGUMENT` | `SlidingNonce::ENONCE_ALREADY_RECORDED`                    | The `sliding_nonce` in` lr_account` has been previously recorded.                                          |
@@ -42,7 +43,9 @@ fun rotate_authentication_key_with_nonce_admin(lr_account: &signer, account: &si
 spec fun rotate_authentication_key_with_nonce_admin {
     use 0x1::Signer;
     use 0x1::Errors;
+    use 0x1::Roles;
 
+    include LibraAccount::TransactionChecks{sender: account}; // properties checked by the prologue.
     let account_addr = Signer::spec_address_of(account);
     include SlidingNonce::RecordNonceAbortsIf{ account: lr_account, seq_nonce: sliding_nonce };
     include LibraAccount::ExtractKeyRotationCapabilityAbortsIf;
@@ -55,6 +58,13 @@ spec fun rotate_authentication_key_with_nonce_admin {
     aborts_with [check]
         Errors::INVALID_ARGUMENT,
         Errors::INVALID_STATE,
-        Errors::NOT_PUBLISHED; // TOOD: Undocumented error code. Added due to the possible absence of SlidingNonce in SlidingNonce::try_record_nonce;
+        Errors::NOT_PUBLISHED;
+
+    /// Access Control
+    /// Only the Libra Root account can process the admin scripts [[H9]][PERMISSION].
+    requires Roles::has_libra_root_role(lr_account); /// This is ensured by LibraAccount::writeset_prologue.
+    /// The account can rotate its own authentication key unless
+    /// it has delegrated the capability [[H17]][PERMISSION][[J17]][PERMISSION].
+    include LibraAccount::AbortsIfDelegatedKeyRotationCapability{account: account};
 }
 }

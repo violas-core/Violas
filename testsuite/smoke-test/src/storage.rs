@@ -2,20 +2,21 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{
-    test_utils::{compare_balances, setup_swarm_and_client_proxy},
+    test_utils::{
+        compare_balances, libra_swarm_utils::load_node_config, setup_swarm_and_client_proxy,
+    },
     workspace_builder,
     workspace_builder::workspace_root,
 };
 use anyhow::{bail, Result};
 use backup_cli::metadata::view::BackupStorageState;
 use cli::client_proxy::ClientProxy;
-use libra_config::config::NodeConfig;
 use libra_temppath::TempPath;
 use libra_types::transaction::Version;
 use rand::random;
 use std::{
     fs,
-    path::{Path, PathBuf},
+    path::Path,
     process::Command,
     string::ToString,
     sync::{
@@ -32,6 +33,7 @@ fn test_db_restore() {
     // pre-build tools
     workspace_builder::get_bin("db-backup");
     workspace_builder::get_bin("db-restore");
+    workspace_builder::get_bin("db-backup-verify");
 
     // set up: two accounts, a lot of money
     client1.create_next_account(false).unwrap();
@@ -63,16 +65,14 @@ fn test_db_restore() {
     });
 
     // make a backup from node 1
-    let node1_config =
-        NodeConfig::load(env.validator_swarm.config.config_files.get(1).unwrap()).unwrap();
+    let (node1_config, _) = load_node_config(&env.validator_swarm, 1);
     let backup_path = db_backup(node1_config.storage.backup_service_address.port(), 1, 50);
 
     // take down node 0
     env.validator_swarm.kill_node(0);
 
     // nuke db
-    let node0_config =
-        NodeConfig::load(env.validator_swarm.config.config_files.get(0).unwrap()).unwrap();
+    let (node0_config, _) = load_node_config(&env.validator_swarm, 0);
     let db_dir = node0_config.storage.dir();
     fs::remove_dir_all(db_dir.join("libradb")).unwrap();
     fs::remove_dir_all(db_dir.join("consensusdb")).unwrap();
@@ -98,26 +98,53 @@ fn test_db_restore() {
     ));
 }
 
+fn db_backup_verify(backup_path: &Path) {
+    let now = Instant::now();
+    let bin_path = workspace_builder::get_bin("db-backup-verify");
+    let metadata_cache_path = TempPath::new();
+
+    metadata_cache_path.create_as_dir().unwrap();
+
+    let output = Command::new(bin_path.as_path())
+        .current_dir(workspace_root())
+        .args(&[
+            "--metadata-cache-dir",
+            metadata_cache_path.path().to_str().unwrap(),
+            "local-fs",
+            "--dir",
+            backup_path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    if !output.status.success() {
+        panic!("db-backup-verify failed, output: {:?}", output);
+    }
+    println!("Backup verified in {} seconds.", now.elapsed().as_secs());
+}
+
 fn wait_for_backups(
     target_epoch: u64,
     target_version: u64,
     now: Instant,
-    bin_path: PathBuf,
-    metadata_cache_path2: &TempPath,
-    backup_path: &TempPath,
+    bin_path: &Path,
+    metadata_cache_path: &Path,
+    backup_path: &Path,
 ) -> Result<()> {
     for _ in 0..60 {
-        let output = Command::new(bin_path.as_path())
+        // the verify should always succeed.
+        db_backup_verify(backup_path);
+
+        let output = Command::new(bin_path)
             .current_dir(workspace_root())
             .args(&[
                 "one-shot",
                 "query",
                 "backup-storage-state",
                 "--metadata-cache-dir",
-                metadata_cache_path2.path().to_str().unwrap(),
+                metadata_cache_path.to_str().unwrap(),
                 "local-fs",
                 "--dir",
-                backup_path.path().to_str().unwrap(),
+                backup_path.to_str().unwrap(),
             ])
             .output()?
             .stdout;
@@ -175,9 +202,9 @@ fn db_backup(backup_service_port: u16, target_epoch: u64, target_version: Versio
         target_epoch,
         target_version,
         now,
-        bin_path,
-        &metadata_cache_path2,
-        &backup_path,
+        bin_path.as_path(),
+        metadata_cache_path2.path(),
+        backup_path.path(),
     );
     backup_coordinator.kill().unwrap();
     wait_res.unwrap();

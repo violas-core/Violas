@@ -3,19 +3,31 @@
 
 # Module `0x1::LibraVMConfig`
 
+This module defines structs and methods to initialize VM configurations,
+including different costs of running the VM.
 
 
--  [Struct <code><a href="LibraVMConfig.md#0x1_LibraVMConfig">LibraVMConfig</a></code>](#0x1_LibraVMConfig_LibraVMConfig)
--  [Struct <code><a href="LibraVMConfig.md#0x1_LibraVMConfig_GasSchedule">GasSchedule</a></code>](#0x1_LibraVMConfig_GasSchedule)
--  [Struct <code><a href="LibraVMConfig.md#0x1_LibraVMConfig_GasConstants">GasConstants</a></code>](#0x1_LibraVMConfig_GasConstants)
--  [Function <code>initialize</code>](#0x1_LibraVMConfig_initialize)
+-  [Struct `LibraVMConfig`](#0x1_LibraVMConfig_LibraVMConfig)
+-  [Struct `GasSchedule`](#0x1_LibraVMConfig_GasSchedule)
+-  [Struct `GasConstants`](#0x1_LibraVMConfig_GasConstants)
+-  [Function `initialize`](#0x1_LibraVMConfig_initialize)
 -  [Module Specification](#@Module_Specification_0)
+    -  [Initialization](#@Initialization_1)
+    -  [Access Control](#@Access_Control_2)
+
+
+<pre><code><b>use</b> <a href="LibraConfig.md#0x1_LibraConfig">0x1::LibraConfig</a>;
+<b>use</b> <a href="LibraTimestamp.md#0x1_LibraTimestamp">0x1::LibraTimestamp</a>;
+<b>use</b> <a href="Roles.md#0x1_Roles">0x1::Roles</a>;
+</code></pre>
+
 
 
 <a name="0x1_LibraVMConfig_LibraVMConfig"></a>
 
 ## Struct `LibraVMConfig`
 
+The struct to hold config data needed to operate the LibraVM.
 
 
 <pre><code><b>struct</b> <a href="LibraVMConfig.md#0x1_LibraVMConfig">LibraVMConfig</a>
@@ -32,7 +44,7 @@
 <code>gas_schedule: <a href="LibraVMConfig.md#0x1_LibraVMConfig_GasSchedule">LibraVMConfig::GasSchedule</a></code>
 </dt>
 <dd>
-
+ Cost of running the VM.
 </dd>
 </dl>
 
@@ -43,6 +55,17 @@
 
 ## Struct `GasSchedule`
 
+The gas schedule keeps two separate schedules for the gas:
+* The instruction_schedule: This holds the gas for each bytecode instruction.
+* The native_schedule: This holds the gas for used (per-byte operated over) for each native
+function.
+A couple notes:
+1. In the case that an instruction is deleted from the bytecode, that part of the cost schedule
+still needs to remain the same; once a slot in the table is taken by an instruction, that is its
+slot for the rest of time (since that instruction could already exist in a module on-chain).
+2. The initialization of the module will publish the instruction table to the libra root account
+address, and will preload the vector with the gas schedule for instructions. The VM will then
+load this into memory at the startup of each block.
 
 
 <pre><code><b>struct</b> <a href="LibraVMConfig.md#0x1_LibraVMConfig_GasSchedule">GasSchedule</a>
@@ -176,6 +199,7 @@
 
 ## Function `initialize`
 
+Initialize the table under the libra root account
 
 
 <pre><code><b>public</b> <b>fun</b> <a href="LibraVMConfig.md#0x1_LibraVMConfig_initialize">initialize</a>(lr_account: &signer, instruction_schedule: vector&lt;u8&gt;, native_schedule: vector&lt;u8&gt;)
@@ -194,7 +218,7 @@
 ) {
     <a href="LibraTimestamp.md#0x1_LibraTimestamp_assert_genesis">LibraTimestamp::assert_genesis</a>();
 
-    // The permission "UpdateVMConfig" is granted <b>to</b> LibraRoot [B20].
+    // The permission "UpdateVMConfig" is granted <b>to</b> LibraRoot [[H11]][PERMISSION].
     <a href="Roles.md#0x1_Roles_assert_libra_root">Roles::assert_libra_root</a>(lr_account);
 
     <b>let</b> gas_constants = <a href="LibraVMConfig.md#0x1_LibraVMConfig_GasConstants">GasConstants</a> {
@@ -252,7 +276,7 @@
 </code></pre>
 
 
-Must abort if the signer does not have the LibraRoot role [B20].
+Must abort if the signer does not have the LibraRoot role [[H11]][PERMISSION].
 
 
 <pre><code><b>include</b> <a href="Roles.md#0x1_Roles_AbortsIfNotLibraRoot">Roles::AbortsIfNotLibraRoot</a>{account: lr_account};
@@ -269,7 +293,31 @@ Must abort if the signer does not have the LibraRoot role [B20].
 </code></pre>
 
 
-Currently, no one can update LibraVMConfig [B20]
+
+</details>
+
+<a name="@Module_Specification_0"></a>
+
+## Module Specification
+
+
+
+<a name="@Initialization_1"></a>
+
+### Initialization
+
+
+
+<pre><code><b>invariant</b> [<b>global</b>] <a href="LibraTimestamp.md#0x1_LibraTimestamp_is_operating">LibraTimestamp::is_operating</a>() ==&gt; <a href="LibraConfig.md#0x1_LibraConfig_spec_is_published">LibraConfig::spec_is_published</a>&lt;<a href="LibraVMConfig.md#0x1_LibraVMConfig">LibraVMConfig</a>&gt;();
+</code></pre>
+
+
+
+<a name="@Access_Control_2"></a>
+
+### Access Control
+
+Currently, no one can update LibraVMConfig [[H11]][PERMISSION]
 
 
 <a name="0x1_LibraVMConfig_LibraVMConfigRemainsSame"></a>
@@ -289,14 +337,7 @@ Currently, no one can update LibraVMConfig [B20]
 </code></pre>
 
 
-
-</details>
-
-<a name="@Module_Specification_0"></a>
-
-## Module Specification
-
-
-
-<pre><code><b>invariant</b> [<b>global</b>] <a href="LibraTimestamp.md#0x1_LibraTimestamp_is_operating">LibraTimestamp::is_operating</a>() ==&gt; <a href="LibraConfig.md#0x1_LibraConfig_spec_is_published">LibraConfig::spec_is_published</a>&lt;<a href="LibraVMConfig.md#0x1_LibraVMConfig">LibraVMConfig</a>&gt;();
-</code></pre>
+[//]: # ("File containing references which can be used from documentation")
+[ACCESS_CONTROL]: https://github.com/libra/lip/blob/master/lips/lip-2.md
+[ROLE]: https://github.com/libra/lip/blob/master/lips/lip-2.md#roles
+[PERMISSION]: https://github.com/libra/lip/blob/master/lips/lip-2.md#permissions

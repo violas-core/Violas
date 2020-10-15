@@ -29,7 +29,8 @@ use move_ir_types::location::*;
 use parser::syntax::parse_file_string;
 use shared::Address;
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
+    fs,
     fs::File,
     io::{Read, Write},
     iter::Peekable,
@@ -40,6 +41,7 @@ use tempfile::NamedTempFile;
 
 pub const MOVE_EXTENSION: &str = "move";
 pub const MOVE_COMPILED_EXTENSION: &str = "mv";
+pub const MOVE_COMPILED_INTERFACES_DIR: &str = "mv_interfaces";
 pub const SOURCE_MAP_EXTENSION: &str = "mvsm";
 
 //**************************************************************************************************
@@ -144,6 +146,23 @@ pub fn move_compile_to_expansion_no_report(
 // Utils
 //**************************************************************************************************
 
+macro_rules! dir_path {
+    ($($dir:expr),+) => {{
+        let mut p = PathBuf::new();
+        $(p.push($dir);)+
+        p
+    }};
+}
+
+macro_rules! file_path {
+    ($dir:expr, $name:expr, $ext:expr) => {{
+        let mut p = PathBuf::from($dir);
+        p.push($name);
+        p.set_extension($ext);
+        p
+    }};
+}
+
 /// Runs the bytecode verifier on the compiled units
 /// Fails if the bytecode verifier errors
 pub fn sanity_check_compiled_units(files: FilesSourceText, compiled_units: Vec<CompiledUnit>) {
@@ -162,16 +181,22 @@ pub fn output_compiled_units(
 ) -> anyhow::Result<()> {
     const SCRIPT_SUB_DIR: &str = "scripts";
     const MODULE_SUB_DIR: &str = "modules";
+    fn num_digits(n: usize) -> usize {
+        format!("{}", n).len()
+    }
+    fn format_idx(idx: usize, width: usize) -> String {
+        format!("{:0width$}", idx, width = width)
+    }
 
     macro_rules! emit_unit {
         ($path:ident, $unit:ident) => {{
             if emit_source_maps {
                 $path.set_extension(SOURCE_MAP_EXTENSION);
-                File::create($path.as_path())?.write_all(&$unit.serialize_source_map())?;
+                fs::write($path.as_path(), &$unit.serialize_source_map())?;
             }
 
             $path.set_extension(MOVE_COMPILED_EXTENSION);
-            File::create($path.as_path())?.write_all(&$unit.serialize())?
+            fs::write($path.as_path(), &$unit.serialize())?
         }};
     }
 
@@ -182,25 +207,24 @@ pub fn output_compiled_units(
 
     // modules
     if !modules.is_empty() {
-        std::fs::create_dir_all(format!("{}/{}", out_dir, MODULE_SUB_DIR))?;
+        std::fs::create_dir_all(dir_path!(out_dir, MODULE_SUB_DIR))?;
     }
+    let digit_width = num_digits(modules.len());
     for (idx, unit) in modules.into_iter().enumerate() {
-        let mut path = PathBuf::from(format!(
-            "{}/{}/{}_{}",
+        let mut path = dir_path!(
             out_dir,
             MODULE_SUB_DIR,
-            idx,
-            unit.name(),
-        ));
+            format!("{}_{}", format_idx(idx, digit_width), unit.name())
+        );
         emit_unit!(path, unit);
     }
 
     // scripts
     if !scripts.is_empty() {
-        std::fs::create_dir_all(format!("{}/{}", out_dir, SCRIPT_SUB_DIR))?;
+        std::fs::create_dir_all(dir_path!(out_dir, SCRIPT_SUB_DIR))?;
     }
     for unit in scripts {
-        let mut path = PathBuf::from(format!("{}/{}/{}", out_dir, SCRIPT_SUB_DIR, unit.name()));
+        let mut path = dir_path!(out_dir, SCRIPT_SUB_DIR, unit.name());
         emit_unit!(path, unit);
     }
 
@@ -214,7 +238,7 @@ fn generate_interface_files_for_deps(
     deps: &mut Vec<String>,
     interface_files_dir_opt: Option<String>,
 ) -> anyhow::Result<()> {
-    if let Some(dir) = generate_interface_files(deps, interface_files_dir_opt)? {
+    if let Some(dir) = generate_interface_files(deps, interface_files_dir_opt, true)? {
         deps.push(dir)
     }
     Ok(())
@@ -223,6 +247,7 @@ fn generate_interface_files_for_deps(
 pub fn generate_interface_files(
     mv_file_locations: &[String],
     interface_files_dir_opt: Option<String>,
+    separate_by_hash: bool,
 ) -> anyhow::Result<Option<String>> {
     let mv_files = {
         let mut v = vec![];
@@ -243,33 +268,35 @@ pub fn generate_interface_files(
 
     let interface_files_dir =
         interface_files_dir_opt.unwrap_or_else(|| command_line::DEFAULT_OUTPUT_DIR.to_string());
-    let hash_dir = {
+    let interface_sub_dir = dir_path!(interface_files_dir, MOVE_COMPILED_INTERFACES_DIR);
+    let all_addr_dir = if separate_by_hash {
         use std::{
             collections::hash_map::DefaultHasher,
             hash::{Hash, Hasher},
         };
+        const HASH_DELIM: &str = "%|%";
 
         let mut hasher = DefaultHasher::new();
+        mv_files.len().hash(&mut hasher);
+        HASH_DELIM.hash(&mut hasher);
         for mv_file in &mv_files {
-            std::fs::read(mv_file)?.hash(&mut hasher)
+            std::fs::read(mv_file)?.hash(&mut hasher);
+            HASH_DELIM.hash(&mut hasher);
         }
-        // TODO might want a better temp file setup here
-        let dir = format!(
-            "{}/{}_interfaces/{:020}",
-            interface_files_dir,
-            MOVE_COMPILED_EXTENSION,
-            hasher.finish(),
-        );
 
+        let mut dir = interface_sub_dir;
+        dir.push(format!("{:020}", hasher.finish()));
         dir
+    } else {
+        interface_sub_dir
     };
 
     for mv_file in mv_files {
         let (id, interface_contents) = interface_generator::write_to_string(&mv_file)?;
-        let addr_dir = format!("{}/{:#x}", hash_dir, id.address());
-        let file_path = format!("{}/{}.{}", addr_dir, id.name(), MOVE_EXTENSION);
+        let addr_dir = dir_path!(all_addr_dir.clone(), format!("{}", id.address()));
+        let file_path = file_path!(addr_dir.clone(), format!("{}", id.name()), MOVE_EXTENSION);
         // it's possible some files exist but not others due to multithreaded environments
-        if Path::new(&file_path).is_file() {
+        if separate_by_hash && Path::new(&file_path).is_file() {
             continue;
         }
 
@@ -280,13 +307,13 @@ pub fn generate_interface_files(
         // it's possible some files exist but not others due to multithreaded environments
         // Check for the file existing and then safely move the tmp file there if
         // it does not
-        if Path::new(&file_path).is_file() {
+        if separate_by_hash && Path::new(&file_path).is_file() {
             continue;
         }
         std::fs::rename(tmp.path(), file_path)?;
     }
 
-    Ok(Some(hash_dir))
+    Ok(Some(all_addr_dir.into_os_string().into_string().unwrap()))
 }
 
 fn has_compiled_module_magic_number(path: &str) -> bool {
@@ -362,6 +389,7 @@ fn parse_program(
         .iter()
         .map(|s| leak_str(s))
         .collect::<Vec<&'static str>>();
+    check_targets_deps_dont_intersect(&targets, &deps)?;
     let mut files: FilesSourceText = HashMap::new();
     let mut source_definitions = Vec::new();
     let mut source_comments = CommentMap::new();
@@ -395,6 +423,28 @@ fn parse_program(
     Ok((files, res))
 }
 
+fn check_targets_deps_dont_intersect(
+    targets: &[&'static str],
+    deps: &[&'static str],
+) -> anyhow::Result<()> {
+    let target_set = targets.iter().collect::<BTreeSet<_>>();
+    let dep_set = deps.iter().collect::<BTreeSet<_>>();
+    let intersection = target_set.intersection(&dep_set).collect::<Vec<_>>();
+    if intersection.is_empty() {
+        return Ok(());
+    }
+
+    let all_files = intersection
+        .into_iter()
+        .map(|s| format!("    {}", s))
+        .collect::<Vec<_>>()
+        .join("\n");
+    Err(anyhow!(
+        "The following files were marked as both targets and dependencies:\n{}",
+        all_files
+    ))
+}
+
 /// - For each directory in `paths`, it will return all files with the `MOVE_EXTENSION` found
 ///   recursively in that directory
 /// - If `keep_specified_files` any file explicitly passed in `paths`, will be added to the result
@@ -418,7 +468,7 @@ pub fn find_move_filenames(
 /// - For each directory in `paths`, it will return all files that satisfy the predicate
 /// - Any file explicitly passed in `paths`, it will include that file in the result, regardless
 ///   of the file extension
-fn find_filenames<Predicate: FnMut(&Path) -> bool>(
+pub fn find_filenames<Predicate: FnMut(&Path) -> bool>(
     paths: &[String],
     mut is_file_desired: Predicate,
 ) -> anyhow::Result<Vec<String>> {

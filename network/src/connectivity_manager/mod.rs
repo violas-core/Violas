@@ -9,12 +9,11 @@
 //! Consensus actor informs the ConnectivityManager of eligible nodes.
 //!
 //! Different discovery sources notify the ConnectivityManager of updates to
-//! peers' addresses. Currently, there are 3 discovery sources (ordered by
+//! peers' addresses. Currently, there are 2 discovery sources (ordered by
 //! decreasing dial priority, i.e., first is highest priority):
 //!
 //! 1. Onchain discovery protocol
-//! 2. Gossip discovery protocol
-//! 3. Seed peers from config
+//! 2. Seed peers from config
 //!
 //! In other words, if a we have some addresses discovered via onchain discovery
 //! and some seed addresses from our local config, we will try the onchain
@@ -39,6 +38,7 @@ use futures::{
 };
 use libra_config::network_id::NetworkContext;
 use libra_crypto::x25519;
+use libra_infallible::RwLock;
 use libra_logger::prelude::*;
 use libra_network_address::NetworkAddress;
 use libra_types::PeerId;
@@ -52,7 +52,7 @@ use std::{
     cmp::min,
     collections::{HashMap, HashSet},
     fmt, mem,
-    sync::{Arc, RwLock},
+    sync::Arc,
     time::Duration,
 };
 use tokio::{time, time::Instant};
@@ -106,7 +106,6 @@ pub struct ConnectivityManager<TTicker, TBackoff> {
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, NumVariants, Serialize)]
 pub enum DiscoverySource {
     OnChain,
-    Gossip,
     Config,
 }
 
@@ -123,7 +122,6 @@ impl fmt::Display for DiscoverySource {
             "{}",
             match self {
                 DiscoverySource::OnChain => "OnChain",
-                DiscoverySource::Gossip => "Gossip",
                 DiscoverySource::Config => "Config",
             }
         )
@@ -133,7 +131,6 @@ impl fmt::Display for DiscoverySource {
 /// Requests received by the [`ConnectivityManager`] manager actor from upstream modules.
 #[derive(Debug, Serialize)]
 pub enum ConnectivityRequest {
-    // TODO(philiphayes): can we consolidate these UpdateX messages into one message?
     /// Request to update known addresses of peer with id `PeerId` to given list.
     UpdateAddresses(DiscoverySource, HashMap<PeerId, Vec<NetworkAddress>>),
     /// Update set of nodes eligible to join the network.
@@ -205,7 +202,7 @@ where
         connection_limit: Option<usize>,
     ) -> Self {
         assert!(
-            eligible.read().unwrap().is_empty(),
+            eligible.read().is_empty(),
             "Eligible peers must be initially empty. eligible: {:?}",
             eligible
         );
@@ -299,7 +296,7 @@ where
     /// reconfiguration. If we are currently connected to this validator, calling
     /// this function will close our connection to it.
     async fn close_stale_connections(&mut self) {
-        let eligible = self.eligible.read().unwrap().clone();
+        let eligible = self.eligible.read().clone();
         let stale_connections: Vec<_> = self
             .connected
             .keys()
@@ -335,7 +332,7 @@ where
     /// reconfiguration. If there is a pending dial to this validator, calling
     /// this function will remove it from the dial queue.
     async fn cancel_stale_dials(&mut self) {
-        let eligible = self.eligible.read().unwrap().clone();
+        let eligible = self.eligible.read().clone();
         let stale_dials: Vec<_> = self
             .dial_queue
             .keys()
@@ -358,7 +355,7 @@ where
         &'a mut self,
         pending_dials: &'a mut FuturesUnordered<BoxFuture<'static, PeerId>>,
     ) {
-        let eligible = self.eligible.read().unwrap().clone();
+        let eligible = self.eligible.read().clone();
         let to_connect: Vec<_> = self
             .peer_addrs
             .0
@@ -486,6 +483,16 @@ where
             self.network_context
         );
 
+        // Log the eligible peers with addresses from discovery
+        sample!(SampleRate::Duration(Duration::from_secs(60)), {
+            info!(
+                NetworkSchema::new(&self.network_context),
+                eligible_addrs = ?self.peer_addrs,
+                eligible_keys = ?self.peer_pubkeys,
+                "Current eligible peers"
+            )
+        });
+
         // Cancel dials to peers that are no longer eligible.
         self.cancel_stale_dials().await;
         // Disconnect from connected peers that are no longer eligible.
@@ -548,7 +555,6 @@ where
 
         // Keep track of if any peer's addresses have actually changed, so we can
         // log without too much spam.
-        let mut have_any_changed = false;
         let self_peer_id = self.network_context.peer_id();
 
         // 3. add or update intersection
@@ -562,7 +568,6 @@ where
             // Update peer's addresses
             let addrs = self.peer_addrs.0.entry(peer_id).or_default();
             if addrs.update(src, new_addrs) {
-                have_any_changed = true;
                 info!(
                     NetworkSchema::new(&self.network_context).remote_peer(&peer_id),
                     network_addresses = addrs,
@@ -580,18 +585,6 @@ where
                 // out if we can't reach any of their previous addresses).
                 self.reset_dial_state(&peer_id);
             }
-        }
-
-        // Only log the total state if anything has actually changed.
-        if have_any_changed {
-            let peer_addrs = &self.peer_addrs;
-            info!(
-                NetworkSchema::new(&self.network_context).discovery_source(&src),
-                new_peer_addrs = peer_addrs,
-                "{} New peer addresses: {}",
-                self.network_context,
-                peer_addrs
-            );
         }
     }
 
@@ -642,25 +635,13 @@ where
             // to generate the new eligible peers set.
             let new_eligible = self.peer_pubkeys.union_all();
 
-            info!(
-                NetworkSchema::new(&self.network_context),
-                eligible_peers = format!("{:?}", new_eligible),
-                discovery_source = src,
-                "{} New eligible peers: {:?}",
-                self.network_context,
-                new_eligible
-            );
-
             // Swap in the new eligible peers set. Drop the old set after releasing
             // the write lock.
             let _old_eligible = {
-                let mut eligible = self.eligible.write().unwrap();
+                let mut eligible = self.eligible.write();
                 mem::replace(&mut *eligible, new_eligible)
             };
         }
-
-        // TODO(philiphayes): we can probably do `cancel_stale_dials` and
-        // possibly `cancel_stale_connections` in here?
     }
 
     fn handle_control_notification(&mut self, notif: peer_manager::ConnectionNotification) {
@@ -671,7 +652,6 @@ where
         );
         match notif {
             peer_manager::ConnectionNotification::NewPeer(peer_id, addr, _origin, _context) => {
-                // TODO(gnazario): Keep track of inbound and outbound separately?  Somehow handle limits between both
                 counters::peer_connected(&self.network_context, &peer_id, 1);
                 self.connected.insert(peer_id, addr);
 

@@ -5,8 +5,12 @@
 
 
 
--  [Function <code>borrow_address</code>](#0x1_Signer_borrow_address)
--  [Function <code>address_of</code>](#0x1_Signer_address_of)
+-  [Function `borrow_address`](#0x1_Signer_borrow_address)
+-  [Function `address_of`](#0x1_Signer_address_of)
+
+
+<pre><code></code></pre>
+
 
 
 <a name="0x1_Signer_borrow_address"></a>
@@ -60,11 +64,10 @@
 
 
 
-<pre><code>pragma opaque = <b>true</b>;
+<pre><code><b>pragma</b> opaque;
 <b>aborts_if</b> <b>false</b>;
 <b>ensures</b> result == <a href="Signer.md#0x1_Signer_spec_address_of">spec_address_of</a>(s);
 </code></pre>
-
 
 
 Specification version of <code><a href="Signer.md#0x1_Signer_address_of">Self::address_of</a></code>.
@@ -79,3 +82,9 @@ Specification version of <code><a href="Signer.md#0x1_Signer_address_of">Self::a
 
 
 </details>
+
+
+[//]: # ("File containing references which can be used from documentation")
+[ACCESS_CONTROL]: https://github.com/libra/lip/blob/master/lips/lip-2.md
+[ROLE]: https://github.com/libra/lip/blob/master/lips/lip-2.md#roles
+[PERMISSION]: https://github.com/libra/lip/blob/master/lips/lip-2.md#permissions

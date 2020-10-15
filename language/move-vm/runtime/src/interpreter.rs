@@ -3,9 +3,11 @@
 
 use crate::{
     loader::{Function, Loader, Resolver},
+    logging::LogContext,
     native_functions::FunctionContext,
     trace,
 };
+use fail::fail_point;
 use libra_logger::prelude::*;
 use move_core_types::{
     account_address::AccountAddress,
@@ -56,14 +58,16 @@ macro_rules! set_err_info {
 ///
 /// An `Interpreter` instance is a stand alone execution context for a function.
 /// It mimics execution on a single thread, with an call stack and an operand stack.
-pub(crate) struct Interpreter {
+pub(crate) struct Interpreter<L: LogContext> {
     /// Operand stack, where Move `Value`s are stored for stack operations.
     operand_stack: Stack,
     /// The stack of active functions.
     call_stack: CallStack,
+    // Logger to report information to clients
+    log_context: L,
 }
 
-impl Interpreter {
+impl<L: LogContext> Interpreter<L> {
     /// Entrypoint into the interpreter. All external calls need to be routed through this
     /// function.
     pub(crate) fn entrypoint(
@@ -73,19 +77,21 @@ impl Interpreter {
         data_store: &mut impl DataStore,
         cost_strategy: &mut CostStrategy,
         loader: &Loader,
+        log_context: &L,
     ) -> VMResult<()> {
         // We count the intrinsic cost of the transaction here, since that needs to also cover the
         // setup of the function.
-        let mut interp = Self::new();
+        let mut interp = Self::new(log_context.clone());
         interp.execute(loader, data_store, cost_strategy, function, ty_args, args)
     }
 
     /// Create a new instance of an `Interpreter` in the context of a transaction with a
     /// given module cache and gas schedule.
-    fn new() -> Self {
+    fn new(log_context: L) -> Self {
         Interpreter {
             operand_stack: Stack::new(),
             call_stack: CallStack::new(),
+            log_context,
         }
     }
 
@@ -144,6 +150,7 @@ impl Interpreter {
                         .map_err(|e| set_err_info!(current_frame, e))?;
                     if let Some(frame) = self.call_stack.pop() {
                         current_frame = frame;
+                        current_frame.pc += 1; // advance past the Call instruction in the caller
                     } else {
                         return Ok(());
                     }
@@ -164,6 +171,7 @@ impl Interpreter {
                         .map_err(|e| set_err_info!(current_frame, e))?;
                     if func.is_native() {
                         self.call_native(&resolver, data_store, cost_strategy, func, vec![])?;
+                        current_frame.pc += 1; // advance past the Call instruction in the caller
                         continue;
                     }
                     let frame = self
@@ -198,6 +206,7 @@ impl Interpreter {
                         .map_err(|e| set_err_info!(current_frame, e))?;
                     if func.is_native() {
                         self.call_native(&resolver, data_store, cost_strategy, func, ty_args)?;
+                        current_frame.pc += 1; // advance past the Call instruction in the caller
                         continue;
                     }
                     let frame = self
@@ -328,15 +337,15 @@ impl Interpreter {
         data_store: &'a mut impl DataStore,
         addr: AccountAddress,
         ty: &Type,
+        log_context: &impl LogContext,
     ) -> PartialVMResult<&'a mut GlobalValue> {
         match data_store.load_resource(addr, ty) {
             Ok(gv) => Ok(gv),
             Err(e) => {
+                log_context.alert();
                 error!(
-                    "[VM] error loading resource at ({}, {:?}): {:?} from data store",
-                    account = addr,
-                    type = ty,
-                    error = e
+                    *log_context,
+                    "[VM] error loading resource at ({}, {:?}): {:?} from data store", addr, ty, e
                 );
                 Err(e)
             }
@@ -350,7 +359,7 @@ impl Interpreter {
         addr: AccountAddress,
         ty: &Type,
     ) -> PartialVMResult<AbstractMemorySize<GasCarrier>> {
-        let g = Self::load_resource(data_store, addr, ty)?.borrow_global()?;
+        let g = Self::load_resource(data_store, addr, ty, &self.log_context)?.borrow_global()?;
         let size = g.size();
         self.operand_stack.push(g)?;
         Ok(size)
@@ -363,7 +372,7 @@ impl Interpreter {
         addr: AccountAddress,
         ty: &Type,
     ) -> PartialVMResult<AbstractMemorySize<GasCarrier>> {
-        let gv = Self::load_resource(data_store, addr, ty)?;
+        let gv = Self::load_resource(data_store, addr, ty, &self.log_context)?;
         let mem_size = gv.size();
         let exists = gv.exists()?;
         self.operand_stack.push(Value::bool(exists))?;
@@ -377,7 +386,7 @@ impl Interpreter {
         addr: AccountAddress,
         ty: &Type,
     ) -> PartialVMResult<AbstractMemorySize<GasCarrier>> {
-        let resource = Self::load_resource(data_store, addr, ty)?.move_from()?;
+        let resource = Self::load_resource(data_store, addr, ty, &self.log_context)?.move_from()?;
         let size = resource.size();
         self.operand_stack.push(resource)?;
         Ok(size)
@@ -392,7 +401,7 @@ impl Interpreter {
         resource: Value,
     ) -> PartialVMResult<AbstractMemorySize<GasCarrier>> {
         let size = resource.size();
-        Self::load_resource(data_store, addr, ty)?.move_to(resource)?;
+        Self::load_resource(data_store, addr, ty, &self.log_context)?.move_to(resource)?;
         Ok(size)
     }
 
@@ -404,7 +413,11 @@ impl Interpreter {
     fn maybe_core_dump(&self, mut err: VMError, current_frame: &Frame) -> VMError {
         // a verification error cannot happen at runtime so change it into an invariant violation.
         if err.status_type() == StatusType::Verification {
-            error!("Verification error during runtime: {:?}", error = err);
+            self.log_context.alert();
+            error!(
+                self.log_context,
+                "Verification error during runtime: {:?}", err
+            );
             let new_err = PartialVMError::new(StatusCode::VERIFICATION_ERROR);
             let new_err = match err.message() {
                 None => new_err,
@@ -414,10 +427,10 @@ impl Interpreter {
         }
         if err.status_type() == StatusType::InvariantViolation {
             let state = self.get_internal_state(current_frame);
+            self.log_context.alert();
             error!(
-                "Error: {:?}\nCORE DUMP: >>>>>>>>>>>>\n{}\n<<<<<<<<<<<<\n",
-                error = err,
-                state = state,
+                self.log_context,
+                "Error: {:?}\nCORE DUMP: >>>>>>>>>>>>\n{}\n<<<<<<<<<<<<\n", err, state,
             );
         }
         err
@@ -677,7 +690,7 @@ impl Frame {
     fn execute_code(
         &mut self,
         resolver: &Resolver,
-        interpreter: &mut Interpreter,
+        interpreter: &mut Interpreter<impl LogContext>,
         data_store: &mut impl DataStore,
         cost_strategy: &mut CostStrategy,
     ) -> VMResult<ExitCode> {
@@ -691,7 +704,7 @@ impl Frame {
     fn execute_code_impl(
         &mut self,
         resolver: &Resolver,
-        interpreter: &mut Interpreter,
+        interpreter: &mut Interpreter<impl LogContext>,
         data_store: &mut impl DataStore,
         cost_strategy: &mut CostStrategy,
     ) -> PartialVMResult<ExitCode> {
@@ -706,7 +719,14 @@ impl Frame {
                     &resolver,
                     &interpreter
                 );
-                self.pc += 1;
+
+                fail_point!("move_vm::interpreter_loop", |_| {
+                    Err(
+                        PartialVMError::new(StatusCode::VERIFIER_INVARIANT_VIOLATION).with_message(
+                            "Injected move_vm::interpreter verifier failure".to_owned(),
+                        ),
+                    )
+                });
 
                 match instruction {
                     Bytecode::Pop => {
@@ -1104,6 +1124,8 @@ impl Frame {
                         cost_strategy.charge_instr(Opcodes::NOP)?;
                     }
                 }
+                // invariant: advance to pc +1 is iff instruction at pc executed without aborting
+                self.pc += 1;
             }
             // ok we are out, it's a branch, check the pc for good luck
             // TODO: re-work the logic here. Tests should have a more

@@ -400,14 +400,18 @@ impl TxEmitter {
         Ok(faucet_account)
     }
 
-    pub async fn get_seed_accounts(&self, instances: &[Instance]) -> Result<Vec<AccountData>> {
+    pub async fn get_seed_accounts(
+        &self,
+        instances: &[Instance],
+        seed_account_num: usize,
+    ) -> Result<Vec<AccountData>> {
         let client = self.pick_mint_instance(instances).json_rpc_client();
         let seed_accounts = if !self.premainnet {
             info!("Creating and minting seeds accounts");
             let mut account = self.load_tc_account(&client).await?;
             let seed_accounts = create_seed_accounts(
                 &mut account,
-                instances.len(),
+                seed_account_num,
                 100,
                 self.pick_mint_client(instances),
                 self.chain_id,
@@ -435,19 +439,26 @@ impl TxEmitter {
             info!("Not minting accounts");
             return Ok(()); // Early return to skip printing 'Minting ...' logs
         }
+        let num_seed_accounts = if requested_accounts / req.instances.len() > MAX_CHILD_VASP_NUM {
+            requested_accounts / MAX_CHILD_VASP_NUM + 1
+        } else {
+            req.instances.len()
+        };
         let num_accounts = requested_accounts - self.accounts.len(); // Only minting extra accounts
+        let num_new_child_accounts = (num_accounts + num_seed_accounts - 1) / num_seed_accounts;
         let coins_per_account = (SEND_AMOUNT + req.gas_price) * MAX_TXNS;
-        let coins_per_seed_account =
-            (coins_per_account * num_accounts as u64) / req.instances.len() as u64;
+        let coins_per_seed_account = coins_per_account * num_new_child_accounts as u64;
         let coins_total = coins_per_account * num_accounts as u64;
 
         let mut faucet_account = self.get_money_source(&req.instances, coins_total).await?;
         // Create seed accounts with which we can create actual accounts concurrently
-        let seed_accounts = self.get_seed_accounts(&req.instances).await?;
+        let seed_accounts = self
+            .get_seed_accounts(&req.instances, num_seed_accounts)
+            .await?;
         mint_to_new_accounts(
             &mut faucet_account,
             &seed_accounts,
-            coins_per_seed_account,
+            coins_per_seed_account as u64,
             100,
             self.pick_mint_client(&req.instances),
             self.chain_id,
@@ -457,7 +468,6 @@ impl TxEmitter {
         info!("Completed minting seed accounts");
         info!("Minting additional {} accounts", num_accounts);
 
-        let num_seed_accounts = seed_accounts.len();
         let seed_rngs = gen_rng_for_reusable_account(num_seed_accounts);
         // For each seed account, create a future and transfer libra from that seed account to new accounts
         let account_futures = seed_accounts
@@ -465,12 +475,12 @@ impl TxEmitter {
             .enumerate()
             .map(|(i, seed_account)| {
                 // Spawn new threads
-                let instance = req.instances[i].clone();
-                let num_new_accounts = (num_accounts + num_seed_accounts - 1) / num_seed_accounts;
+                let index = i / req.instances.len();
+                let instance = req.instances[index].clone();
                 let client = instance.json_rpc_client();
                 create_new_accounts(
                     seed_account,
-                    num_new_accounts,
+                    num_new_child_accounts,
                     coins_per_account,
                     20,
                     client,
@@ -513,6 +523,19 @@ impl TxEmitter {
         job.stats.accumulate()
     }
 
+    pub async fn periodic_stat(&mut self, job: &EmitJob, duration: Duration, interval_secs: u64) {
+        let deadline = Instant::now() + duration;
+        let mut prev_stats: Option<TxStats> = None;
+        while Instant::now() < deadline {
+            let window = Duration::from_secs(interval_secs);
+            tokio::time::delay_for(window).await;
+            let stats = self.peek_job_stats(job);
+            let delta = &stats - &prev_stats.unwrap_or_default();
+            prev_stats = Some(stats);
+            info!("{}", delta.rate(window));
+        }
+    }
+
     pub async fn emit_txn_for(
         &mut self,
         duration: Duration,
@@ -520,6 +543,18 @@ impl TxEmitter {
     ) -> Result<TxStats> {
         let job = self.start_job(emit_job_request).await?;
         tokio::time::delay_for(duration).await;
+        let stats = self.stop_job(job).await;
+        Ok(stats)
+    }
+
+    pub async fn emit_txn_for_with_stats(
+        &mut self,
+        duration: Duration,
+        emit_job_request: EmitJobRequest,
+        interval_secs: u64,
+    ) -> Result<TxStats> {
+        let job = self.start_job(emit_job_request).await?;
+        self.periodic_stat(&job, duration, interval_secs).await;
         let stats = self.stop_job(job).await;
         Ok(stats)
     }
@@ -764,7 +799,7 @@ fn gen_mint_request(
     let receiver = faucet_account.address;
     gen_submit_transaction_request(
         transaction_builder::encode_peer_to_peer_with_metadata_script(
-            account_config::coin1_tag(),
+            account_config::coin1_tmp_tag(),
             receiver,
             num_coins,
             vec![],
@@ -785,7 +820,7 @@ fn gen_transfer_txn_request(
 ) -> SignedTransaction {
     gen_submit_transaction_request(
         transaction_builder::encode_peer_to_peer_with_metadata_script(
-            account_config::coin1_tag(),
+            account_config::coin1_tmp_tag(),
             *receiver,
             num_coins,
             vec![],
@@ -807,7 +842,7 @@ fn gen_create_child_txn_request(
     let add_all_currencies = false;
     gen_submit_transaction_request(
         transaction_builder::encode_create_child_vasp_account_script(
-            account_config::coin1_tag(),
+            account_config::coin1_tmp_tag(),
             *receiver,
             receiver_auth_key_prefix,
             add_all_currencies,
@@ -827,7 +862,7 @@ fn gen_create_account_txn_request(
 ) -> SignedTransaction {
     gen_submit_transaction_request(
         transaction_builder::encode_create_parent_vasp_account_script(
-            account_config::coin1_tag(),
+            account_config::coin1_tmp_tag(),
             0,
             *receiver,
             auth_key_prefix,
@@ -848,7 +883,7 @@ fn gen_mint_txn_request(
 ) -> SignedTransaction {
     gen_submit_transaction_request(
         transaction_builder::encode_peer_to_peer_with_metadata_script(
-            account_config::coin1_tag(),
+            account_config::coin1_tmp_tag(),
             *receiver,
             num_coins,
             vec![],
@@ -911,13 +946,12 @@ async fn gen_reusable_account(
 async fn gen_reusable_accounts(
     client: &JsonRpcAsyncClient,
     num_accounts: usize,
-    rng: StdRng,
+    rng: &mut StdRng,
 ) -> Result<Vec<AccountData>> {
     let mut vasp_accounts = vec![];
     let mut i = 0;
-    let mut seed = rng.clone();
     while i < num_accounts {
-        vasp_accounts.push(gen_reusable_account(client, &mut seed).await?);
+        vasp_accounts.push(gen_reusable_account(client, rng).await?);
         i += 1;
     }
     Ok(vasp_accounts)
@@ -1021,7 +1055,7 @@ async fn create_new_accounts(
     mut client: JsonRpcAsyncClient,
     chain_id: ChainId,
     reuse_account: bool,
-    rng: StdRng,
+    mut rng: StdRng,
 ) -> Result<Vec<AccountData>> {
     let mut i = 0;
     let mut accounts = vec![];
@@ -1034,7 +1068,7 @@ async fn create_new_accounts(
                     max_num_accounts_per_batch as usize,
                     min(MAX_TXN_BATCH_SIZE, num_new_accounts - i),
                 ),
-                rng.clone(),
+                &mut rng,
             )
             .await?
         } else {

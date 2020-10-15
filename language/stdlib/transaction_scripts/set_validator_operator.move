@@ -49,4 +49,32 @@ fun set_validator_operator(
     assert(ValidatorOperatorConfig::get_human_name(operator_account) == operator_name, 0);
     ValidatorConfig::set_operator(account, operator_account);
 }
+
+spec fun set_validator_operator {
+    use 0x1::LibraAccount;
+    use 0x1::Signer;
+    use 0x1::Errors;
+    use 0x1::Roles;
+
+    let account_addr = Signer::address_of(account);
+    include LibraAccount::TransactionChecks{sender: account}; // properties checked by the prologue.
+    // next is due to abort in get_human_name
+    include ValidatorConfig::AbortsIfNoValidatorConfig{addr: account_addr};
+    // TODO: use an error code from Errors.move instead of 0.
+    aborts_if ValidatorOperatorConfig::get_human_name(operator_account) != operator_name with 0;
+    include ValidatorConfig::SetOperatorAbortsIf{validator_account: account, operator_addr: operator_account};
+    include ValidatorConfig::SetOperatorEnsures{validator_account: account, operator_addr: operator_account};
+
+    /// Reports INVALID_STATE because of !exists<LibraSystem::CapabilityHolder>, but that can't happen
+    /// because CapabilityHolder is published during initialization (Genesis).
+    aborts_with [check]
+        0, // Odd error code in assert on second statement in add_validator_and_reconfigure
+        Errors::INVALID_ARGUMENT,
+        Errors::NOT_PUBLISHED,
+        Errors::REQUIRES_ROLE;
+
+    /// Access Control
+    /// Only a Validator account can set its Validator Operator [[H15]][PERMISSION].
+    include Roles::AbortsIfNotValidator{validator_addr: account_addr};
+}
 }

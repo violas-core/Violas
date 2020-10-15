@@ -1,2 +1,5 @@
-Command `compile`:
-Compiling 3 source file(s)
+Command `-v check`:
+Checking Move files...
+Command `-v publish move_src/modules`:
+Compiling Move modules...
+Found and compiled 1 modules

@@ -34,13 +34,16 @@ pub fn start_consensus(
     reconfig_events: libra_channel::Receiver<(), OnChainConfigPayload>,
 ) -> Runtime {
     let runtime = runtime::Builder::new()
-        .thread_name("consensus-")
+        .thread_name("consensus")
         .threaded_scheduler()
         .enable_all()
         .build()
         .expect("Failed to create Tokio runtime!");
     let storage = Arc::new(StorageWriteProxy::new(node_config, libra_db));
-    let txn_manager = Arc::new(MempoolProxy::new(consensus_to_mempool_sender));
+    let txn_manager = Arc::new(MempoolProxy::new(
+        consensus_to_mempool_sender,
+        node_config.consensus.mempool_poll_count,
+    ));
     let execution_correctness_manager = ExecutionCorrectnessManager::new(node_config);
     let state_computer = Arc::new(ExecutionProxy::new(
         execution_correctness_manager.client(),

@@ -3,7 +3,6 @@
 
 use crate::loader::Loader;
 
-use libra_logger::prelude::*;
 use move_core_types::{
     account_address::AccountAddress,
     language_storage::{ModuleId, StructTag, TypeTag},
@@ -18,9 +17,25 @@ use move_vm_types::{
 use std::collections::btree_map::BTreeMap;
 use vm::errors::*;
 
-/// Trait for the Move VM to abstract `StateView` operations.
+/// Trait for the Move VM to abstract storage operations.
 ///
-/// Can be used to define a "fake" implementation of the remote cache.
+/// Storage backends should return
+///   - Ok(Some(..)) if the data exists
+///   - Ok(None)     if the data does not exist
+///   - Err(..)      only when something really wrong happens, for example
+///                    - invariants are broken and observable from the storage side
+///                      (this is not currently possible as ModuleId and StructTag
+///                       are always structurally valid)
+///                    - storage encounters internal errors
+///
+/// Move VM on the other hand, should NOT blindly trust the storage impl and assume
+/// the protocol above is honored. When receiving an error from storage, the Move VM
+/// MUST catch the error and convert it into an invariant violation, no matter what
+/// type the original error has before propagating the error back to the VM caller.
+///
+/// Eventually we should replace (Partial)VMError with a dedicated VMStorageError or
+/// an associated error type so that storage implementations will no longer be able to
+/// return a bogus VMError.
 pub trait RemoteCache {
     fn get_module(&self, module_id: &ModuleId) -> VMResult<Option<Vec<u8>>>;
     fn get_resource(
@@ -64,6 +79,9 @@ pub(crate) struct TransactionDataCache<'r, 'l, R> {
     event_data: Vec<(Vec<u8>, u64, Type, MoveTypeLayout, Value)>,
 }
 
+/// Collection of side effects produced by a Session.
+///
+/// The Move VM MUST guarantee that no duplicate entries exist.
 pub struct TransactionEffects {
     pub resources: Vec<(
         AccountAddress,
@@ -181,19 +199,14 @@ impl<'r, 'l, C: RemoteCache> DataStore for TransactionDataCache<'r, 'l, C> {
             };
             let ty_layout = self.loader.type_to_type_layout(ty)?;
 
-            let gv = match self.remote.get_resource(&addr, &ty_tag)? {
-                Some(blob) => {
+            let gv = match self.remote.get_resource(&addr, &ty_tag) {
+                Ok(Some(blob)) => {
                     let ty_kind_info = self.loader.type_to_kind_info(ty)?;
                     let val = match Value::simple_deserialize(&blob, &ty_kind_info, &ty_layout) {
                         Some(val) => val,
                         None => {
                             let msg =
                                 format!("Failed to deserialize resource {} at {}!", ty_tag, addr);
-                            error!(
-                                "[vm] Failed to deserialize resource {} at {}!",
-                                type_tag = ty_tag,
-                                account = addr
-                            );
                             return Err(PartialVMError::new(
                                 StatusCode::FAILED_TO_DESERIALIZE_RESOURCE,
                             )
@@ -203,7 +216,19 @@ impl<'r, 'l, C: RemoteCache> DataStore for TransactionDataCache<'r, 'l, C> {
 
                     GlobalValue::cached(val)?
                 }
-                None => GlobalValue::none(),
+                Ok(None) => GlobalValue::none(),
+                Err(err) => {
+                    let msg = format!("Unexpected storage error: {:?}", err);
+                    // REVIEW: better way to get info out of a PartialVMError?
+                    let (_old_status, _old_sub_status, _old_message, indices, offsets) =
+                        err.all_data();
+                    return Err(
+                        PartialVMError::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
+                            .with_message(msg)
+                            .at_indices(indices)
+                            .at_code_offsets(offsets),
+                    );
+                }
             };
 
             account_cache.data_map.insert(ty.clone(), (ty_layout, gv));
@@ -222,11 +247,23 @@ impl<'r, 'l, C: RemoteCache> DataStore for TransactionDataCache<'r, 'l, C> {
                 return Ok(blob.clone());
             }
         }
-        match self.remote.get_module(module_id)? {
-            Some(bytes) => Ok(bytes),
-            None => Err(PartialVMError::new(StatusCode::LINKER_ERROR)
+        match self.remote.get_module(module_id) {
+            Ok(Some(bytes)) => Ok(bytes),
+            Ok(None) => Err(PartialVMError::new(StatusCode::LINKER_ERROR)
                 .with_message(format!("Cannot find {:?} in data cache", module_id))
                 .finish(Location::Undefined)),
+            Err(err) => {
+                let msg = format!("Unexpected storage error: {:?}", err);
+                let (_old_status, _old_sub_status, _old_message, location, indices, offsets) =
+                    err.all_data();
+                Err(
+                    PartialVMError::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
+                        .with_message(msg)
+                        .at_indices(indices)
+                        .at_code_offsets(offsets)
+                        .finish(location),
+                )
+            }
         }
     }
 

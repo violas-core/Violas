@@ -10,10 +10,10 @@ This document contains the description of multiple move scripts.
 The script <code><a href="root_template_script3.md#yet_another">yet_another</a></code> is documented in its own file.
 
 -  [Some Scripts](#@Some_Scripts_1)
-    -  [Script <code><a href="root.md#some">some</a></code>](#some)
+    -  [Script `some`](#some)
         -  [Specification](#@Specification_2)
 -  [Other Scripts](#@Other_Scripts_3)
-    -  [Script <code><a href="root.md#other">other</a></code>](#other)
+    -  [Script `other`](#other)
         -  [Specification](#@Specification_4)
 -  [Index](#@Index_5)
 
@@ -28,6 +28,10 @@ The script <code><a href="root_template_script3.md#yet_another">yet_another</a><
 <a name="some"></a>
 
 ### Script `some`
+
+
+
+<pre><code></code></pre>
 
 
 This script does really nothing but just aborts.
@@ -85,6 +89,10 @@ This script does really nothing but just aborts.
 ### Script `other`
 
 
+
+<pre><code></code></pre>
+
+
 This script does also abort.
 
 
@@ -134,6 +142,6 @@ This script does also abort.
 ## Index
 
 
--  [other](root.md#other)
--  [some](root.md#some)
--  [yet_another](root_template_script3.md#yet_another)
+-  [`other`](root.md#other)
+-  [`some`](root.md#some)
+-  [`yet_another`](root_template_script3.md#yet_another)
