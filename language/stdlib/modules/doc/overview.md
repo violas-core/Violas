@@ -124,6 +124,7 @@ The Move modules in the Libra Framework can be bucketed in to a couple categorie
 -  [`0x1::SlidingNonce`](SlidingNonce.md#0x1_SlidingNonce)
 -  [`0x1::TransactionFee`](TransactionFee.md#0x1_TransactionFee)
 -  [`0x1::VASP`](VASP.md#0x1_VASP)
+-  [`0x1::VLS`](VLS.md#0x1_VLS)
 -  [`0x1::ValidatorConfig`](ValidatorConfig.md#0x1_ValidatorConfig)
 -  [`0x1::ValidatorOperatorConfig`](ValidatorOperatorConfig.md#0x1_ValidatorOperatorConfig)
 -  [`0x1::Vector`](Vector.md#0x1_Vector)

@@ -31,6 +31,7 @@ module LibraAccount {
     use 0x1::Option::{Self, Option};
     use 0x1::Roles;
     use 0x1::FixedPoint32;
+    use 0x1::VLS;
 
     /// An `address` is a Libra Account iff it has a published LibraAccount resource.
     resource struct LibraAccount {
@@ -266,7 +267,7 @@ module LibraAccount {
             VASP::is_vasp(payee) &&
             !VASP::spec_is_same_vasp(payee, payer)
         }
-    }
+    }      
 
     /// Record a payment of `to_deposit` from `payer` to `payee` with the attached `metadata`
     fun deposit<Token>(
@@ -376,6 +377,32 @@ module LibraAccount {
         ensures balance<Token>(payee) == old(balance<Token>(payee)) + amount;
     }
 
+    ///Distribute VLS to all the account specified in module VLS
+    public fun distribute_vls() 
+    acquires LibraAccount, Balance, AccountOperationsCapability {
+        LibraTimestamp::assert_operating();        
+
+        let mined_vls = VLS::mine();
+        let mined_vls_amount = Libra::value<VLS::VLS>(&mined_vls);
+        let receivers = VLS::get_receivers();
+        let length = Vector::length(&receivers);
+        
+        let i = 0;
+        while (i < length) {
+            let receiver = Vector::borrow(&mut receivers, i);
+            
+            let (addr, ratio) = VLS::unpack_receiver(*receiver);
+            let dist_amount = FixedPoint32::multiply_u64(mined_vls_amount, ratio);
+            let (a, b) = Libra::split<VLS::VLS>(mined_vls, dist_amount);
+            mined_vls = b;
+
+            deposit(CoreAddresses::VM_RESERVED_ADDRESS(), addr, a, x"", x"");            
+        };
+                
+        assert(Libra::value<VLS::VLS>(&mined_vls)==0, 1000);
+        Libra::destroy_zero<VLS::VLS>(mined_vls);
+    }
+    
     /// Mint 'mint_amount' to 'designated_dealer_address' for 'tier_index' tier.
     /// Max valid tier index is 3 since there are max 4 tiers per DD.
     /// Sender should be treasury compliance account and receiver authorized DD.

@@ -5093,6 +5093,7 @@ with this <code>hash</code> can be successfully sent to the network.
 -  [`0x1::SlidingNonce`](../../modules/doc/SlidingNonce.md#0x1_SlidingNonce)
 -  [`0x1::TransactionFee`](../../modules/doc/TransactionFee.md#0x1_TransactionFee)
 -  [`0x1::VASP`](../../modules/doc/VASP.md#0x1_VASP)
+-  [`0x1::VLS`](../../modules/doc/VLS.md#0x1_VLS)
 -  [`0x1::ValidatorConfig`](../../modules/doc/ValidatorConfig.md#0x1_ValidatorConfig)
 -  [`0x1::ValidatorOperatorConfig`](../../modules/doc/ValidatorOperatorConfig.md#0x1_ValidatorOperatorConfig)
 -  [`0x1::Vector`](../../modules/doc/Vector.md#0x1_Vector)
