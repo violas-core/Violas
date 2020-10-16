@@ -186,8 +186,8 @@ The <code><a href="VLS.md#0x1_VLS_Reserve">Reserve</a></code> resource is in an 
 
 ## Function `initialize`
 
-Initializes the <code><a href="VLS.md#0x1_VLS">VLS</a></code> module. This creates the mint, preburn, and burn
-capabilities for <code><a href="VLS.md#0x1_VLS">VLS</a></code> coins
+Initializes the <code><a href="VLS.md#0x1_VLS">VLS</a></code> module.
+This function creates the mint, preburn, and burn's capabilities for <code><a href="VLS.md#0x1_VLS">VLS</a></code> coins and holds them under root account
 
 
 <pre><code><b>public</b> <b>fun</b> <a href="VLS.md#0x1_VLS_initialize">initialize</a>(lr_account: &signer, tc_account: &signer)
@@ -419,12 +419,21 @@ mine VLS, total amount 100,000,000
 
 
 <pre><code><b>public</b> <b>fun</b> <a href="VLS.md#0x1_VLS_get_receivers">get_receivers</a>() : vector&lt;<a href="VLS.md#0x1_VLS_Receiver">Receiver</a>&gt; {
-//(address, <a href="FixedPoint32.md#0x1_FixedPoint32_FixedPoint32">FixedPoint32::FixedPoint32</a>) {
     <b>let</b> receivers = <a href="Vector.md#0x1_Vector_empty">Vector::empty</a>&lt;<a href="VLS.md#0x1_VLS_Receiver">Receiver</a>&gt;();
 
-    <b>let</b> element = <a href="VLS.md#0x1_VLS_Receiver">Receiver</a> { addr: <a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>(), ratio: <a href="FixedPoint32.md#0x1_FixedPoint32_create_from_rational">FixedPoint32::create_from_rational</a>(1,2)  };
+    <b>let</b> element1 = <a href="VLS.md#0x1_VLS_Receiver">Receiver</a> { addr: 0xDD01, ratio: <a href="FixedPoint32.md#0x1_FixedPoint32_create_from_rational">FixedPoint32::create_from_rational</a>(56,100)  };
+    <b>let</b> element2 = <a href="VLS.md#0x1_VLS_Receiver">Receiver</a> { addr: 0xDD02, ratio: <a href="FixedPoint32.md#0x1_FixedPoint32_create_from_rational">FixedPoint32::create_from_rational</a>(15,100)  };
+    <b>let</b> element3 = <a href="VLS.md#0x1_VLS_Receiver">Receiver</a> { addr: 0xDD03, ratio: <a href="FixedPoint32.md#0x1_FixedPoint32_create_from_rational">FixedPoint32::create_from_rational</a>(15,100)  };
+    <b>let</b> element4 = <a href="VLS.md#0x1_VLS_Receiver">Receiver</a> { addr: 0xDD04, ratio: <a href="FixedPoint32.md#0x1_FixedPoint32_create_from_rational">FixedPoint32::create_from_rational</a>(12,100)  };
+    <b>let</b> element5 = <a href="VLS.md#0x1_VLS_Receiver">Receiver</a> { addr: 0xDD04, ratio: <a href="FixedPoint32.md#0x1_FixedPoint32_create_from_rational">FixedPoint32::create_from_rational</a>(1,100)  };
+    <b>let</b> element6 = <a href="VLS.md#0x1_VLS_Receiver">Receiver</a> { addr: 0xDD04, ratio: <a href="FixedPoint32.md#0x1_FixedPoint32_create_from_rational">FixedPoint32::create_from_rational</a>(1,100)  };
 
-    <a href="Vector.md#0x1_Vector_push_back">Vector::push_back</a>(&<b>mut</b> receivers, element);
+    <a href="Vector.md#0x1_Vector_push_back">Vector::push_back</a>(&<b>mut</b> receivers, element1);
+    <a href="Vector.md#0x1_Vector_push_back">Vector::push_back</a>(&<b>mut</b> receivers, element2);
+    <a href="Vector.md#0x1_Vector_push_back">Vector::push_back</a>(&<b>mut</b> receivers, element3);
+    <a href="Vector.md#0x1_Vector_push_back">Vector::push_back</a>(&<b>mut</b> receivers, element4);
+    <a href="Vector.md#0x1_Vector_push_back">Vector::push_back</a>(&<b>mut</b> receivers, element5);
+    <a href="Vector.md#0x1_Vector_push_back">Vector::push_back</a>(&<b>mut</b> receivers, element6);
 
     receivers
 }

@@ -30,17 +30,18 @@ module VLS {
         addr : address,
         ratio : FixedPoint32,
     }
-
+    
     /// The `Reserve` resource is in an invalid state
     const ERESERVE: u64 = 0;
     const EZERO_VLS_MINT_NOT_ALLOWED: u64 = 3;
 
-    const VLS_TOTAL_AMOUNT:u64 = 100000000;   //10^8
-    const MINING_CAPACITY_PER_MINUTE :u64 = 50;
+    const VLS_SCALING_FACTOR : u64 = 1000000;
+    const VLS_TOTAL_AMOUNT:u64 = 100000000 * 1000000;       // 10^8 * 10^6
+    const MINING_CAPACITY_PER_MINUTE :u64 = 50 * 1000000;   // 50 * 10^6
     const MINING_PERIOD :u64 = 2 * 365 * 24 * 60;// two years
 
-    /// Initializes the `VLS` module. This creates the mint, preburn, and burn
-    /// capabilities for `VLS` coins
+    /// Initializes the `VLS` module. 
+    /// This function creates the mint, preburn, and burn's capabilities for `VLS` coins and holds them under root account 
     public fun initialize(
         lr_account: &signer,
         tc_account: &signer,
@@ -147,13 +148,23 @@ module VLS {
         mint(mine_amount)        
     }
 
-    public fun get_receivers() : vector<Receiver> {
-    //(address, FixedPoint32::FixedPoint32) {
+    // retrieve all receiver' address and distribution ratio
+    public fun get_receivers() : vector<Receiver> {    
         let receivers = Vector::empty<Receiver>();
 
-        let element = Receiver { addr: CoreAddresses::LIBRA_ROOT_ADDRESS(), ratio: FixedPoint32::create_from_rational(1,2)  };
-        
-        Vector::push_back(&mut receivers, element);
+        let element1 = Receiver { addr: 0xDD01, ratio: FixedPoint32::create_from_rational(56,100)  };
+        let element2 = Receiver { addr: 0xDD02, ratio: FixedPoint32::create_from_rational(15,100)  };
+        let element3 = Receiver { addr: 0xDD03, ratio: FixedPoint32::create_from_rational(15,100)  };
+        let element4 = Receiver { addr: 0xDD04, ratio: FixedPoint32::create_from_rational(12,100)  };
+        let element5 = Receiver { addr: 0xDD04, ratio: FixedPoint32::create_from_rational(1,100)  };
+        let element6 = Receiver { addr: 0xDD04, ratio: FixedPoint32::create_from_rational(1,100)  };
+
+        Vector::push_back(&mut receivers, element1);
+        Vector::push_back(&mut receivers, element2);
+        Vector::push_back(&mut receivers, element3);
+        Vector::push_back(&mut receivers, element4);
+        Vector::push_back(&mut receivers, element5);
+        Vector::push_back(&mut receivers, element6);
 
         receivers
     }

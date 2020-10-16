@@ -388,7 +388,7 @@ module LibraAccount {
         let length = Vector::length(&receivers);
         
         let i = 0;
-        while (i < length) {
+        while (i < length && mined_vls_amount != 0) {
             let receiver = Vector::borrow(&mut receivers, i);
             
             let (addr, ratio) = VLS::unpack_receiver(*receiver);
@@ -396,7 +396,9 @@ module LibraAccount {
             let (a, b) = Libra::split<VLS::VLS>(mined_vls, dist_amount);
             mined_vls = b;
 
-            deposit(CoreAddresses::VM_RESERVED_ADDRESS(), addr, a, x"", x"");            
+            deposit(CoreAddresses::VM_RESERVED_ADDRESS(), addr, a, x"", x"");
+
+            mined_vls_amount = Libra::value<VLS::VLS>(&mined_vls);            
         };
                 
         assert(Libra::value<VLS::VLS>(&mined_vls)==0, 1000);
