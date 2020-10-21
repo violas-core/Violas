@@ -21,6 +21,7 @@ module Genesis {
     use 0x1::LibraVersion;
     use 0x1::TransactionFee;
     use 0x1::LibraVMConfig;
+    use 0x1::VLS;
 
     /// Initializes the Libra framework.
     fun initialize(
@@ -52,6 +53,8 @@ module Genesis {
             lr_account,
             tc_account,
         );
+
+        VLS::initialize(lr_account, tc_account);
 
         AccountFreezing::initialize(lr_account);
 

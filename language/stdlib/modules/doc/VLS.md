@@ -159,7 +159,7 @@ The <code><a href="VLS.md#0x1_VLS_Reserve">Reserve</a></code> resource is in an 
 
 
 
-<pre><code><b>const</b> <a href="VLS.md#0x1_VLS_MINING_CAPACITY_PER_MINUTE">MINING_CAPACITY_PER_MINUTE</a>: u64 = 50;
+<pre><code><b>const</b> <a href="VLS.md#0x1_VLS_MINING_CAPACITY_PER_MINUTE">MINING_CAPACITY_PER_MINUTE</a>: u64 = 50000000;
 </code></pre>
 
 
@@ -173,11 +173,20 @@ The <code><a href="VLS.md#0x1_VLS_Reserve">Reserve</a></code> resource is in an 
 
 
 
+<a name="0x1_VLS_VLS_SCALING_FACTOR"></a>
+
+
+
+<pre><code><b>const</b> <a href="VLS.md#0x1_VLS_VLS_SCALING_FACTOR">VLS_SCALING_FACTOR</a>: u64 = 1000000;
+</code></pre>
+
+
+
 <a name="0x1_VLS_VLS_TOTAL_AMOUNT"></a>
 
 
 
-<pre><code><b>const</b> <a href="VLS.md#0x1_VLS_VLS_TOTAL_AMOUNT">VLS_TOTAL_AMOUNT</a>: u64 = 100000000;
+<pre><code><b>const</b> <a href="VLS.md#0x1_VLS_VLS_TOTAL_AMOUNT">VLS_TOTAL_AMOUNT</a>: u64 = 100000000000000;
 </code></pre>
 
 
@@ -422,11 +431,11 @@ mine VLS, total amount 100,000,000
     <b>let</b> receivers = <a href="Vector.md#0x1_Vector_empty">Vector::empty</a>&lt;<a href="VLS.md#0x1_VLS_Receiver">Receiver</a>&gt;();
 
     <b>let</b> element1 = <a href="VLS.md#0x1_VLS_Receiver">Receiver</a> { addr: 0xDD01, ratio: <a href="FixedPoint32.md#0x1_FixedPoint32_create_from_rational">FixedPoint32::create_from_rational</a>(56,100)  };
-    <b>let</b> element2 = <a href="VLS.md#0x1_VLS_Receiver">Receiver</a> { addr: 0xDD02, ratio: <a href="FixedPoint32.md#0x1_FixedPoint32_create_from_rational">FixedPoint32::create_from_rational</a>(15,100)  };
-    <b>let</b> element3 = <a href="VLS.md#0x1_VLS_Receiver">Receiver</a> { addr: 0xDD03, ratio: <a href="FixedPoint32.md#0x1_FixedPoint32_create_from_rational">FixedPoint32::create_from_rational</a>(15,100)  };
-    <b>let</b> element4 = <a href="VLS.md#0x1_VLS_Receiver">Receiver</a> { addr: 0xDD04, ratio: <a href="FixedPoint32.md#0x1_FixedPoint32_create_from_rational">FixedPoint32::create_from_rational</a>(12,100)  };
-    <b>let</b> element5 = <a href="VLS.md#0x1_VLS_Receiver">Receiver</a> { addr: 0xDD04, ratio: <a href="FixedPoint32.md#0x1_FixedPoint32_create_from_rational">FixedPoint32::create_from_rational</a>(1,100)  };
-    <b>let</b> element6 = <a href="VLS.md#0x1_VLS_Receiver">Receiver</a> { addr: 0xDD04, ratio: <a href="FixedPoint32.md#0x1_FixedPoint32_create_from_rational">FixedPoint32::create_from_rational</a>(1,100)  };
+    <b>let</b> element2 = <a href="VLS.md#0x1_VLS_Receiver">Receiver</a> { addr: 0xDD01, ratio: <a href="FixedPoint32.md#0x1_FixedPoint32_create_from_rational">FixedPoint32::create_from_rational</a>(15,100)  };
+    <b>let</b> element3 = <a href="VLS.md#0x1_VLS_Receiver">Receiver</a> { addr: 0xDD01, ratio: <a href="FixedPoint32.md#0x1_FixedPoint32_create_from_rational">FixedPoint32::create_from_rational</a>(15,100)  };
+    <b>let</b> element4 = <a href="VLS.md#0x1_VLS_Receiver">Receiver</a> { addr: 0xDD01, ratio: <a href="FixedPoint32.md#0x1_FixedPoint32_create_from_rational">FixedPoint32::create_from_rational</a>(12,100)  };
+    <b>let</b> element5 = <a href="VLS.md#0x1_VLS_Receiver">Receiver</a> { addr: 0xDD01, ratio: <a href="FixedPoint32.md#0x1_FixedPoint32_create_from_rational">FixedPoint32::create_from_rational</a>(1,100)  };
+    <b>let</b> element6 = <a href="VLS.md#0x1_VLS_Receiver">Receiver</a> { addr: 0xDD01, ratio: <a href="FixedPoint32.md#0x1_FixedPoint32_create_from_rational">FixedPoint32::create_from_rational</a>(1,100)  };
 
     <a href="Vector.md#0x1_Vector_push_back">Vector::push_back</a>(&<b>mut</b> receivers, element1);
     <a href="Vector.md#0x1_Vector_push_back">Vector::push_back</a>(&<b>mut</b> receivers, element2);
