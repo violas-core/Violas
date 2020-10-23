@@ -17,7 +17,7 @@ use structopt::StructOpt;
 pub enum Command {
     #[structopt(about = "Displays the current account resource on the blockchain")]
     AccountResource(crate::account_resource::AccountResource),
-    #[structopt(about = "Remove a validator from ValidatorSet")]
+    #[structopt(about = "Adds a validator to the ValidatorSet")]
     AddValidator(crate::governance::AddValidator),
     #[structopt(about = "Check an endpoint for a listening socket")]
     CheckEndpoint(crate::network_checker::CheckEndpoint),
@@ -30,7 +30,7 @@ pub enum Command {
     #[structopt(about = "Extract a public key from the validator storage")]
     ExtractPublicKey(crate::keys::ExtractPublicKey),
     #[structopt(about = "Set the waypoint in the validator storage")]
-    InsertWaypoint(crate::waypoint::InsertWaypoint),
+    InsertWaypoint(libra_management::waypoint::InsertWaypoint),
     #[structopt(about = "Prints an account from the validator storage")]
     PrintAccount(crate::account::PrintAccount),
     #[structopt(about = "Remove a validator from ValidatorSet")]
@@ -196,6 +196,22 @@ impl Command {
         execute_command!(self, Command::AddValidator, CommandName::AddValidator)
     }
 
+    pub fn check_endpoint(self) -> Result<String, Error> {
+        execute_command!(self, Command::CheckEndpoint, CommandName::CheckEndpoint)
+    }
+
+    pub fn create_validator(self) -> Result<(TransactionContext, AccountAddress), Error> {
+        execute_command!(self, Command::CreateValidator, CommandName::CreateValidator)
+    }
+
+    pub fn create_validator_operator(self) -> Result<(TransactionContext, AccountAddress), Error> {
+        execute_command!(
+            self,
+            Command::CreateValidatorOperator,
+            CommandName::CreateValidatorOperator
+        )
+    }
+
     pub fn extract_private_key(self) -> Result<(), Error> {
         execute_command!(
             self,
@@ -265,6 +281,14 @@ impl Command {
             self,
             Command::SetValidatorConfig,
             CommandName::SetValidatorConfig
+        )
+    }
+
+    pub fn set_validator_operator(self) -> Result<TransactionContext, Error> {
+        execute_command!(
+            self,
+            Command::SetValidatorOperator,
+            CommandName::SetValidatorOperator
         )
     }
 

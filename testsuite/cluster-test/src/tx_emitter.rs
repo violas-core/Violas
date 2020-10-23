@@ -51,8 +51,8 @@ use tokio::{task::JoinHandle, time};
 const MAX_TXN_BATCH_SIZE: usize = 100; // Max transactions per account in mempool
                                        // Please make 'MAX_CHILD_VASP_NUM' consistency with 'MAX_CHILD_ACCOUNTS' constant under VASP.move
 const MAX_CHILD_VASP_NUM: usize = 256;
+const MAX_VASP_ACCOUNT_NUM: usize = 16;
 const DD_KEY: &str = "dd.key";
-const VASP_KEY: &str = "vasp.key";
 
 pub struct TxEmitter {
     accounts: Vec<AccountData>,
@@ -238,8 +238,9 @@ impl TxEmitter {
         let num_accounts = req.accounts_per_client * num_clients;
         if self.premainnet {
             assert!(
-                num_accounts < MAX_CHILD_VASP_NUM,
-                "VASP only supports to create max 256 child accounts, but try to create {} accounts",
+                num_accounts <= MAX_VASP_ACCOUNT_NUM * MAX_CHILD_VASP_NUM,
+                "VASP only supports to create max {} child accounts, but try to create {} accounts",
+                MAX_VASP_ACCOUNT_NUM * MAX_CHILD_VASP_NUM,
                 num_accounts
             );
         }
@@ -345,8 +346,13 @@ impl TxEmitter {
         })
     }
 
-    pub async fn load_vasp_account(&self, client: &JsonRpcAsyncClient) -> Result<AccountData> {
-        let mint_key: Ed25519PrivateKey = generate_key::load_key(VASP_KEY);
+    pub async fn load_vasp_account(
+        &self,
+        client: &JsonRpcAsyncClient,
+        index: usize,
+    ) -> Result<AccountData> {
+        let file = "vasp".to_owned() + index.to_string().as_str() + ".key";
+        let mint_key: Ed25519PrivateKey = generate_key::load_key(file);
         let mint_key_pair: KeyPair<Ed25519PrivateKey, Ed25519PublicKey> = KeyPair::from(mint_key);
         let address = libra_types::account_address::from_public_key(&mint_key_pair.public_key);
         let sequence_number = query_sequence_numbers(&client, &[address])
@@ -423,8 +429,12 @@ impl TxEmitter {
         } else {
             let mut seed_accounts = vec![];
             info!("Loading VASP account as seed accounts");
-            let account = self.load_vasp_account(&client).await?;
-            seed_accounts.push(account);
+            let load_account_num = min(seed_account_num, MAX_VASP_ACCOUNT_NUM);
+            for i in 0..load_account_num {
+                let account = self.load_vasp_account(&client, i).await?;
+                seed_accounts.push(account);
+            }
+            info!("Loaded {} VASP accounts", seed_accounts.len());
             seed_accounts
         };
         Ok(seed_accounts)
@@ -439,22 +449,25 @@ impl TxEmitter {
             info!("Not minting accounts");
             return Ok(()); // Early return to skip printing 'Minting ...' logs
         }
-        let num_seed_accounts = if requested_accounts / req.instances.len() > MAX_CHILD_VASP_NUM {
-            requested_accounts / MAX_CHILD_VASP_NUM + 1
-        } else {
-            req.instances.len()
-        };
+        let expected_num_seed_accounts =
+            if requested_accounts / req.instances.len() > MAX_CHILD_VASP_NUM {
+                requested_accounts / MAX_CHILD_VASP_NUM + 1
+            } else {
+                req.instances.len()
+            };
         let num_accounts = requested_accounts - self.accounts.len(); // Only minting extra accounts
-        let num_new_child_accounts = (num_accounts + num_seed_accounts - 1) / num_seed_accounts;
         let coins_per_account = (SEND_AMOUNT + req.gas_price) * MAX_TXNS;
-        let coins_per_seed_account = coins_per_account * num_new_child_accounts as u64;
         let coins_total = coins_per_account * num_accounts as u64;
 
         let mut faucet_account = self.get_money_source(&req.instances, coins_total).await?;
         // Create seed accounts with which we can create actual accounts concurrently
         let seed_accounts = self
-            .get_seed_accounts(&req.instances, num_seed_accounts)
+            .get_seed_accounts(&req.instances, expected_num_seed_accounts)
             .await?;
+        let actual_num_seed_accounts = seed_accounts.len();
+        let num_new_child_accounts =
+            (num_accounts + actual_num_seed_accounts - 1) / actual_num_seed_accounts;
+        let coins_per_seed_account = coins_per_account * num_new_child_accounts as u64;
         mint_to_new_accounts(
             &mut faucet_account,
             &seed_accounts,
@@ -468,14 +481,14 @@ impl TxEmitter {
         info!("Completed minting seed accounts");
         info!("Minting additional {} accounts", num_accounts);
 
-        let seed_rngs = gen_rng_for_reusable_account(num_seed_accounts);
+        let seed_rngs = gen_rng_for_reusable_account(actual_num_seed_accounts);
         // For each seed account, create a future and transfer libra from that seed account to new accounts
         let account_futures = seed_accounts
             .into_iter()
             .enumerate()
             .map(|(i, seed_account)| {
                 // Spawn new threads
-                let index = i / req.instances.len();
+                let index = i % req.instances.len();
                 let instance = req.instances[index].clone();
                 let client = instance.json_rpc_client();
                 create_new_accounts(
@@ -1060,22 +1073,15 @@ async fn create_new_accounts(
     let mut i = 0;
     let mut accounts = vec![];
     while i < num_new_accounts {
+        let batch_size = min(
+            max_num_accounts_per_batch as usize,
+            min(MAX_TXN_BATCH_SIZE, num_new_accounts - i),
+        );
         let mut batch = if reuse_account {
-            info!("loading {} accounts if they exist", num_new_accounts);
-            gen_reusable_accounts(
-                &client,
-                min(
-                    max_num_accounts_per_batch as usize,
-                    min(MAX_TXN_BATCH_SIZE, num_new_accounts - i),
-                ),
-                &mut rng,
-            )
-            .await?
+            info!("loading {} accounts if they exist", batch_size);
+            gen_reusable_accounts(&client, batch_size, &mut rng).await?
         } else {
-            gen_random_accounts(min(
-                max_num_accounts_per_batch as usize,
-                min(MAX_TXN_BATCH_SIZE, num_new_accounts - i),
-            ))
+            gen_random_accounts(batch_size)
         };
         let requests = gen_create_child_txn_requests(
             &mut source_account,
