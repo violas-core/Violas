@@ -23,7 +23,9 @@ module VLS {
         burn_cap: Libra::BurnCapability<VLS>,
         /// The preburn for `VLS`. This is an administrative field since we
         /// need to alway preburn before we burn.
-        preburn_cap: Libra::Preburn<VLS>,        
+        preburn_cap: Libra::Preburn<VLS>,
+        /// Initial timestamp
+        initial_timestamp: u64,        
     }
 
     struct Receiver {
@@ -64,7 +66,7 @@ module VLS {
         AccountLimits::publish_unrestricted_limits<VLS>(lr_account);
         let preburn_cap = Libra::create_preburn<VLS>(tc_account);
         
-        move_to(lr_account, Reserve { mint_cap, burn_cap, preburn_cap });
+        move_to(lr_account, Reserve { mint_cap, burn_cap, preburn_cap, initial_timestamp: 0 });
     }
 
     /// Returns true if `CoinType` is `VLS::VLS`
@@ -124,6 +126,12 @@ module VLS {
     public fun mine() : Libra<VLS>
     acquires Reserve {        
         let expected_amount : u64 = 0;
+        let reserve = borrow_global_mut<Reserve>(CoreAddresses::LIBRA_ROOT_ADDRESS());
+        if (reserve.initial_timestamp == 0)
+        {
+            reserve.initial_timestamp = LibraTimestamp::now_seconds();
+        };   
+
         let now_minutes = LibraTimestamp::now_seconds() / 60;
         let step = now_minutes / MINING_PERIOD;        
         let process = now_minutes % MINING_PERIOD;

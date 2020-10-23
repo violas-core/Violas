@@ -93,6 +93,12 @@ VLS holds mint capability for mining
  The preburn for <code><a href="VLS.md#0x1_VLS">VLS</a></code>. This is an administrative field since we
  need to alway preburn before we burn.
 </dd>
+<dt>
+<code>initial_timestamp: u64</code>
+</dt>
+<dd>
+ Initial timestamp
+</dd>
 </dl>
 
 
@@ -230,7 +236,7 @@ This function creates the mint, preburn, and burn's capabilities for <code><a hr
     <a href="AccountLimits.md#0x1_AccountLimits_publish_unrestricted_limits">AccountLimits::publish_unrestricted_limits</a>&lt;<a href="VLS.md#0x1_VLS">VLS</a>&gt;(lr_account);
     <b>let</b> preburn_cap = <a href="Libra.md#0x1_Libra_create_preburn">Libra::create_preburn</a>&lt;<a href="VLS.md#0x1_VLS">VLS</a>&gt;(tc_account);
 
-    move_to(lr_account, <a href="VLS.md#0x1_VLS_Reserve">Reserve</a> { mint_cap, burn_cap, preburn_cap });
+    move_to(lr_account, <a href="VLS.md#0x1_VLS_Reserve">Reserve</a> { mint_cap, burn_cap, preburn_cap, initial_timestamp: 0 });
 }
 </code></pre>
 
@@ -383,6 +389,12 @@ mine VLS, total amount 100,000,000
 <pre><code><b>public</b> <b>fun</b> <a href="VLS.md#0x1_VLS_mine">mine</a>() : <a href="Libra.md#0x1_Libra">Libra</a>&lt;<a href="VLS.md#0x1_VLS">VLS</a>&gt;
 <b>acquires</b> <a href="VLS.md#0x1_VLS_Reserve">Reserve</a> {
     <b>let</b> expected_amount : u64 = 0;
+    <b>let</b> reserve = borrow_global_mut&lt;<a href="VLS.md#0x1_VLS_Reserve">Reserve</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>());
+    <b>if</b> (reserve.initial_timestamp == 0)
+    {
+        reserve.initial_timestamp = <a href="LibraTimestamp.md#0x1_LibraTimestamp_now_seconds">LibraTimestamp::now_seconds</a>();
+    };
+
     <b>let</b> now_minutes = <a href="LibraTimestamp.md#0x1_LibraTimestamp_now_seconds">LibraTimestamp::now_seconds</a>() / 60;
     <b>let</b> step = now_minutes / <a href="VLS.md#0x1_VLS_MINING_PERIOD">MINING_PERIOD</a>;
     <b>let</b> process = now_minutes % <a href="VLS.md#0x1_VLS_MINING_PERIOD">MINING_PERIOD</a>;
