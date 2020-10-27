@@ -4,8 +4,9 @@
 use crate::smoke_test_environment::SmokeTestEnvironment;
 use cli::client_proxy::ClientProxy;
 use libra_config::config::{Identity, NodeConfig, SecureBackend};
+use libra_crypto::ed25519::Ed25519PublicKey;
 use rust_decimal::{prelude::FromPrimitive, Decimal};
-use std::{collections::BTreeMap, str::FromStr, string::ToString};
+use std::{collections::BTreeMap, fs::File, io::Write, path::PathBuf, str::FromStr};
 
 // TODO(joshlind): Refactor all of these so that they can be contained within the calling
 // test files and not shared across all tests.
@@ -42,40 +43,6 @@ pub fn compare_balances(
         })
 }
 
-pub fn test_smoke_script(mut client_proxy: ClientProxy) {
-    client_proxy.create_next_account(false).unwrap();
-    client_proxy
-        .mint_coins(&["mintb", "0", "10", "Coin1"], true)
-        .unwrap();
-    assert!(compare_balances(
-        vec![(10.0, "Coin1".to_string())],
-        client_proxy.get_balances(&["b", "0"]).unwrap(),
-    ));
-    client_proxy.create_next_account(false).unwrap();
-    client_proxy
-        .mint_coins(&["mintb", "1", "1", "Coin1"], true)
-        .unwrap();
-    client_proxy
-        .transfer_coins(&["tb", "0", "1", "3", "Coin1"], true)
-        .unwrap();
-    assert!(compare_balances(
-        vec![(7.0, "Coin1".to_string())],
-        client_proxy.get_balances(&["b", "0"]).unwrap(),
-    ));
-    assert!(compare_balances(
-        vec![(4.0, "Coin1".to_string())],
-        client_proxy.get_balances(&["b", "1"]).unwrap(),
-    ));
-    client_proxy.create_next_account(false).unwrap();
-    client_proxy
-        .mint_coins(&["mintb", "2", "15", "Coin1"], true)
-        .unwrap();
-    assert!(compare_balances(
-        vec![(15.0, "Coin1".to_string())],
-        client_proxy.get_balances(&["b", "2"]).unwrap(),
-    ));
-}
-
 /// Sets up a SmokeTestEnvironment with specified size and connects a client
 /// proxy to the node_index.
 pub fn setup_swarm_and_client_proxy(
@@ -97,9 +64,10 @@ pub fn setup_swarm_and_client_proxy(
 pub mod libra_swarm_utils {
     use crate::test_utils::fetch_backend_storage;
     use cli::client_proxy::ClientProxy;
-    use libra_config::config::{NodeConfig, SecureBackend};
+    use libra_config::config::{NodeConfig, SecureBackend, WaypointConfig};
     use libra_key_manager::libra_interface::JsonRpcLibraInterface;
     use libra_operational_tool::test_helper::OperationalTool;
+    use libra_secure_storage::{KVStorage, Storage};
     use libra_swarm::swarm::LibraSwarm;
     use libra_transaction_replay::LibraDebugger;
     use libra_types::{chain_id::ChainId, waypoint::Waypoint};
@@ -150,7 +118,8 @@ pub mod libra_swarm_utils {
     /// Returns a Libra Debugger pointing to a node at the given node index.
     pub fn get_libra_debugger(swarm: &LibraSwarm, node_index: usize) -> LibraDebugger {
         let (node_config, _) = load_node_config(swarm, node_index);
-        let swarm_rpc_endpoint = format!("http://localhost:{}", node_config.rpc.address.port());
+        let swarm_rpc_endpoint =
+            format!("http://localhost:{}", node_config.json_rpc.address.port());
         LibraDebugger::json_rpc(swarm_rpc_endpoint.as_str()).unwrap()
     }
 
@@ -187,6 +156,26 @@ pub mod libra_swarm_utils {
         let node_config_path = swarm.config.config_files.get(node_index).unwrap();
         node_config.save(node_config_path).unwrap();
     }
+
+    pub fn insert_waypoint(node_config: &mut NodeConfig, waypoint: Waypoint) {
+        let f = |backend: &SecureBackend| {
+            let mut storage: Storage = backend.into();
+            storage
+                .set(libra_global_constants::WAYPOINT, waypoint)
+                .expect("Unable to write waypoint");
+            storage
+                .set(libra_global_constants::GENESIS_WAYPOINT, waypoint)
+                .expect("Unable to write waypoint");
+        };
+        let backend = &node_config.consensus.safety_rules.backend;
+        f(backend);
+        match &node_config.base.waypoint {
+            WaypointConfig::FromStorage(backend) => {
+                f(backend);
+            }
+            _ => panic!("unexpected waypoint from node config"),
+        }
+    }
 }
 
 /// Loads the node's storage backend from the given node config. If a namespace
@@ -210,4 +199,18 @@ fn fetch_backend_storage(
     } else {
         panic!("Couldn't load identity from storage");
     }
+}
+
+/// Writes a given public key to a file specified by the given path using hex encoding.
+pub fn write_key_to_file_hex_format(key: &Ed25519PublicKey, key_file_path: PathBuf) {
+    let hex_encoded_key = hex::encode(key.to_bytes());
+    let mut file = File::create(key_file_path).unwrap();
+    file.write_all(&hex_encoded_key.as_bytes()).unwrap();
+}
+
+/// Writes a given public key to a file specified by the given path using lcs encoding.
+pub fn write_key_to_file_lcs_format(key: &Ed25519PublicKey, key_file_path: PathBuf) {
+    let lcs_encoded_key = lcs::to_bytes(&key).unwrap();
+    let mut file = File::create(key_file_path).unwrap();
+    file.write_all(&lcs_encoded_key).unwrap();
 }

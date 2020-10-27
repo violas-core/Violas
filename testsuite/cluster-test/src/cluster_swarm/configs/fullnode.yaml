@@ -38,13 +38,16 @@ upstream:
   - private: "vfn"
   - public
 
+mempool:
+  default_failovers: 0
+
 metrics:
   enabled: false
 
 storage:
   prune_window: 50000
 
-rpc:
+json_rpc:
     address: 0.0.0.0:8080
 
 # this is only enabled when the binary is compiled with failpoints feature, otherwise no-op
@@ -61,3 +64,6 @@ failpoints:
   jsonrpc::method::get_state_proof: 1%return
   jsonrpc::method::get_account_state_with_proof: 1%return
   jsonrpc::method::get_network_status: 1%return
+  state_sync::apply_chunk: 0.1%return
+  state_sync::process_chunk_request: 0.1%return
+  mempool::send_to: 1%return

@@ -34,13 +34,16 @@ module VLS {
     }
     
     /// The `Reserve` resource is in an invalid state
-    const ERESERVE: u64 = 0;
+    const E_RESERVE_HAS_BEEN_INITIALIZED: u64 = 0;
     const EZERO_VLS_MINT_NOT_ALLOWED: u64 = 3;
+    const E_INITIAL_TIMESTAMP_HAS_BEEN_INITIALIED: u64 = 4;
+    const E_INITIAL_TIMESTAMP_HAS_NOT_BEEN_INITIALIED: u64 = 5;
+    const E_THE_AMOUNT_OF_VLS_HAS_REACHED_MAXIMIUM: u64 = 6;
 
     const VLS_SCALING_FACTOR : u64 = 1000000;
-    const VLS_TOTAL_AMOUNT:u64 = 100000000 * 1000000;       // 10^8 * 10^6
-    const MINING_CAPACITY_PER_MINUTE :u64 = 50 * 1000000;   // 50 * 10^6
-    const MINING_PERIOD :u64 = 2 * 365 * 24 * 60;// two years
+    const VLS_TOTAL_AMOUNT: u64 = 100000000 * 1000000;      // 10^8 * 10^6
+    const MINING_CAPACITY_PER_MINUTE: u64 = 50 * 1000000;   // 50 * 10^6
+    const MINING_PERIOD: u64 = 2 * 365 * 24 * 60;           // two years
 
     /// Initializes the `VLS` module. 
     /// This function creates the mint, preburn, and burn's capabilities for `VLS` coins and holds them under root account 
@@ -48,12 +51,14 @@ module VLS {
         lr_account: &signer,
         tc_account: &signer,
     ) {
-        //LibraTimestamp::assert_genesis();
+        LibraTimestamp::assert_genesis();
 
         // Operational constraint
         CoreAddresses::assert_currency_info(lr_account);
+
         // Reserve must not exist.
-        assert(!exists<Reserve>(CoreAddresses::LIBRA_ROOT_ADDRESS()), Errors::already_published(ERESERVE));
+        assert(!exists<Reserve>(CoreAddresses::LIBRA_ROOT_ADDRESS()), Errors::already_published(E_RESERVE_HAS_BEEN_INITIALIZED));
+
         let (mint_cap, burn_cap) = Libra::register_currency<VLS>(
             lr_account,
             FixedPoint32::create_from_rational(1, 1), // exchange rate to VLS
@@ -67,6 +72,17 @@ module VLS {
         let preburn_cap = Libra::create_preburn<VLS>(tc_account);
         
         move_to(lr_account, Reserve { mint_cap, burn_cap, preburn_cap, initial_timestamp: 0 });
+    }
+
+    public fun initialize_timestamp() 
+    acquires Reserve {
+        LibraTimestamp::assert_operating();
+
+        let reserve = borrow_global_mut<Reserve>(CoreAddresses::LIBRA_ROOT_ADDRESS());
+        
+        assert(reserve.initial_timestamp == 0, Errors::already_published(E_INITIAL_TIMESTAMP_HAS_BEEN_INITIALIED));
+
+        reserve.initial_timestamp = LibraTimestamp::now_seconds();               
     }
 
     /// Returns true if `CoinType` is `VLS::VLS`
@@ -124,34 +140,38 @@ module VLS {
 
     /// mine VLS, total amount 100,000,000    
     public fun mine() : Libra<VLS>
-    acquires Reserve {        
-        let expected_amount : u64 = 0;
-        let reserve = borrow_global_mut<Reserve>(CoreAddresses::LIBRA_ROOT_ADDRESS());
-        if (reserve.initial_timestamp == 0)
-        {
-            reserve.initial_timestamp = LibraTimestamp::now_seconds();
-        };   
-
-        let now_minutes = LibraTimestamp::now_seconds() / 60;
+    acquires Reserve {                
+        let reserve = borrow_global<Reserve>(CoreAddresses::LIBRA_ROOT_ADDRESS());
+        let initial_timestamp = reserve.initial_timestamp;
+        assert(initial_timestamp != 0, Errors::invalid_argument(E_INITIAL_TIMESTAMP_HAS_NOT_BEEN_INITIALIED));
+                
+        let now_minutes = (LibraTimestamp::now_seconds() - initial_timestamp) / 60;
         let step = now_minutes / MINING_PERIOD;        
         let process = now_minutes % MINING_PERIOD;
         let mining_capacity = MINING_CAPACITY_PER_MINUTE;
+        let expected_amount : u64 = 0;
 
         while (step > 0) {
             // calculate and accumulate mining amount for every period 
             expected_amount = expected_amount + mining_capacity * MINING_PERIOD;
+            
+            // mining capacity reduces by half per period 
             mining_capacity = mining_capacity / 2;
 
             step = step - 1;
         };
 
         let expected_amount = expected_amount + mining_capacity * process;
-        
+                
         // the expected amount mustn't be greater than  VLS_TOTAL_AMOUNT
         if (expected_amount > VLS_TOTAL_AMOUNT)
             expected_amount = VLS_TOTAL_AMOUNT;
 
-        let mine_amount = expected_amount - (Libra::market_cap<VLS>() as u64);
+        let minted_amount : u64 = (Libra::market_cap<VLS>() as u64);
+
+        assert(minted_amount < VLS_TOTAL_AMOUNT,  Errors::invalid_argument(E_THE_AMOUNT_OF_VLS_HAS_REACHED_MAXIMIUM));
+
+        let mine_amount = expected_amount - minted_amount;
         
         mint(mine_amount)        
     }
@@ -161,11 +181,11 @@ module VLS {
         let receivers = Vector::empty<Receiver>();
 
         let element1 = Receiver { addr: 0xDD01, ratio: FixedPoint32::create_from_rational(56,100)  };
-        let element2 = Receiver { addr: 0xDD01, ratio: FixedPoint32::create_from_rational(15,100)  };
-        let element3 = Receiver { addr: 0xDD01, ratio: FixedPoint32::create_from_rational(15,100)  };
-        let element4 = Receiver { addr: 0xDD01, ratio: FixedPoint32::create_from_rational(12,100)  };
-        let element5 = Receiver { addr: 0xDD01, ratio: FixedPoint32::create_from_rational(1,100)  };
-        let element6 = Receiver { addr: 0xDD01, ratio: FixedPoint32::create_from_rational(1,100)  };
+        let element2 = Receiver { addr: 0xDD02, ratio: FixedPoint32::create_from_rational(15,100)  };
+        let element3 = Receiver { addr: 0xDD03, ratio: FixedPoint32::create_from_rational(15,100)  };
+        let element4 = Receiver { addr: 0xDD04, ratio: FixedPoint32::create_from_rational(12,100)  };
+        let element5 = Receiver { addr: 0xDD05, ratio: FixedPoint32::create_from_rational(1,100)  };
+        let element6 = Receiver { addr: 0xDD06, ratio: FixedPoint32::create_from_rational(1,100)  };
 
         Vector::push_back(&mut receivers, element1);
         Vector::push_back(&mut receivers, element2);

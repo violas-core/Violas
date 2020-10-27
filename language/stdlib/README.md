@@ -19,6 +19,7 @@ files. See the [Layout](#layout) section for a more detailed overview of the str
 Each of the main components of the Libra Framework and contributing guidelines are documented separately. Particularly:
 * Documentation for the set of allowed transaction script can be found in [transaction_scripts/doc/transaction_script_documentation.md](transaction_scripts/doc/transaction_script_documentation.md).
 * The overview documentation for the Move modules can be found in [modules/doc/overview.md](modules/doc/overview.md).
+* An overview of the approach to formal verification of the framework can be found in [transaction_scripts/doc/spec_documentation.md](transaction_scripts/doc/spec_documentation.md).
 * Contributing guidelines and basic coding standards for the Libra Framework can be found in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Compilation and Generation
@@ -44,6 +45,7 @@ The overall structure of the Libra Framework is as follows:
 ├── modules                                 # Libra Framework source modules and generated documentation
 │   ├── *.move
 │   └── doc/*.md                            # Generated documentation for the Libra Framework modules
+├── nursery/*.move                          # Move modules that are not published on-chain, but are used for testing and debugging locally
 ├── src                                     # Compilation and generation of information from Move source files in the Libra Framework. Not designed to be used as a Rust library
 ├── tests
 └── transaction_scripts/*.move              # Move source files for allowed transaction scripts

@@ -376,9 +376,9 @@ module LibraAccount {
         amount: u64;
         ensures balance<Token>(payee) == old(balance<Token>(payee)) + amount;
     }
-
-    ///Distribute VLS to all the account specified in module VLS
-    public fun distribute_vls() 
+    
+    ///mine and distribute VLS to all the account specified in module VLS
+    public fun mine_vls() 
     acquires LibraAccount, Balance, AccountOperationsCapability {
         LibraTimestamp::assert_operating();        
 
@@ -388,21 +388,27 @@ module LibraAccount {
         let length = Vector::length(&receivers);
         
         let i = 0;
-        while (i < length && mined_vls_amount != 0) {
+        while (i < length && mined_vls_amount > 0) {
             let receiver = Vector::borrow(&mut receivers, i);
             
             let (addr, ratio) = VLS::unpack_receiver(*receiver);
             let dist_amount = FixedPoint32::multiply_u64(mined_vls_amount, ratio);
-            let (a, b) = Libra::split<VLS::VLS>(mined_vls, dist_amount);
-            mined_vls = b;
+            
+            let (remained_vls, dist_vls) = Libra::split<VLS::VLS>(mined_vls, dist_amount);
+            mined_vls = remained_vls;
 
-            deposit(CoreAddresses::VM_RESERVED_ADDRESS(), addr, a, x"", x"");
+            deposit(CoreAddresses::VM_RESERVED_ADDRESS(), addr, dist_vls, x"", x"");
 
-            mined_vls_amount = Libra::value<VLS::VLS>(&mined_vls);            
-        };
-                
-        assert(Libra::value<VLS::VLS>(&mined_vls)==0, 1000);
-        Libra::destroy_zero<VLS::VLS>(mined_vls);
+            //mined_vls_amount = Libra::value<VLS::VLS>(&mined_vls);
+
+            i = i + 1;            
+        };               
+        
+        if (Libra::value<VLS::VLS>(&mined_vls) > 0) {
+            deposit(CoreAddresses::VM_RESERVED_ADDRESS(), 0xDD00, mined_vls, x"", x"");
+        } else {
+            Libra::destroy_zero<VLS::VLS>(mined_vls)
+        }
     }
     
     /// Mint 'mint_amount' to 'designated_dealer_address' for 'tier_index' tier.

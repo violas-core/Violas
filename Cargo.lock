@@ -2586,10 +2586,12 @@ dependencies = [
  "libra-types",
  "libra-vm",
  "libra-workspace-hack",
+ "libra-writeset-generator",
  "move-core-types",
  "move-vm-runtime",
  "move-vm-types",
  "proptest",
+ "serde_json",
  "transaction-builder",
  "transaction-builder-generated",
  "vm",
@@ -3112,6 +3114,7 @@ dependencies = [
  "anyhow",
  "bounded-executor",
  "channel",
+ "fail",
  "futures 0.3.6",
  "itertools 0.9.0",
  "libra-canonical-serialization",
@@ -3458,6 +3461,7 @@ name = "libra-transaction-replay"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "compiled-stdlib",
  "difference",
  "libra-canonical-serialization",
  "libra-state-view",
@@ -3469,11 +3473,13 @@ dependencies = [
  "move-core-types",
  "move-lang",
  "move-vm-runtime",
+ "move-vm-test-utils",
  "move-vm-types",
  "resource-viewer",
  "stdlib",
  "structopt 0.3.18",
  "vm",
+ "vm-genesis",
 ]
 
 [[package]]
@@ -3605,6 +3611,23 @@ dependencies = [
  "sha-1 0.9.1",
  "subtle",
  "syn 1.0.42",
+]
+
+[[package]]
+name = "libra-writeset-generator"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "handlebars",
+ "libra-canonical-serialization",
+ "libra-types",
+ "libra-workspace-hack",
+ "move-lang",
+ "serde",
+ "serde_json",
+ "stdlib",
+ "structopt 0.3.18",
+ "tempfile",
 ]
 
 [[package]]
@@ -5727,9 +5750,9 @@ dependencies = [
 
 [[package]]
 name = "serde-generate"
-version = "0.15.0"
+version = "0.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "055a9bee1a567f86479d9ff82cde1f06c8e5fc72a24c70c4614143800c4b8684"
+checksum = "e3e1b28129c98469c935544d1190586b7c73d9513c6c93e48359f455810b8c1b"
 dependencies = [
  "heck",
  "include_dir",
@@ -6113,6 +6136,7 @@ dependencies = [
  "executor",
  "executor-test-helpers",
  "executor-types",
+ "fail",
  "futures 0.3.6",
  "itertools 0.9.0",
  "libra-canonical-serialization",
@@ -7102,6 +7126,7 @@ dependencies = [
  "anyhow",
  "executor",
  "executor-test-helpers",
+ "fail",
  "libra-config",
  "libra-crypto",
  "libra-state-view",

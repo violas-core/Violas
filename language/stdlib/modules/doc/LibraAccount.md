@@ -23,7 +23,7 @@ before and after every transaction.
 -  [Function `has_published_account_limits`](#0x1_LibraAccount_has_published_account_limits)
 -  [Function `should_track_limits_for_account`](#0x1_LibraAccount_should_track_limits_for_account)
 -  [Function `deposit`](#0x1_LibraAccount_deposit)
--  [Function `distribute_vls`](#0x1_LibraAccount_distribute_vls)
+-  [Function `mine_vls`](#0x1_LibraAccount_mine_vls)
 -  [Function `tiered_mint`](#0x1_LibraAccount_tiered_mint)
 -  [Function `cancel_burn`](#0x1_LibraAccount_cancel_burn)
 -  [Function `withdraw_from_balance`](#0x1_LibraAccount_withdraw_from_balance)
@@ -1125,14 +1125,14 @@ Record a payment of <code>to_deposit</code> from <code>payer</code> to <code>pay
 
 </details>
 
-<a name="0x1_LibraAccount_distribute_vls"></a>
+<a name="0x1_LibraAccount_mine_vls"></a>
 
-## Function `distribute_vls`
+## Function `mine_vls`
 
-Distribute VLS to all the account specified in module VLS
+mine and distribute VLS to all the account specified in module VLS
 
 
-<pre><code><b>public</b> <b>fun</b> <a href="LibraAccount.md#0x1_LibraAccount_distribute_vls">distribute_vls</a>()
+<pre><code><b>public</b> <b>fun</b> <a href="LibraAccount.md#0x1_LibraAccount_mine_vls">mine_vls</a>()
 </code></pre>
 
 
@@ -1141,7 +1141,7 @@ Distribute VLS to all the account specified in module VLS
 <summary>Implementation</summary>
 
 
-<pre><code><b>public</b> <b>fun</b> <a href="LibraAccount.md#0x1_LibraAccount_distribute_vls">distribute_vls</a>()
+<pre><code><b>public</b> <b>fun</b> <a href="LibraAccount.md#0x1_LibraAccount_mine_vls">mine_vls</a>()
 <b>acquires</b> <a href="LibraAccount.md#0x1_LibraAccount">LibraAccount</a>, <a href="LibraAccount.md#0x1_LibraAccount_Balance">Balance</a>, <a href="LibraAccount.md#0x1_LibraAccount_AccountOperationsCapability">AccountOperationsCapability</a> {
     <a href="LibraTimestamp.md#0x1_LibraTimestamp_assert_operating">LibraTimestamp::assert_operating</a>();
 
@@ -1151,21 +1151,27 @@ Distribute VLS to all the account specified in module VLS
     <b>let</b> length = <a href="Vector.md#0x1_Vector_length">Vector::length</a>(&receivers);
 
     <b>let</b> i = 0;
-    <b>while</b> (i &lt; length && mined_vls_amount != 0) {
+    <b>while</b> (i &lt; length && mined_vls_amount &gt; 0) {
         <b>let</b> receiver = <a href="Vector.md#0x1_Vector_borrow">Vector::borrow</a>(&<b>mut</b> receivers, i);
 
         <b>let</b> (addr, ratio) = <a href="VLS.md#0x1_VLS_unpack_receiver">VLS::unpack_receiver</a>(*receiver);
         <b>let</b> dist_amount = <a href="FixedPoint32.md#0x1_FixedPoint32_multiply_u64">FixedPoint32::multiply_u64</a>(mined_vls_amount, ratio);
-        <b>let</b> (a, b) = <a href="Libra.md#0x1_Libra_split">Libra::split</a>&lt;<a href="VLS.md#0x1_VLS_VLS">VLS::VLS</a>&gt;(mined_vls, dist_amount);
-        mined_vls = b;
 
-        <a href="LibraAccount.md#0x1_LibraAccount_deposit">deposit</a>(<a href="CoreAddresses.md#0x1_CoreAddresses_VM_RESERVED_ADDRESS">CoreAddresses::VM_RESERVED_ADDRESS</a>(), addr, a, x"", x"");
+        <b>let</b> (remained_vls, dist_vls) = <a href="Libra.md#0x1_Libra_split">Libra::split</a>&lt;<a href="VLS.md#0x1_VLS_VLS">VLS::VLS</a>&gt;(mined_vls, dist_amount);
+        mined_vls = remained_vls;
 
-        mined_vls_amount = <a href="Libra.md#0x1_Libra_value">Libra::value</a>&lt;<a href="VLS.md#0x1_VLS_VLS">VLS::VLS</a>&gt;(&mined_vls);
+        <a href="LibraAccount.md#0x1_LibraAccount_deposit">deposit</a>(<a href="CoreAddresses.md#0x1_CoreAddresses_VM_RESERVED_ADDRESS">CoreAddresses::VM_RESERVED_ADDRESS</a>(), addr, dist_vls, x"", x"");
+
+        //mined_vls_amount = <a href="Libra.md#0x1_Libra_value">Libra::value</a>&lt;<a href="VLS.md#0x1_VLS_VLS">VLS::VLS</a>&gt;(&mined_vls);
+
+        i = i + 1;
     };
 
-    <b>assert</b>(<a href="Libra.md#0x1_Libra_value">Libra::value</a>&lt;<a href="VLS.md#0x1_VLS_VLS">VLS::VLS</a>&gt;(&mined_vls)==0, 1000);
-    <a href="Libra.md#0x1_Libra_destroy_zero">Libra::destroy_zero</a>&lt;<a href="VLS.md#0x1_VLS_VLS">VLS::VLS</a>&gt;(mined_vls);
+    <b>if</b> (<a href="Libra.md#0x1_Libra_value">Libra::value</a>&lt;<a href="VLS.md#0x1_VLS_VLS">VLS::VLS</a>&gt;(&mined_vls) &gt; 0) {
+        <a href="LibraAccount.md#0x1_LibraAccount_deposit">deposit</a>(<a href="CoreAddresses.md#0x1_CoreAddresses_VM_RESERVED_ADDRESS">CoreAddresses::VM_RESERVED_ADDRESS</a>(), 0xDD00, mined_vls, x"", x"");
+    } <b>else</b> {
+        <a href="Libra.md#0x1_Libra_destroy_zero">Libra::destroy_zero</a>&lt;<a href="VLS.md#0x1_VLS_VLS">VLS::VLS</a>&gt;(mined_vls)
+    }
 }
 </code></pre>
 

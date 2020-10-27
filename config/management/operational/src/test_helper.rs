@@ -13,7 +13,7 @@ use libra_crypto::{ed25519::Ed25519PublicKey, x25519};
 use libra_management::{error::Error, secure_backend::DISK};
 use libra_network_address::NetworkAddress;
 use libra_secure_json_rpc::VMStatusView;
-use libra_types::{account_address::AccountAddress, chain_id::ChainId};
+use libra_types::{account_address::AccountAddress, chain_id::ChainId, waypoint::Waypoint};
 use structopt::StructOpt;
 
 const TOOL_NAME: &str = "libra-operational-tool";
@@ -46,6 +46,78 @@ impl OperationalTool {
 
         let command = Command::from_iter(args.split_whitespace());
         command.account_resource()
+    }
+
+    pub fn check_endpoint(&self, network_address: NetworkAddress) -> Result<String, Error> {
+        let args = format!(
+            "
+                {command}
+                --address {network_address}
+            ",
+            command = command(TOOL_NAME, CommandName::CheckEndpoint),
+            network_address = network_address,
+        );
+        let command = Command::from_iter(args.split_whitespace());
+        command.check_endpoint()
+    }
+
+    pub fn create_account(
+        &self,
+        name: &str,
+        path_to_key: &str,
+        backend: &config::SecureBackend,
+        command_name: CommandName,
+        execute: fn(Command) -> Result<(TransactionContext, AccountAddress), Error>,
+    ) -> Result<(TransactionContext, AccountAddress), Error> {
+        let args = format!(
+            "
+                {command}
+                --name {name}
+                --path-to-key {path_to_key}
+                --json-server {host}
+                --chain-id {chain_id}
+                --validator-backend {backend_args}
+            ",
+            command = command(TOOL_NAME, command_name),
+            name = name,
+            path_to_key = path_to_key,
+            host = self.host,
+            chain_id = self.chain_id.id(),
+            backend_args = backend_args(backend)?,
+        );
+
+        let command = Command::from_iter(args.split_whitespace());
+        execute(command)
+    }
+
+    pub fn create_validator(
+        &self,
+        name: &str,
+        path_to_key: &str,
+        backend: &config::SecureBackend,
+    ) -> Result<(TransactionContext, AccountAddress), Error> {
+        self.create_account(
+            name,
+            path_to_key,
+            backend,
+            CommandName::CreateValidator,
+            |cmd| cmd.create_validator(),
+        )
+    }
+
+    pub fn create_validator_operator(
+        &self,
+        name: &str,
+        path_to_key: &str,
+        backend: &config::SecureBackend,
+    ) -> Result<(TransactionContext, AccountAddress), Error> {
+        self.create_account(
+            name,
+            path_to_key,
+            backend,
+            CommandName::CreateValidatorOperator,
+            |cmd| cmd.create_validator_operator(),
+        )
     }
 
     fn extract_key(
@@ -103,6 +175,25 @@ impl OperationalTool {
         )
     }
 
+    pub fn insert_waypoint(
+        &self,
+        waypoint: Waypoint,
+        backend: &config::SecureBackend,
+    ) -> Result<(), Error> {
+        let args = format!(
+            "
+                {command}
+                --waypoint {waypoint}
+                --validator-backend {backend_args}
+            ",
+            command = command(TOOL_NAME, CommandName::InsertWaypoint),
+            waypoint = waypoint,
+            backend_args = backend_args(backend)?,
+        );
+        let command = Command::from_iter(args.split_whitespace());
+        command.insert_waypoint()
+    }
+
     pub fn print_account(
         &self,
         account_name: &str,
@@ -110,9 +201,9 @@ impl OperationalTool {
     ) -> Result<AccountAddress, Error> {
         let args = format!(
             "
-            {command}
-            --account-name {account_name}
-            --validator-backend {backend_args}
+                {command}
+                --account-name {account_name}
+                --validator-backend {backend_args}
             ",
             command = command(TOOL_NAME, CommandName::PrintAccount),
             account_name = account_name,
@@ -218,7 +309,7 @@ impl OperationalTool {
                 --json-server {host}
                 --account-address {account_address}
                 --sequence-number {sequence_number}
-        ",
+            ",
             command = command(TOOL_NAME, CommandName::ValidateTransaction),
             host = self.host,
             account_address = account_address,
@@ -227,6 +318,33 @@ impl OperationalTool {
 
         let command = Command::from_iter(args.split_whitespace());
         command.validate_transaction()
+    }
+
+    pub fn set_validator_operator(
+        &self,
+        name: &str,
+        account_address: AccountAddress,
+        backend: &config::SecureBackend,
+    ) -> Result<TransactionContext, Error> {
+        let args = format!(
+            "
+                {command}
+                --json-server {json_server}
+                --chain-id {chain_id}
+                --name {name}
+                --account-address {account_address}
+                --validator-backend {backend_args}
+            ",
+            command = command(TOOL_NAME, CommandName::SetValidatorOperator),
+            json_server = self.host,
+            name = name,
+            chain_id = self.chain_id.id(),
+            account_address = account_address,
+            backend_args = backend_args(backend)?,
+        );
+
+        let command = Command::from_iter(args.split_whitespace());
+        command.set_validator_operator()
     }
 
     pub fn validator_config(
@@ -240,7 +358,7 @@ impl OperationalTool {
                 --json-server {json_server}
                 --account-address {account_address}
                 --validator-backend {backend_args}
-        ",
+            ",
             command = command(TOOL_NAME, CommandName::ValidatorConfig),
             json_server = self.host,
             account_address = account_address,
@@ -262,7 +380,7 @@ impl OperationalTool {
                 {account_address}
                 --json-server {json_server}
                 --validator-backend {backend_args}
-        ",
+            ",
             command = command(TOOL_NAME, CommandName::ValidatorSet),
             json_server = self.host,
             account_address = optional_arg("account-address", account_address),
@@ -280,11 +398,11 @@ impl OperationalTool {
     ) -> Result<TransactionContext, Error> {
         let args = format!(
             "
-            {command}
-            --json-server {host}
-            --chain-id {chain_id}
-            --account-address {account_address}
-            --validator-backend {backend_args}
+                {command}
+                --json-server {host}
+                --chain-id {chain_id}
+                --account-address {account_address}
+                --validator-backend {backend_args}
             ",
             command = command(TOOL_NAME, CommandName::AddValidator),
             host = self.host,
@@ -303,11 +421,11 @@ impl OperationalTool {
     ) -> Result<TransactionContext, Error> {
         let args = format!(
             "
-            {command}
-            --json-server {host}
-            --chain-id {chain_id}
-            --account-address {account_address}
-            --validator-backend {backend_args}
+                {command}
+                --json-server {host}
+                --chain-id {chain_id}
+                --account-address {account_address}
+                --validator-backend {backend_args}
             ",
             command = command(TOOL_NAME, CommandName::RemoveValidator),
             host = self.host,

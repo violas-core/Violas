@@ -10,6 +10,7 @@
 -  [Struct `Receiver`](#0x1_VLS_Receiver)
 -  [Constants](#@Constants_0)
 -  [Function `initialize`](#0x1_VLS_initialize)
+-  [Function `initialize_timestamp`](#0x1_VLS_initialize_timestamp)
 -  [Function `is_vls`](#0x1_VLS_is_vls)
 -  [Function `mint`](#0x1_VLS_mint)
 -  [Function `mine`](#0x1_VLS_mine)
@@ -142,21 +143,48 @@ VLS holds mint capability for mining
 ## Constants
 
 
-<a name="0x1_VLS_ERESERVE"></a>
-
-The <code><a href="VLS.md#0x1_VLS_Reserve">Reserve</a></code> resource is in an invalid state
-
-
-<pre><code><b>const</b> <a href="VLS.md#0x1_VLS_ERESERVE">ERESERVE</a>: u64 = 0;
-</code></pre>
-
-
-
 <a name="0x1_VLS_EZERO_VLS_MINT_NOT_ALLOWED"></a>
 
 
 
 <pre><code><b>const</b> <a href="VLS.md#0x1_VLS_EZERO_VLS_MINT_NOT_ALLOWED">EZERO_VLS_MINT_NOT_ALLOWED</a>: u64 = 3;
+</code></pre>
+
+
+
+<a name="0x1_VLS_E_INITIAL_TIMESTAMP_HAS_BEEN_INITIALIED"></a>
+
+
+
+<pre><code><b>const</b> <a href="VLS.md#0x1_VLS_E_INITIAL_TIMESTAMP_HAS_BEEN_INITIALIED">E_INITIAL_TIMESTAMP_HAS_BEEN_INITIALIED</a>: u64 = 4;
+</code></pre>
+
+
+
+<a name="0x1_VLS_E_INITIAL_TIMESTAMP_HAS_NOT_BEEN_INITIALIED"></a>
+
+
+
+<pre><code><b>const</b> <a href="VLS.md#0x1_VLS_E_INITIAL_TIMESTAMP_HAS_NOT_BEEN_INITIALIED">E_INITIAL_TIMESTAMP_HAS_NOT_BEEN_INITIALIED</a>: u64 = 5;
+</code></pre>
+
+
+
+<a name="0x1_VLS_E_RESERVE_HAS_BEEN_INITIALIZED"></a>
+
+The <code><a href="VLS.md#0x1_VLS_Reserve">Reserve</a></code> resource is in an invalid state
+
+
+<pre><code><b>const</b> <a href="VLS.md#0x1_VLS_E_RESERVE_HAS_BEEN_INITIALIZED">E_RESERVE_HAS_BEEN_INITIALIZED</a>: u64 = 0;
+</code></pre>
+
+
+
+<a name="0x1_VLS_E_THE_AMOUNT_OF_VLS_HAS_REACHED_MAXIMIUM"></a>
+
+
+
+<pre><code><b>const</b> <a href="VLS.md#0x1_VLS_E_THE_AMOUNT_OF_VLS_HAS_REACHED_MAXIMIUM">E_THE_AMOUNT_OF_VLS_HAS_REACHED_MAXIMIUM</a>: u64 = 6;
 </code></pre>
 
 
@@ -218,12 +246,14 @@ This function creates the mint, preburn, and burn's capabilities for <code><a hr
     lr_account: &signer,
     tc_account: &signer,
 ) {
-    //<a href="LibraTimestamp.md#0x1_LibraTimestamp_assert_genesis">LibraTimestamp::assert_genesis</a>();
+    <a href="LibraTimestamp.md#0x1_LibraTimestamp_assert_genesis">LibraTimestamp::assert_genesis</a>();
 
     // Operational constraint
     <a href="CoreAddresses.md#0x1_CoreAddresses_assert_currency_info">CoreAddresses::assert_currency_info</a>(lr_account);
+
     // <a href="VLS.md#0x1_VLS_Reserve">Reserve</a> must not exist.
-    <b>assert</b>(!<b>exists</b>&lt;<a href="VLS.md#0x1_VLS_Reserve">Reserve</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>()), <a href="Errors.md#0x1_Errors_already_published">Errors::already_published</a>(<a href="VLS.md#0x1_VLS_ERESERVE">ERESERVE</a>));
+    <b>assert</b>(!<b>exists</b>&lt;<a href="VLS.md#0x1_VLS_Reserve">Reserve</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>()), <a href="Errors.md#0x1_Errors_already_published">Errors::already_published</a>(<a href="VLS.md#0x1_VLS_E_RESERVE_HAS_BEEN_INITIALIZED">E_RESERVE_HAS_BEEN_INITIALIZED</a>));
+
     <b>let</b> (mint_cap, burn_cap) = <a href="Libra.md#0x1_Libra_register_currency">Libra::register_currency</a>&lt;<a href="VLS.md#0x1_VLS">VLS</a>&gt;(
         lr_account,
         <a href="FixedPoint32.md#0x1_FixedPoint32_create_from_rational">FixedPoint32::create_from_rational</a>(1, 1), // exchange rate <b>to</b> <a href="VLS.md#0x1_VLS">VLS</a>
@@ -237,6 +267,37 @@ This function creates the mint, preburn, and burn's capabilities for <code><a hr
     <b>let</b> preburn_cap = <a href="Libra.md#0x1_Libra_create_preburn">Libra::create_preburn</a>&lt;<a href="VLS.md#0x1_VLS">VLS</a>&gt;(tc_account);
 
     move_to(lr_account, <a href="VLS.md#0x1_VLS_Reserve">Reserve</a> { mint_cap, burn_cap, preburn_cap, initial_timestamp: 0 });
+}
+</code></pre>
+
+
+
+</details>
+
+<a name="0x1_VLS_initialize_timestamp"></a>
+
+## Function `initialize_timestamp`
+
+
+
+<pre><code><b>public</b> <b>fun</b> <a href="VLS.md#0x1_VLS_initialize_timestamp">initialize_timestamp</a>()
+</code></pre>
+
+
+
+<details>
+<summary>Implementation</summary>
+
+
+<pre><code><b>public</b> <b>fun</b> <a href="VLS.md#0x1_VLS_initialize_timestamp">initialize_timestamp</a>()
+<b>acquires</b> <a href="VLS.md#0x1_VLS_Reserve">Reserve</a> {
+    <a href="LibraTimestamp.md#0x1_LibraTimestamp_assert_operating">LibraTimestamp::assert_operating</a>();
+
+    <b>let</b> reserve = borrow_global_mut&lt;<a href="VLS.md#0x1_VLS_Reserve">Reserve</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>());
+
+    <b>assert</b>(reserve.initial_timestamp == 0, <a href="Errors.md#0x1_Errors_already_published">Errors::already_published</a>(<a href="VLS.md#0x1_VLS_E_INITIAL_TIMESTAMP_HAS_BEEN_INITIALIED">E_INITIAL_TIMESTAMP_HAS_BEEN_INITIALIED</a>));
+
+    reserve.initial_timestamp = <a href="LibraTimestamp.md#0x1_LibraTimestamp_now_seconds">LibraTimestamp::now_seconds</a>();
 }
 </code></pre>
 
@@ -344,7 +405,7 @@ Returns true if CoinType is VLS.
 <b>modifies</b> <b>global</b>&lt;<a href="VLS.md#0x1_VLS_Reserve">Reserve</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>());
 <b>modifies</b> <b>global</b>&lt;<a href="Libra.md#0x1_Libra_CurrencyInfo">Libra::CurrencyInfo</a>&lt;<a href="VLS.md#0x1_VLS">VLS</a>&gt;&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_CURRENCY_INFO_ADDRESS">CoreAddresses::CURRENCY_INFO_ADDRESS</a>());
 <b>include</b> <a href="VLS.md#0x1_VLS_CreateAbortsIf">CreateAbortsIf</a>;
-<a name="0x1_VLS_reserve$8"></a>
+<a name="0x1_VLS_reserve$9"></a>
 <b>let</b> reserve = <b>global</b>&lt;<a href="VLS.md#0x1_VLS_Reserve">Reserve</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>());
 <b>ensures</b> <b>exists</b>&lt;<a href="VLS.md#0x1_VLS_Reserve">Reserve</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>());
 <b>include</b> <a href="Libra.md#0x1_Libra_MintEnsures">Libra::MintEnsures</a>&lt;<a href="VLS.md#0x1_VLS">VLS</a>&gt;{value: amount_vls};
@@ -358,7 +419,7 @@ Returns true if CoinType is VLS.
 
 <pre><code><b>schema</b> <a href="VLS.md#0x1_VLS_CreateAbortsIf">CreateAbortsIf</a> {
     amount_vls: u64;
-    <a name="0x1_VLS_reserve$7"></a>
+    <a name="0x1_VLS_reserve$8"></a>
     <b>let</b> reserve = <b>global</b>&lt;<a href="VLS.md#0x1_VLS_Reserve">Reserve</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>());
     <b>aborts_if</b> amount_vls == 0 <b>with</b> <a href="Errors.md#0x1_Errors_INVALID_ARGUMENT">Errors::INVALID_ARGUMENT</a>;
     <b>include</b> <a href="LibraTimestamp.md#0x1_LibraTimestamp_AbortsIfNotOperating">LibraTimestamp::AbortsIfNotOperating</a>;
@@ -388,21 +449,21 @@ mine VLS, total amount 100,000,000
 
 <pre><code><b>public</b> <b>fun</b> <a href="VLS.md#0x1_VLS_mine">mine</a>() : <a href="Libra.md#0x1_Libra">Libra</a>&lt;<a href="VLS.md#0x1_VLS">VLS</a>&gt;
 <b>acquires</b> <a href="VLS.md#0x1_VLS_Reserve">Reserve</a> {
-    <b>let</b> expected_amount : u64 = 0;
-    <b>let</b> reserve = borrow_global_mut&lt;<a href="VLS.md#0x1_VLS_Reserve">Reserve</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>());
-    <b>if</b> (reserve.initial_timestamp == 0)
-    {
-        reserve.initial_timestamp = <a href="LibraTimestamp.md#0x1_LibraTimestamp_now_seconds">LibraTimestamp::now_seconds</a>();
-    };
+    <b>let</b> reserve = borrow_global&lt;<a href="VLS.md#0x1_VLS_Reserve">Reserve</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>());
+    <b>let</b> initial_timestamp = reserve.initial_timestamp;
+    <b>assert</b>(initial_timestamp != 0, <a href="Errors.md#0x1_Errors_invalid_argument">Errors::invalid_argument</a>(<a href="VLS.md#0x1_VLS_E_INITIAL_TIMESTAMP_HAS_NOT_BEEN_INITIALIED">E_INITIAL_TIMESTAMP_HAS_NOT_BEEN_INITIALIED</a>));
 
-    <b>let</b> now_minutes = <a href="LibraTimestamp.md#0x1_LibraTimestamp_now_seconds">LibraTimestamp::now_seconds</a>() / 60;
+    <b>let</b> now_minutes = (<a href="LibraTimestamp.md#0x1_LibraTimestamp_now_seconds">LibraTimestamp::now_seconds</a>() - initial_timestamp) / 60;
     <b>let</b> step = now_minutes / <a href="VLS.md#0x1_VLS_MINING_PERIOD">MINING_PERIOD</a>;
     <b>let</b> process = now_minutes % <a href="VLS.md#0x1_VLS_MINING_PERIOD">MINING_PERIOD</a>;
     <b>let</b> mining_capacity = <a href="VLS.md#0x1_VLS_MINING_CAPACITY_PER_MINUTE">MINING_CAPACITY_PER_MINUTE</a>;
+    <b>let</b> expected_amount : u64 = 0;
 
     <b>while</b> (step &gt; 0) {
         // calculate and accumulate mining amount for every period
         expected_amount = expected_amount + mining_capacity * <a href="VLS.md#0x1_VLS_MINING_PERIOD">MINING_PERIOD</a>;
+
+        // mining capacity reduces by half per period
         mining_capacity = mining_capacity / 2;
 
         step = step - 1;
@@ -414,7 +475,11 @@ mine VLS, total amount 100,000,000
     <b>if</b> (expected_amount &gt; <a href="VLS.md#0x1_VLS_VLS_TOTAL_AMOUNT">VLS_TOTAL_AMOUNT</a>)
         expected_amount = <a href="VLS.md#0x1_VLS_VLS_TOTAL_AMOUNT">VLS_TOTAL_AMOUNT</a>;
 
-    <b>let</b> mine_amount = expected_amount - (<a href="Libra.md#0x1_Libra_market_cap">Libra::market_cap</a>&lt;<a href="VLS.md#0x1_VLS">VLS</a>&gt;() <b>as</b> u64);
+    <b>let</b> minted_amount : u64 = (<a href="Libra.md#0x1_Libra_market_cap">Libra::market_cap</a>&lt;<a href="VLS.md#0x1_VLS">VLS</a>&gt;() <b>as</b> u64);
+
+    <b>assert</b>(minted_amount &lt; <a href="VLS.md#0x1_VLS_VLS_TOTAL_AMOUNT">VLS_TOTAL_AMOUNT</a>,  <a href="Errors.md#0x1_Errors_invalid_argument">Errors::invalid_argument</a>(<a href="VLS.md#0x1_VLS_E_THE_AMOUNT_OF_VLS_HAS_REACHED_MAXIMIUM">E_THE_AMOUNT_OF_VLS_HAS_REACHED_MAXIMIUM</a>));
+
+    <b>let</b> mine_amount = expected_amount - minted_amount;
 
     <a href="VLS.md#0x1_VLS_mint">mint</a>(mine_amount)
 }
@@ -443,11 +508,11 @@ mine VLS, total amount 100,000,000
     <b>let</b> receivers = <a href="Vector.md#0x1_Vector_empty">Vector::empty</a>&lt;<a href="VLS.md#0x1_VLS_Receiver">Receiver</a>&gt;();
 
     <b>let</b> element1 = <a href="VLS.md#0x1_VLS_Receiver">Receiver</a> { addr: 0xDD01, ratio: <a href="FixedPoint32.md#0x1_FixedPoint32_create_from_rational">FixedPoint32::create_from_rational</a>(56,100)  };
-    <b>let</b> element2 = <a href="VLS.md#0x1_VLS_Receiver">Receiver</a> { addr: 0xDD01, ratio: <a href="FixedPoint32.md#0x1_FixedPoint32_create_from_rational">FixedPoint32::create_from_rational</a>(15,100)  };
-    <b>let</b> element3 = <a href="VLS.md#0x1_VLS_Receiver">Receiver</a> { addr: 0xDD01, ratio: <a href="FixedPoint32.md#0x1_FixedPoint32_create_from_rational">FixedPoint32::create_from_rational</a>(15,100)  };
-    <b>let</b> element4 = <a href="VLS.md#0x1_VLS_Receiver">Receiver</a> { addr: 0xDD01, ratio: <a href="FixedPoint32.md#0x1_FixedPoint32_create_from_rational">FixedPoint32::create_from_rational</a>(12,100)  };
-    <b>let</b> element5 = <a href="VLS.md#0x1_VLS_Receiver">Receiver</a> { addr: 0xDD01, ratio: <a href="FixedPoint32.md#0x1_FixedPoint32_create_from_rational">FixedPoint32::create_from_rational</a>(1,100)  };
-    <b>let</b> element6 = <a href="VLS.md#0x1_VLS_Receiver">Receiver</a> { addr: 0xDD01, ratio: <a href="FixedPoint32.md#0x1_FixedPoint32_create_from_rational">FixedPoint32::create_from_rational</a>(1,100)  };
+    <b>let</b> element2 = <a href="VLS.md#0x1_VLS_Receiver">Receiver</a> { addr: 0xDD02, ratio: <a href="FixedPoint32.md#0x1_FixedPoint32_create_from_rational">FixedPoint32::create_from_rational</a>(15,100)  };
+    <b>let</b> element3 = <a href="VLS.md#0x1_VLS_Receiver">Receiver</a> { addr: 0xDD03, ratio: <a href="FixedPoint32.md#0x1_FixedPoint32_create_from_rational">FixedPoint32::create_from_rational</a>(15,100)  };
+    <b>let</b> element4 = <a href="VLS.md#0x1_VLS_Receiver">Receiver</a> { addr: 0xDD04, ratio: <a href="FixedPoint32.md#0x1_FixedPoint32_create_from_rational">FixedPoint32::create_from_rational</a>(12,100)  };
+    <b>let</b> element5 = <a href="VLS.md#0x1_VLS_Receiver">Receiver</a> { addr: 0xDD05, ratio: <a href="FixedPoint32.md#0x1_FixedPoint32_create_from_rational">FixedPoint32::create_from_rational</a>(1,100)  };
+    <b>let</b> element6 = <a href="VLS.md#0x1_VLS_Receiver">Receiver</a> { addr: 0xDD06, ratio: <a href="FixedPoint32.md#0x1_FixedPoint32_create_from_rational">FixedPoint32::create_from_rational</a>(1,100)  };
 
     <a href="Vector.md#0x1_Vector_push_back">Vector::push_back</a>(&<b>mut</b> receivers, element1);
     <a href="Vector.md#0x1_Vector_push_back">Vector::push_back</a>(&<b>mut</b> receivers, element2);

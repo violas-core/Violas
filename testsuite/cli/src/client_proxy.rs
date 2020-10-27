@@ -573,7 +573,7 @@ impl ClientProxy {
         is_blocking: bool,
     ) -> Result<()> {
         ensure!(
-            space_delim_strings[0] == "enable_custom_script",
+            space_delim_strings[0] == "enable_custom_script" || space_delim_strings[0] == "s",
             "inconsistent command '{}' for enable_custom_script",
             space_delim_strings[0]
         );
@@ -583,14 +583,14 @@ impl ClientProxy {
         );
         let script_body = {
             let code = "
-    import 0x1.LibraTransactionPublishingOption;
+                import 0x1.LibraTransactionPublishingOption;
 
-    main(account: &signer) {
-      LibraTransactionPublishingOption.set_open_script(move(account));
+                main(account: &signer) {
+                    LibraTransactionPublishingOption.set_open_script(move(account));
 
-      return;
-    }
-";
+                    return;
+                }
+            ";
 
             let compiler = Compiler {
                 address: libra_types::account_config::CORE_CODE_ADDRESS,
@@ -617,7 +617,7 @@ impl ClientProxy {
         is_blocking: bool,
     ) -> Result<()> {
         ensure!(
-            space_delim_strings[0] == "add_to_script_allow_list",
+            space_delim_strings[0] == "add_to_script_allow_list" || space_delim_strings[0] == "a",
             "inconsistent command '{}' for add_to_script_allow_list",
             space_delim_strings[0]
         );
@@ -646,7 +646,7 @@ impl ClientProxy {
         is_blocking: bool,
     ) -> Result<()> {
         ensure!(
-            space_delim_strings[0] == "change_libra_version",
+            space_delim_strings[0] == "change_libra_version" || space_delim_strings[0] == "v",
             "inconsistent command '{}' for change_libra_version",
             space_delim_strings[0]
         );
