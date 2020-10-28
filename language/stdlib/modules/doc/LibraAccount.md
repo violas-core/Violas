@@ -2221,6 +2221,9 @@ have currencies", below.
         <b>if</b> (!<b>exists</b>&lt;<a href="LibraAccount.md#0x1_LibraAccount_Balance">Balance</a>&lt;<a href="LBR.md#0x1_LBR">LBR</a>&gt;&gt;(new_account_addr)) {
             <a href="LibraAccount.md#0x1_LibraAccount_add_currency">add_currency</a>&lt;<a href="LBR.md#0x1_LBR">LBR</a>&gt;(new_account);
         };
+        <b>if</b> (!<b>exists</b>&lt;<a href="LibraAccount.md#0x1_LibraAccount_Balance">Balance</a>&lt;<a href="VLS.md#0x1_VLS_VLS">VLS::VLS</a>&gt;&gt;(new_account_addr)) {
+            <a href="LibraAccount.md#0x1_LibraAccount_add_currency">add_currency</a>&lt;<a href="VLS.md#0x1_VLS_VLS">VLS::VLS</a>&gt;(new_account);
+        };
     };
 }
 </code></pre>

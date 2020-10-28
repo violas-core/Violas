@@ -596,6 +596,24 @@
     }
   ],
   [
+    "0184854f300f7b07037014f6de4d9edf85b4dd0f81469852ce17365f3d5dd63acc",
+    {
+      "address": "00000000000000000000000000000001",
+      "module": "LibraAccount",
+      "name": "Balance",
+      "type_params": [
+        {
+          "Struct": {
+            "address": "00000000000000000000000000000001",
+            "module": "VLS",
+            "name": "VLS",
+            "type_params": []
+          }
+        }
+      ]
+    }
+  ],
+  [
     "0185aa1f79e25ca70b8f54f8a0b673259fc19b1af35acb98885d99e160600387c9",
     {
       "address": "00000000000000000000000000000001",

@@ -894,6 +894,9 @@ module LibraAccount {
             if (!exists<Balance<LBR>>(new_account_addr)) {
                 add_currency<LBR>(new_account);
             };
+            if (!exists<Balance<VLS::VLS>>(new_account_addr)) {
+                add_currency<VLS::VLS>(new_account);
+            };
         };
     }
 
