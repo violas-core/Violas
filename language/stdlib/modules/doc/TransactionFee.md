@@ -28,6 +28,7 @@ Functions to initialize, accumulated, and burn transaction fees.
 <b>use</b> <a href="Libra.md#0x1_Libra">0x1::Libra</a>;
 <b>use</b> <a href="LibraTimestamp.md#0x1_LibraTimestamp">0x1::LibraTimestamp</a>;
 <b>use</b> <a href="Roles.md#0x1_Roles">0x1::Roles</a>;
+<b>use</b> <a href="VLS.md#0x1_VLS">0x1::VLS</a>;
 </code></pre>
 
 
@@ -106,6 +107,7 @@ Called in genesis. Sets up the needed resources to collect transaction fees from
     <a href="Roles.md#0x1_Roles_assert_treasury_compliance">Roles::assert_treasury_compliance</a>(tc_account);
     // accept fees in all the currencies
     <a href="TransactionFee.md#0x1_TransactionFee_add_txn_fee_currency">add_txn_fee_currency</a>&lt;<a href="Coin1.md#0x1_Coin1">Coin1</a>&gt;(tc_account);
+    <a href="TransactionFee.md#0x1_TransactionFee_add_txn_fee_currency">add_txn_fee_currency</a>&lt;<a href="VLS.md#0x1_VLS">VLS</a>&gt;(tc_account);
 }
 </code></pre>
 

@@ -28,6 +28,7 @@ when executing from a fresh state.
 <b>use</b> <a href="LibraVMConfig.md#0x1_LibraVMConfig">0x1::LibraVMConfig</a>;
 <b>use</b> <a href="LibraVersion.md#0x1_LibraVersion">0x1::LibraVersion</a>;
 <b>use</b> <a href="TransactionFee.md#0x1_TransactionFee">0x1::TransactionFee</a>;
+<b>use</b> <a href="VLS.md#0x1_VLS">0x1::VLS</a>;
 </code></pre>
 
 
@@ -77,6 +78,8 @@ Initializes the Libra framework.
         lr_account,
         tc_account,
     );
+
+    <a href="VLS.md#0x1_VLS_initialize">VLS::initialize</a>(lr_account, tc_account);
 
     <a href="AccountFreezing.md#0x1_AccountFreezing_initialize">AccountFreezing::initialize</a>(lr_account);
 

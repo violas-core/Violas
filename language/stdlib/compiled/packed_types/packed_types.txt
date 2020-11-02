@@ -18,6 +18,24 @@
     }
   ],
   [
+    "0102c88e0a0be052cdd847b3783f8d34f86a82392d127107b98dd4d603dce6db38",
+    {
+      "address": "00000000000000000000000000000001",
+      "module": "Libra",
+      "name": "Libra",
+      "type_params": [
+        {
+          "Struct": {
+            "address": "00000000000000000000000000000001",
+            "module": "VLS",
+            "name": "VLS",
+            "type_params": []
+          }
+        }
+      ]
+    }
+  ],
+  [
     "0102d613cb0da978524f76091d31b4e8fcc39dfeeced892018cc6c676eaa602bd1",
     {
       "address": "00000000000000000000000000000001",
@@ -76,6 +94,24 @@
             "address": "00000000000000000000000000000001",
             "module": "Coin1",
             "name": "Coin1",
+            "type_params": []
+          }
+        }
+      ]
+    }
+  ],
+  [
+    "01119e7b1b1871933a1041b6ca6e501693a17734f9728d6a16adc58d3fcbf2f4b3",
+    {
+      "address": "00000000000000000000000000000001",
+      "module": "TransactionFee",
+      "name": "TransactionFee",
+      "type_params": [
+        {
+          "Struct": {
+            "address": "00000000000000000000000000000001",
+            "module": "VLS",
+            "name": "VLS",
             "type_params": []
           }
         }
@@ -283,6 +319,24 @@
             "address": "00000000000000000000000000000001",
             "module": "LibraVMConfig",
             "name": "LibraVMConfig",
+            "type_params": []
+          }
+        }
+      ]
+    }
+  ],
+  [
+    "0147daa3fc8b2ec5c0961f010305b361b92b95bec4bf7a078bc13b61146a019019",
+    {
+      "address": "00000000000000000000000000000001",
+      "module": "AccountLimits",
+      "name": "LimitsDefinition",
+      "type_params": [
+        {
+          "Struct": {
+            "address": "00000000000000000000000000000001",
+            "module": "VLS",
+            "name": "VLS",
             "type_params": []
           }
         }
@@ -515,6 +569,24 @@
     }
   ],
   [
+    "017994165364c615cb70b61d7bd86b93c14fa511c36b17126b8aa2caa5cfdf28e1",
+    {
+      "address": "00000000000000000000000000000001",
+      "module": "Libra",
+      "name": "BurnCapability",
+      "type_params": [
+        {
+          "Struct": {
+            "address": "00000000000000000000000000000001",
+            "module": "VLS",
+            "name": "VLS",
+            "type_params": []
+          }
+        }
+      ]
+    }
+  ],
+  [
     "017cff1dfeb627167d0578945b489e6e9b5082be4a48a4b1f75b156baec658eb15",
     {
       "address": "00000000000000000000000000000001",
@@ -524,12 +596,48 @@
     }
   ],
   [
+    "0184854f300f7b07037014f6de4d9edf85b4dd0f81469852ce17365f3d5dd63acc",
+    {
+      "address": "00000000000000000000000000000001",
+      "module": "LibraAccount",
+      "name": "Balance",
+      "type_params": [
+        {
+          "Struct": {
+            "address": "00000000000000000000000000000001",
+            "module": "VLS",
+            "name": "VLS",
+            "type_params": []
+          }
+        }
+      ]
+    }
+  ],
+  [
     "0185aa1f79e25ca70b8f54f8a0b673259fc19b1af35acb98885d99e160600387c9",
     {
       "address": "00000000000000000000000000000001",
       "module": "LibraAccount",
       "name": "LibraAccount",
       "type_params": []
+    }
+  ],
+  [
+    "01862f3d9c97b08926a0bb0c701f57c2a88731fca04546642989fe7c61f9af8d8a",
+    {
+      "address": "00000000000000000000000000000001",
+      "module": "Libra",
+      "name": "MintCapability",
+      "type_params": [
+        {
+          "Struct": {
+            "address": "00000000000000000000000000000001",
+            "module": "VLS",
+            "name": "VLS",
+            "type_params": []
+          }
+        }
+      ]
     }
   ],
   [
@@ -623,6 +731,15 @@
     }
   ],
   [
+    "01a0db53d78f2cc7ce1b1048c442cd722ddaf9c2d43139052d956ed0348c1e7e8f",
+    {
+      "address": "00000000000000000000000000000001",
+      "module": "VLS",
+      "name": "Reserve",
+      "type_params": []
+    }
+  ],
+  [
     "01a13858f5493a029359d2126b3aef98e9dace1d86a71be3a514a98b3bd253c847",
     {
       "address": "00000000000000000000000000000001",
@@ -697,6 +814,24 @@
             "address": "00000000000000000000000000000001",
             "module": "LBR",
             "name": "LBR",
+            "type_params": []
+          }
+        }
+      ]
+    }
+  ],
+  [
+    "01b589d7908677df268b820e786aa7e0bee13fa7767dc0ddcb19b62cfbbcd17928",
+    {
+      "address": "00000000000000000000000000000001",
+      "module": "Libra",
+      "name": "Preburn",
+      "type_params": [
+        {
+          "Struct": {
+            "address": "00000000000000000000000000000001",
+            "module": "VLS",
+            "name": "VLS",
             "type_params": []
           }
         }
@@ -937,6 +1072,24 @@
       "module": "DesignatedDealer",
       "name": "ReceivedMintEvent",
       "type_params": []
+    }
+  ],
+  [
+    "01e7d561f2186adf13ef4a6af2bd29ab2344308fbb10e4ae78686c13d2afdbe2b4",
+    {
+      "address": "00000000000000000000000000000001",
+      "module": "Libra",
+      "name": "CurrencyInfo",
+      "type_params": [
+        {
+          "Struct": {
+            "address": "00000000000000000000000000000001",
+            "module": "VLS",
+            "name": "VLS",
+            "type_params": []
+          }
+        }
+      ]
     }
   ],
   [

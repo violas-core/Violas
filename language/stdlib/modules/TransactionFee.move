@@ -11,6 +11,7 @@ module TransactionFee {
     use 0x1::Roles;
     use 0x1::LibraTimestamp;
     use 0x1::Signer;
+    use 0x1::VLS::VLS;
 
     /// The `TransactionFee` resource holds a preburn resource for each
     /// fiat `CoinType` that can be collected as a transaction fee.
@@ -31,6 +32,7 @@ module TransactionFee {
         Roles::assert_treasury_compliance(tc_account);
         // accept fees in all the currencies
         add_txn_fee_currency<Coin1>(tc_account);
+        add_txn_fee_currency<VLS>(tc_account);
     }
     spec fun initialize {
         include LibraTimestamp::AbortsIfNotGenesis;
