@@ -143,11 +143,11 @@ VLS holds mint capability for mining
 ## Constants
 
 
-<a name="0x1_VLS_EZERO_VLS_MINT_NOT_ALLOWED"></a>
+<a name="0x1_VLS_EMINTING_ZERO_VLS_IS_NOT_ALLOWED"></a>
 
 
 
-<pre><code><b>const</b> <a href="VLS.md#0x1_VLS_EZERO_VLS_MINT_NOT_ALLOWED">EZERO_VLS_MINT_NOT_ALLOWED</a>: u64 = 3;
+<pre><code><b>const</b> <a href="VLS.md#0x1_VLS_EMINTING_ZERO_VLS_IS_NOT_ALLOWED">EMINTING_ZERO_VLS_IS_NOT_ALLOWED</a>: u64 = 3;
 </code></pre>
 
 
@@ -383,7 +383,7 @@ Returns true if CoinType is VLS.
 ): <a href="Libra.md#0x1_Libra">Libra</a>&lt;<a href="VLS.md#0x1_VLS">VLS</a>&gt;
 <b>acquires</b> <a href="VLS.md#0x1_VLS_Reserve">Reserve</a> {
 
-    <b>assert</b>(amount_vls &gt; 0, <a href="Errors.md#0x1_Errors_invalid_argument">Errors::invalid_argument</a>(<a href="VLS.md#0x1_VLS_EZERO_VLS_MINT_NOT_ALLOWED">EZERO_VLS_MINT_NOT_ALLOWED</a>));
+    <b>assert</b>(amount_vls &gt; 0, <a href="Errors.md#0x1_Errors_invalid_argument">Errors::invalid_argument</a>(<a href="VLS.md#0x1_VLS_EMINTING_ZERO_VLS_IS_NOT_ALLOWED">EMINTING_ZERO_VLS_IS_NOT_ALLOWED</a>));
 
     <b>let</b> reserve = borrow_global_mut&lt;<a href="VLS.md#0x1_VLS_Reserve">Reserve</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>());
 

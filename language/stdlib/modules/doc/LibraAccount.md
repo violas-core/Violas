@@ -1151,7 +1151,7 @@ mine and distribute VLS to all the account specified in module VLS
     <b>let</b> length = <a href="Vector.md#0x1_Vector_length">Vector::length</a>(&receivers);
 
     <b>let</b> i = 0;
-    <b>while</b> (i &lt; length && mined_vls_amount &gt; 0) {
+    <b>while</b> (i &lt; length && <a href="Libra.md#0x1_Libra_value">Libra::value</a>&lt;<a href="VLS.md#0x1_VLS_VLS">VLS::VLS</a>&gt;(&mined_vls) &gt; 0) {
         <b>let</b> receiver = <a href="Vector.md#0x1_Vector_borrow">Vector::borrow</a>(&<b>mut</b> receivers, i);
 
         <b>let</b> (addr, ratio) = <a href="VLS.md#0x1_VLS_unpack_receiver">VLS::unpack_receiver</a>(*receiver);
@@ -1161,8 +1161,6 @@ mine and distribute VLS to all the account specified in module VLS
         mined_vls = remained_vls;
 
         <a href="LibraAccount.md#0x1_LibraAccount_deposit">deposit</a>(<a href="CoreAddresses.md#0x1_CoreAddresses_VM_RESERVED_ADDRESS">CoreAddresses::VM_RESERVED_ADDRESS</a>(), addr, dist_vls, x"", x"");
-
-        //mined_vls_amount = <a href="Libra.md#0x1_Libra_value">Libra::value</a>&lt;<a href="VLS.md#0x1_VLS_VLS">VLS::VLS</a>&gt;(&mined_vls);
 
         i = i + 1;
     };

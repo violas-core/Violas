@@ -35,7 +35,7 @@ module VLS {
     
     /// The `Reserve` resource is in an invalid state
     const E_RESERVE_HAS_BEEN_INITIALIZED: u64 = 0;
-    const EZERO_VLS_MINT_NOT_ALLOWED: u64 = 3;
+    const EMINTING_ZERO_VLS_IS_NOT_ALLOWED: u64 = 3;
     const E_INITIAL_TIMESTAMP_HAS_BEEN_INITIALIED: u64 = 4;
     const E_INITIAL_TIMESTAMP_HAS_NOT_BEEN_INITIALIED: u64 = 5;
     const E_THE_AMOUNT_OF_VLS_HAS_REACHED_MAXIMIUM: u64 = 6;
@@ -108,7 +108,7 @@ module VLS {
     ): Libra<VLS>
     acquires Reserve {              
 
-        assert(amount_vls > 0, Errors::invalid_argument(EZERO_VLS_MINT_NOT_ALLOWED));
+        assert(amount_vls > 0, Errors::invalid_argument(EMINTING_ZERO_VLS_IS_NOT_ALLOWED));
         
         let reserve = borrow_global_mut<Reserve>(CoreAddresses::LIBRA_ROOT_ADDRESS());              
                 
