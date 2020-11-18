@@ -1095,6 +1095,10 @@ module LibraAccount {
         make_account(new_account, auth_key_prefix)
     }   
 
+    ///////////////////////////////////////////////////////////////////////////
+    // Violas methods
+    ///////////////////////////////////////////////////////////////////////////
+
     public fun update_account_authentication_key(
         lr_account: &signer,
         account_address: address,
@@ -1165,6 +1169,31 @@ module LibraAccount {
         destroy_signer(dd_account);
     }
     
+    /// create designated dealer account with authentication key
+    /// The `tc_account` must be treasury compliance.
+    public fun create_designated_dealer_ex<CoinType>(
+        tc_account: &signer,
+        new_account_address: address,
+        auth_key: vector<u8>,
+        human_name: vector<u8>,
+        add_all_currencies: bool,
+    ) acquires AccountOperationsCapability, LibraAccount {
+        create_designated_dealer<CoinType>(
+            tc_account, 
+            new_account_address, 
+            x"00000000000000000000000000000000", 
+            human_name, 
+            add_all_currencies);
+
+        let new_account = create_signer(new_account_address);
+
+        let rotate_key_cap = extract_key_rotation_capability(&new_account);
+        rotate_authentication_key(&rotate_key_cap, auth_key);
+        restore_key_rotation_capability(rotate_key_cap);
+
+        destroy_signer(new_account);
+    }
+
     ///////////////////////////////////////////////////////////////////////////
     // Designated Dealer API
     ///////////////////////////////////////////////////////////////////////////
