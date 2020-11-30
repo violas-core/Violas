@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{layout::Layout, storage_helper::StorageHelper, swarm_config::BuildSwarm};
+
 use libra_config::{
     config::{
         DiscoveryMethod, Identity, NodeConfig, OnDiskStorageConfig, SafetyRulesService,
@@ -11,10 +12,16 @@ use libra_config::{
 };
 use libra_crypto::ed25519::Ed25519PrivateKey;
 use libra_management::constants::{COMMON_NS, LAYOUT};
+use libra_network_address::{NetworkAddress, Protocol};
 use libra_secure_storage::{CryptoStorage, KVStorage, Storage};
 use libra_temppath::TempPath;
 use libra_types::{chain_id::ChainId, waypoint::Waypoint};
-use std::path::{Path, PathBuf};
+use std::{
+    fs::File,
+    io::{self, BufRead},
+    path::{Path, PathBuf},
+    str::FromStr,
+};
 
 const LIBRA_ROOT_NS: &str = "libra_root";
 const LIBRA_ROOT_SHARED_NS: &str = "libra_root_shared";
@@ -136,9 +143,36 @@ impl<T: AsRef<Path>> ValidatorBuilder<T> {
         }
 
         let validator_network = config.validator_network.as_mut().unwrap();
-        let validator_network_address = validator_network.listen_address.clone();
+        let mut validator_network_address = validator_network.listen_address.clone();
         let fullnode_network = &mut config.full_node_networks[0];
-        let fullnode_network_address = fullnode_network.listen_address.clone();
+        let mut fullnode_network_address = fullnode_network.listen_address.clone();
+
+        // read validator configuration file
+        if let Ok(file) = File::open("validators.conf") {
+            // Read all lines to vector
+            let lines: Vec<String> = io::BufReader::new(file)
+                .lines()
+                .map(|l| l.unwrap_or_default())
+                .collect();
+
+            if let Some(line) = lines.get(index) {
+                //address format is "/ip4/10.0.0.16/tcp/80"
+                if let Ok(addr) = NetworkAddress::from_str(line) {
+                    validator_network_address = addr.clone();
+
+                    let protocols: Vec<Protocol> = addr.into_iter().collect();
+                    if let Protocol::Tcp(port) = protocols[1] {
+                        fullnode_network_address = NetworkAddress::from(protocols[0].clone())
+                            .push(Protocol::Tcp(port + 1)); // validator port + 1
+                    }
+
+                    println!(
+                        "validator address : {}, full node address : {} ",
+                        validator_network_address, fullnode_network_address
+                    );
+                }
+            }
+        }
 
         self.storage_helper
             .validator_config(
