@@ -159,11 +159,13 @@ impl<T: AsRef<Path>> ValidatorBuilder<T> {
                 //address format is "/ip4/10.0.0.16/tcp/80"
                 if let Ok(addr) = NetworkAddress::from_str(line) {
                     validator_network_address = addr.clone();
+                    validator_network.listen_address = addr.clone();
 
                     let protocols: Vec<Protocol> = addr.into_iter().collect();
                     if let Protocol::Tcp(port) = protocols[1] {
                         fullnode_network_address = NetworkAddress::from(protocols[0].clone())
                             .push(Protocol::Tcp(port + 1)); // validator port + 1
+                        fullnode_network.listen_address = fullnode_network_address.clone();
                     }
 
                     println!(
