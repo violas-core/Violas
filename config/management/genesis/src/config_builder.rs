@@ -146,8 +146,9 @@ impl<T: AsRef<Path>> ValidatorBuilder<T> {
         let mut validator_network_address = validator_network.listen_address.clone();
         let fullnode_network = &mut config.full_node_networks[0];
         let mut fullnode_network_address = fullnode_network.listen_address.clone();
-
-        // read validator configuration file
+        //
+        // Read validator configuration with index from configuration file validators.conf
+        //
         if let Ok(file) = File::open("validators.conf") {
             // Read all lines to vector
             let lines: Vec<String> = io::BufReader::new(file)
