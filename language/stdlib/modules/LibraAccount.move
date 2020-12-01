@@ -1099,25 +1099,6 @@ module LibraAccount {
     // Violas methods
     ///////////////////////////////////////////////////////////////////////////
 
-    public fun update_account_authentication_key(
-        lr_account: &signer,
-        account_address: address,
-        auth_key: vector<u8>,
-    ) acquires LibraAccount 
-    {
-        Roles::assert_libra_root(lr_account);
-        //
-        //  rotate the authentication key
-        //
-        let new_account = create_signer(account_address);
-
-        let rotate_key_cap = extract_key_rotation_capability(&new_account);
-        rotate_authentication_key(&rotate_key_cap, auth_key);
-        restore_key_rotation_capability(rotate_key_cap);
-
-        destroy_signer(new_account);
-    }   
-
     // register a currency and assign the minting and burning capability to treasury compliance account
     public fun register_currency_with_tc_account<CoinType>(
         lr_account : &signer,
