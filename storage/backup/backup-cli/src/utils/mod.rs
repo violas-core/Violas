@@ -9,6 +9,7 @@ pub mod storage_ext;
 pub mod test_utils;
 
 use anyhow::{anyhow, Result};
+use libra_config::config::RocksdbConfig;
 use libra_crypto::HashValue;
 use libra_infallible::duration_since_epoch;
 use libra_jellyfish_merkle::{restore::JellyfishMerkleRestore, NodeBatch, TreeWriter};
@@ -25,9 +26,10 @@ use tokio::fs::metadata;
 
 #[derive(Clone, StructOpt)]
 pub struct GlobalBackupOpt {
+    // Defaults to 128MB, so concurrent chunk downloads won't take up too much memory.
     #[structopt(
         long = "max-chunk-size",
-        default_value = "1073741824",
+        default_value = "134217728",
         help = "Maximum chunk file size in bytes."
     )]
     pub max_chunk_size: usize,
@@ -111,8 +113,10 @@ impl TryFrom<GlobalRestoreOpt> for GlobalRestoreOptions {
         let target_version = opt.target_version.unwrap_or(Version::max_value());
         let run_mode = if let Some(db_dir) = &opt.db_dir {
             let restore_handler = Arc::new(LibraDB::open(
-                db_dir, false, /* read_only */
+                db_dir,
+                false, /* read_only */
                 None,  /* pruner */
+                RocksdbConfig::default(),
             )?)
             .get_restore_handler();
             RestoreRunMode::Restore { restore_handler }
