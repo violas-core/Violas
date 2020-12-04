@@ -180,20 +180,18 @@ module VLS {
     public fun get_receivers() : vector<Receiver> {    
         let receivers = Vector::empty<Receiver>();
 
-        let element1 = Receiver { addr: 0xDD01, ratio: FixedPoint32::create_from_rational(56,100)  };
-        let element2 = Receiver { addr: 0xDD02, ratio: FixedPoint32::create_from_rational(15,100)  };
-        let element3 = Receiver { addr: 0xDD03, ratio: FixedPoint32::create_from_rational(15,100)  };
-        let element4 = Receiver { addr: 0xDD04, ratio: FixedPoint32::create_from_rational(12,100)  };
-        let element5 = Receiver { addr: 0xDD05, ratio: FixedPoint32::create_from_rational(1,100)  };
-        let element6 = Receiver { addr: 0xDD06, ratio: FixedPoint32::create_from_rational(1,100)  };
+        let element1 = Receiver { addr: 0xDD01, ratio: FixedPoint32::create_from_rational(71,100) };   //VLS-COMM
+        let element2 = Receiver { addr: 0xDD02, ratio: FixedPoint32::create_from_rational(15,100) };   //VLS-ASSOCA
+        let element3 = Receiver { addr: 0xDD03, ratio: FixedPoint32::create_from_rational(12,100) };   //VLS-TEAM
+        let element4 = Receiver { addr: 0xDD04, ratio: FixedPoint32::create_from_rational(1,100)  };   //VLS-ADVS
+        let element5 = Receiver { addr: 0xDD05, ratio: FixedPoint32::create_from_rational(1,100)  };   //VLS-OPEN
 
         Vector::push_back(&mut receivers, element1);
         Vector::push_back(&mut receivers, element2);
         Vector::push_back(&mut receivers, element3);
         Vector::push_back(&mut receivers, element4);
         Vector::push_back(&mut receivers, element5);
-        Vector::push_back(&mut receivers, element6);
-
+        
         receivers
     }
 
