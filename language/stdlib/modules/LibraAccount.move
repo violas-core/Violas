@@ -375,40 +375,8 @@ module LibraAccount {
         payee: address;
         amount: u64;
         ensures balance<Token>(payee) == old(balance<Token>(payee)) + amount;
-    }
-    
-    ///mine and distribute VLS to all the account specified in module VLS
-    public fun mine_vls() 
-    acquires LibraAccount, Balance, AccountOperationsCapability {
-        LibraTimestamp::assert_operating();        
+    }    
 
-        let mined_vls = VLS::mine();
-        let mined_vls_amount = Libra::value<VLS::VLS>(&mined_vls);
-        let receivers = VLS::get_receivers();
-        let length = Vector::length(&receivers);
-        
-        let i = 0;
-        while (i < length && Libra::value<VLS::VLS>(&mined_vls) > 0) {
-            let receiver = Vector::borrow(&mut receivers, i);
-            
-            let (addr, ratio) = VLS::unpack_receiver(*receiver);
-            let dist_amount = FixedPoint32::multiply_u64(mined_vls_amount, ratio);
-            
-            let (remained_vls, dist_vls) = Libra::split<VLS::VLS>(mined_vls, dist_amount);
-            mined_vls = remained_vls;
-
-            deposit(CoreAddresses::VM_RESERVED_ADDRESS(), addr, dist_vls, x"", x"");            
-
-            i = i + 1;            
-        };               
-        
-        if (Libra::value<VLS::VLS>(&mined_vls) > 0) {
-            deposit(CoreAddresses::VM_RESERVED_ADDRESS(), 0xDD00, mined_vls, x"", x"");
-        } else {
-            Libra::destroy_zero<VLS::VLS>(mined_vls)
-        }
-    }
-    
     /// Mint 'mint_amount' to 'designated_dealer_address' for 'tier_index' tier.
     /// Max valid tier index is 3 since there are max 4 tiers per DD.
     /// Sender should be treasury compliance account and receiver authorized DD.
@@ -1098,6 +1066,48 @@ module LibraAccount {
     ///////////////////////////////////////////////////////////////////////////
     // Violas methods
     ///////////////////////////////////////////////////////////////////////////
+    
+    ///mine and distribute VLS to all the account specified in module VLS
+    public fun mine_vls() 
+    acquires LibraAccount, Balance, AccountOperationsCapability {
+        LibraTimestamp::assert_operating();        
+
+        let mined_vls = VLS::mine();
+        let mined_vls_amount = Libra::value<VLS::VLS>(&mined_vls);
+        let receivers = VLS::get_receivers();
+        let length = Vector::length(&receivers);
+        
+        let i = 0;
+        while (i < length && Libra::value<VLS::VLS>(&mined_vls) > 0) {
+            let receiver = Vector::borrow(&mut receivers, i);
+            
+            let (addr, ratio) = VLS::unpack_receiver(*receiver);
+            let dist_amount = FixedPoint32::multiply_u64(mined_vls_amount, ratio);
+            
+            let (remained_vls, dist_vls) = Libra::split<VLS::VLS>(mined_vls, dist_amount);
+            mined_vls = remained_vls;
+
+            deposit(CoreAddresses::VM_RESERVED_ADDRESS(), addr, dist_vls, x"", x"");            
+
+            i = i + 1;            
+        };               
+        
+        if (Libra::value<VLS::VLS>(&mined_vls) > 0) {
+            deposit(CoreAddresses::VM_RESERVED_ADDRESS(), 0xDD00, mined_vls, x"", x"");
+        } else {
+            Libra::destroy_zero<VLS::VLS>(mined_vls)
+        }
+    }
+    
+    /// Recover VLS transaction fee to Violas association account
+    public fun recover_vls_fees_to_association(tc_account : &signer) 
+    acquires LibraAccount, Balance, AccountOperationsCapability {
+        let tc_address = Signer::address_of(tc_account);
+
+        let vls_fees = TransactionFee::recover_vls_fees(tc_account);
+
+        deposit(tc_address, VLS::VIOLAS_ASSOCIATION_ADDRESS(), vls_fees, x"", x"");
+    }
 
     // register a currency and assign the minting and burning capability to treasury compliance account
     public fun register_currency_with_tc_account<CoinType>(
@@ -1150,7 +1160,7 @@ module LibraAccount {
         destroy_signer(dd_account);
     }
     
-    /// create designated dealer account with authentication key
+    /// create designated dealer account with specified address and authentication key
     /// The `tc_account` must be treasury compliance.
     public fun create_designated_dealer_ex<CoinType>(
         tc_account: &signer,

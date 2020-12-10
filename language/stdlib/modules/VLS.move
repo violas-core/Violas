@@ -5,10 +5,8 @@ module VLS {
     use 0x1::CoreAddresses;
     use 0x1::Errors;
     use 0x1::FixedPoint32::{Self, FixedPoint32};
-    use 0x1::Libra::{Self, Libra};
-    //use 0x1::LibraAccount;
-    use 0x1::LibraTimestamp;
-    //use 0x1::Signer;
+    use 0x1::Libra::{Self, Libra};    
+    use 0x1::LibraTimestamp;    
     use 0x1::Vector;
     
     /// The type tag representing the `VLS` currency on-chain.
@@ -44,6 +42,11 @@ module VLS {
     const VLS_TOTAL_AMOUNT: u64 = 100000000 * 1000000;      // 10^8 * 10^6
     const MINING_CAPACITY_PER_MINUTE: u64 = 50 * 1000000;   // 50 * 10^6
     const MINING_PERIOD: u64 = 2 * 365 * 24 * 60;           // two years
+
+    /// The address of Violas association account 
+    public fun VIOLAS_ASSOCIATION_ADDRESS(): address {
+        0xDD02
+    }
 
     /// Initializes the `VLS` module. 
     /// This function creates the mint, preburn, and burn's capabilities for `VLS` coins and holds them under root account 
@@ -176,12 +179,12 @@ module VLS {
         mint(mine_amount)        
     }
 
-    // retrieve all receiver' address and distribution ratio
+    /// retrieve all receiver' address and distribution ratio
     public fun get_receivers() : vector<Receiver> {    
         let receivers = Vector::empty<Receiver>();
 
         let element1 = Receiver { addr: 0xDD01, ratio: FixedPoint32::create_from_rational(71,100) };   //VLS-COMM
-        let element2 = Receiver { addr: 0xDD02, ratio: FixedPoint32::create_from_rational(15,100) };   //VLS-ASSOCA
+        let element2 = Receiver { addr: VIOLAS_ASSOCIATION_ADDRESS(), ratio: FixedPoint32::create_from_rational(15,100) };   //VLS-ASSOCA
         let element3 = Receiver { addr: 0xDD03, ratio: FixedPoint32::create_from_rational(12,100) };   //VLS-TEAM
         let element4 = Receiver { addr: 0xDD04, ratio: FixedPoint32::create_from_rational(1,100)  };   //VLS-ADVS
         let element5 = Receiver { addr: 0xDD05, ratio: FixedPoint32::create_from_rational(1,100)  };   //VLS-OPEN
@@ -198,23 +201,6 @@ module VLS {
     public fun unpack_receiver(receiver : Receiver) : (address, FixedPoint32) {
         (receiver.addr, *&receiver.ratio)
     }
-
-    // Distribute VLS to all the specified account 
-    // public fun distribute() 
-    // acquires Receivers, Reserve {
-    //     LibraTimestamp::assert_operating();
-    //     let _time_seconds = LibraTimestamp::now_seconds();
-
-    //     let vls_coin = mint(100);
-
-    //     let miner = *&borrow_global<Receivers>(CoreAddresses::LIBRA_ROOT_ADDRESS()).miner;
-
-    //     //LibraAccount::deposit<VLS>(CoreAddresses::VM_RESERVED_ADDRESS(), receivers.miner, vls_coin, x"", x"")
-    //      // Deposit the `to_deposit` coin
-    //     //Libra::deposit(LibraAccount::balance<VLS>(miner), vls_coin);
-    //     //move_to(miner, LibraAccount::Balance<VLS>{ coin: Libra::zero<VLS>() });
-
-    // }
 }
 
 }

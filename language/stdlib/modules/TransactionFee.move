@@ -11,7 +11,7 @@ module TransactionFee {
     use 0x1::Roles;
     use 0x1::LibraTimestamp;
     use 0x1::Signer;
-    use 0x1::VLS::VLS;
+    use 0x1::VLS::{Self,VLS};
 
     /// The `TransactionFee` resource holds a preburn resource for each
     /// fiat `CoinType` that can be collected as a transaction fee.
@@ -105,6 +105,9 @@ module TransactionFee {
             // TODO: Once the composition of LBR is determined fill this in to
             // unpack and burn the backing coins of the LBR coin.
             abort Errors::invalid_state(ETRANSACTION_FEE)
+        } else if (VLS::is_vls<CoinType>()) {
+            // disable burning VLS
+            abort Errors::invalid_state(ETRANSACTION_FEE)
         } else {
             // extract fees
             let fees = borrow_global_mut<TransactionFee<CoinType>>(tc_address);
@@ -154,6 +157,43 @@ module TransactionFee {
         /// tc_account retrieves BurnCapability [[H3]][PERMISSION].
         /// BurnCapability is not transferrable [[J3]][PERMISSION].
         ensures exists<Libra::BurnCapability<CoinType>>(Signer::spec_address_of(tc_account));
+    }
+
+
+    ///
+    /// Recover VLS transaction fees
+    ///
+    public fun recover_vls_fees(
+        tc_account: &signer,
+    ) : Libra<VLS> 
+    acquires TransactionFee {
+
+        LibraTimestamp::assert_operating();
+        Roles::assert_treasury_compliance(tc_account);
+
+        assert(is_coin_initialized<VLS>(), Errors::not_published(ETRANSACTION_FEE));
+
+        let tc_address = CoreAddresses::TREASURY_COMPLIANCE_ADDRESS();
+        
+        // extract fees
+        let fees = borrow_global_mut<TransactionFee<VLS>>(tc_address);
+        let coin = Libra::withdraw_all(&mut fees.balance);
+
+        coin
+    }
+
+    spec fun recover_vls_fees {
+        /// Must abort if the account does not have the TreasuryCompliance role [[H3]][PERMISSION].
+        include Roles::AbortsIfNotTreasuryCompliance{account: tc_account};
+
+        include LibraTimestamp::AbortsIfNotOperating;
+        aborts_if !is_coin_initialized<VLS>() with Errors::NOT_PUBLISHED;
+        
+        /// The correct amount of fees is burnt and subtracted from market cap.
+        ensures Libra::spec_market_cap<VLS>()
+            == old(Libra::spec_market_cap<VLS>()) - old(spec_transaction_fee<VLS>().balance.value);
+        /// All the fees is recovered so the balance becomes 0.
+        ensures spec_transaction_fee<VLS>().balance.value == 0;
     }
 
     spec module {} // Switch documentation context to module level.

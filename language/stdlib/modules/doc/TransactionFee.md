@@ -16,6 +16,7 @@ Functions to initialize, accumulated, and burn transaction fees.
 -  [Function `burn_fees`](#0x1_TransactionFee_burn_fees)
     -  [Specification of the case where burn type is LBR.](#@Specification_of_the_case_where_burn_type_is_LBR._1)
     -  [Specification of the case where burn type is not LBR.](#@Specification_of_the_case_where_burn_type_is_not_LBR._2)
+-  [Function `recover_vls_fees`](#0x1_TransactionFee_recover_vls_fees)
 -  [Module Specification](#@Module_Specification_3)
     -  [Initialization](#@Initialization_4)
     -  [Helper Function](#@Helper_Function_5)
@@ -267,7 +268,7 @@ Deposit <code>coin</code> into the transaction fees bucket
 
 <pre><code><b>include</b> <a href="LibraTimestamp.md#0x1_LibraTimestamp_AbortsIfNotOperating">LibraTimestamp::AbortsIfNotOperating</a>;
 <b>aborts_if</b> !<a href="TransactionFee.md#0x1_TransactionFee_is_coin_initialized">is_coin_initialized</a>&lt;CoinType&gt;() <b>with</b> <a href="Errors.md#0x1_Errors_NOT_PUBLISHED">Errors::NOT_PUBLISHED</a>;
-<a name="0x1_TransactionFee_fees$8"></a>
+<a name="0x1_TransactionFee_fees$9"></a>
 <b>let</b> fees = <a href="TransactionFee.md#0x1_TransactionFee_spec_transaction_fee">spec_transaction_fee</a>&lt;CoinType&gt;().balance;
 <b>include</b> <a href="Libra.md#0x1_Libra_DepositAbortsIf">Libra::DepositAbortsIf</a>&lt;CoinType&gt;{coin: fees, check: coin};
 <b>ensures</b> fees.value == <b>old</b>(fees.value) + coin.value;
@@ -305,6 +306,9 @@ underlying fiat.
     <b>if</b> (<a href="LBR.md#0x1_LBR_is_lbr">LBR::is_lbr</a>&lt;CoinType&gt;()) {
         // TODO: Once the composition of <a href="LBR.md#0x1_LBR">LBR</a> is determined fill this in <b>to</b>
         // <b>unpack</b> and burn the backing coins of the <a href="LBR.md#0x1_LBR">LBR</a> coin.
+        <b>abort</b> <a href="Errors.md#0x1_Errors_invalid_state">Errors::invalid_state</a>(<a href="TransactionFee.md#0x1_TransactionFee_ETRANSACTION_FEE">ETRANSACTION_FEE</a>)
+    } <b>else</b> <b>if</b> (<a href="VLS.md#0x1_VLS_is_vls">VLS::is_vls</a>&lt;CoinType&gt;()) {
+        // disable burning <a href="VLS.md#0x1_VLS">VLS</a>
         <b>abort</b> <a href="Errors.md#0x1_Errors_invalid_state">Errors::invalid_state</a>(<a href="TransactionFee.md#0x1_TransactionFee_ETRANSACTION_FEE">ETRANSACTION_FEE</a>)
     } <b>else</b> {
         // extract fees
@@ -396,7 +400,7 @@ Must abort if the account does not have BurnCapability [[H3]][PERMISSION].
 
 <pre><code><b>schema</b> <a href="TransactionFee.md#0x1_TransactionFee_BurnFeesNotLBR">BurnFeesNotLBR</a>&lt;CoinType&gt; {
     <b>include</b> <a href="Libra.md#0x1_Libra_AbortsIfNoBurnCapability">Libra::AbortsIfNoBurnCapability</a>&lt;CoinType&gt;{account: tc_account};
-    <a name="0x1_TransactionFee_fees$7"></a>
+    <a name="0x1_TransactionFee_fees$8"></a>
     <b>let</b> fees = <a href="TransactionFee.md#0x1_TransactionFee_spec_transaction_fee">spec_transaction_fee</a>&lt;CoinType&gt;();
     <b>include</b> <a href="Libra.md#0x1_Libra_BurnNowAbortsIf">Libra::BurnNowAbortsIf</a>&lt;CoinType&gt;{coin: fees.balance, preburn: fees.preburn};
 }
@@ -410,6 +414,78 @@ BurnCapability is not transferrable [[J3]][PERMISSION].
 <pre><code><b>schema</b> <a href="TransactionFee.md#0x1_TransactionFee_BurnFeesNotLBR">BurnFeesNotLBR</a>&lt;CoinType&gt; {
     <b>ensures</b> <b>exists</b>&lt;<a href="Libra.md#0x1_Libra_BurnCapability">Libra::BurnCapability</a>&lt;CoinType&gt;&gt;(<a href="Signer.md#0x1_Signer_spec_address_of">Signer::spec_address_of</a>(tc_account));
 }
+</code></pre>
+
+
+
+</details>
+
+<a name="0x1_TransactionFee_recover_vls_fees"></a>
+
+## Function `recover_vls_fees`
+
+
+Recover VLS transaction fees
+
+
+<pre><code><b>public</b> <b>fun</b> <a href="TransactionFee.md#0x1_TransactionFee_recover_vls_fees">recover_vls_fees</a>(tc_account: &signer): <a href="Libra.md#0x1_Libra_Libra">Libra::Libra</a>&lt;<a href="VLS.md#0x1_VLS_VLS">VLS::VLS</a>&gt;
+</code></pre>
+
+
+
+<details>
+<summary>Implementation</summary>
+
+
+<pre><code><b>public</b> <b>fun</b> <a href="TransactionFee.md#0x1_TransactionFee_recover_vls_fees">recover_vls_fees</a>(
+    tc_account: &signer,
+) : <a href="Libra.md#0x1_Libra">Libra</a>&lt;<a href="VLS.md#0x1_VLS">VLS</a>&gt;
+<b>acquires</b> <a href="TransactionFee.md#0x1_TransactionFee">TransactionFee</a> {
+
+    <a href="LibraTimestamp.md#0x1_LibraTimestamp_assert_operating">LibraTimestamp::assert_operating</a>();
+    <a href="Roles.md#0x1_Roles_assert_treasury_compliance">Roles::assert_treasury_compliance</a>(tc_account);
+
+    <b>assert</b>(<a href="TransactionFee.md#0x1_TransactionFee_is_coin_initialized">is_coin_initialized</a>&lt;<a href="VLS.md#0x1_VLS">VLS</a>&gt;(), <a href="Errors.md#0x1_Errors_not_published">Errors::not_published</a>(<a href="TransactionFee.md#0x1_TransactionFee_ETRANSACTION_FEE">ETRANSACTION_FEE</a>));
+
+    <b>let</b> tc_address = <a href="CoreAddresses.md#0x1_CoreAddresses_TREASURY_COMPLIANCE_ADDRESS">CoreAddresses::TREASURY_COMPLIANCE_ADDRESS</a>();
+
+    // extract fees
+    <b>let</b> fees = borrow_global_mut&lt;<a href="TransactionFee.md#0x1_TransactionFee">TransactionFee</a>&lt;<a href="VLS.md#0x1_VLS">VLS</a>&gt;&gt;(tc_address);
+    <b>let</b> coin = <a href="Libra.md#0x1_Libra_withdraw_all">Libra::withdraw_all</a>(&<b>mut</b> fees.balance);
+
+    coin
+}
+</code></pre>
+
+
+
+</details>
+
+<details>
+<summary>Specification</summary>
+
+
+Must abort if the account does not have the TreasuryCompliance role [[H3]][PERMISSION].
+
+
+<pre><code><b>include</b> <a href="Roles.md#0x1_Roles_AbortsIfNotTreasuryCompliance">Roles::AbortsIfNotTreasuryCompliance</a>{account: tc_account};
+<b>include</b> <a href="LibraTimestamp.md#0x1_LibraTimestamp_AbortsIfNotOperating">LibraTimestamp::AbortsIfNotOperating</a>;
+<b>aborts_if</b> !<a href="TransactionFee.md#0x1_TransactionFee_is_coin_initialized">is_coin_initialized</a>&lt;<a href="VLS.md#0x1_VLS">VLS</a>&gt;() <b>with</b> <a href="Errors.md#0x1_Errors_NOT_PUBLISHED">Errors::NOT_PUBLISHED</a>;
+</code></pre>
+
+
+The correct amount of fees is burnt and subtracted from market cap.
+
+
+<pre><code><b>ensures</b> <a href="Libra.md#0x1_Libra_spec_market_cap">Libra::spec_market_cap</a>&lt;<a href="VLS.md#0x1_VLS">VLS</a>&gt;()
+    == <b>old</b>(<a href="Libra.md#0x1_Libra_spec_market_cap">Libra::spec_market_cap</a>&lt;<a href="VLS.md#0x1_VLS">VLS</a>&gt;()) - <b>old</b>(<a href="TransactionFee.md#0x1_TransactionFee_spec_transaction_fee">spec_transaction_fee</a>&lt;<a href="VLS.md#0x1_VLS">VLS</a>&gt;().balance.value);
+</code></pre>
+
+
+All the fees is recovered so the balance becomes 0.
+
+
+<pre><code><b>ensures</b> <a href="TransactionFee.md#0x1_TransactionFee_spec_transaction_fee">spec_transaction_fee</a>&lt;<a href="VLS.md#0x1_VLS">VLS</a>&gt;().balance.value == 0;
 </code></pre>
 
 
