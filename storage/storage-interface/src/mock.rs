@@ -1,12 +1,12 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
 //! This module provides mock dbreader for tests.
 
 use crate::{DbReader, Order, StartupInfo, TreeState};
 use anyhow::Result;
-use libra_crypto::HashValue;
-use libra_types::{
+use diem_crypto::HashValue;
+use diem_types::{
     account_address::AccountAddress,
     account_config::AccountResource,
     account_state::AccountState,
@@ -149,7 +149,7 @@ fn get_mock_account_state_blob() -> AccountStateBlob {
     let mut account_state = AccountState::default();
     account_state.insert(
         AccountResource::resource_path(),
-        lcs::to_bytes(&account_resource).unwrap(),
+        bcs::to_bytes(&account_resource).unwrap(),
     );
 
     AccountStateBlob::try_from(&account_state).unwrap()

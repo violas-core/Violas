@@ -1,4 +1,4 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{
@@ -10,14 +10,14 @@ use crate::{
         types::{notify_subscribers, SharedMempool, SharedMempoolNotification},
     },
 };
-use itertools::Itertools;
-use libra_config::{
+use diem_config::{
     config::{MempoolConfig, PeerNetworkId, UpstreamConfig},
     network_id::NetworkId,
 };
-use libra_infallible::Mutex;
-use libra_logger::prelude::*;
-use libra_types::transaction::SignedTransaction;
+use diem_infallible::Mutex;
+use diem_logger::prelude::*;
+use diem_types::transaction::SignedTransaction;
+use itertools::Itertools;
 use netcore::transport::ConnectionOrigin;
 use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
@@ -57,8 +57,14 @@ pub(crate) struct PeerManager {
 /// Identifier for a broadcasted batch of txns
 /// For BatchId(`start_id`, `end_id`), (`start_id`, `end_id`) is the range of timeline IDs read from
 /// the core mempool timeline index that produced the txns in this batch
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, PartialOrd, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct BatchId(pub u64, pub u64);
+
+impl PartialOrd for BatchId {
+    fn partial_cmp(&self, other: &BatchId) -> Option<std::cmp::Ordering> {
+        Some((other.0, other.1).cmp(&(self.0, self.1)))
+    }
+}
 
 impl Ord for BatchId {
     fn cmp(&self, other: &BatchId) -> std::cmp::Ordering {
@@ -230,7 +236,7 @@ impl PeerManager {
                 // If the number of un-ACK'ed un-expired broadcasts reaches this threshold, we do not broadcast anymore
                 // and wait until an ACK is received or a sent broadcast expires
                 // This helps rate-limit egress network bandwidth and not overload a remote peer or this
-                // node's Libra network sender
+                // node's Diem network sender
                 if pending_broadcasts >= self.mempool_config.max_broadcasts_per_peer {
                     return;
                 }
@@ -278,7 +284,7 @@ impl PeerManager {
         if let Err(e) = network_sender.send_to(
             peer.peer_id(),
             MempoolSyncMsg::BroadcastTransactionsRequest {
-                request_id: lcs::to_bytes(&batch_id).expect("failed LCS serialization of batch ID"),
+                request_id: bcs::to_bytes(&batch_id).expect("failed BCS serialization of batch ID"),
                 transactions,
             },
         ) {
@@ -456,7 +462,7 @@ impl PeerManager {
     ) {
         let peer_id = &peer.peer_id().to_string();
         let network_id = &peer.raw_network_id().to_string();
-        let batch_id = if let Ok(id) = lcs::from_bytes::<BatchId>(&request_id_bytes) {
+        let batch_id = if let Ok(id) = bcs::from_bytes::<BatchId>(&request_id_bytes) {
             id
         } else {
             counters::INVALID_ACK_RECEIVED_COUNT

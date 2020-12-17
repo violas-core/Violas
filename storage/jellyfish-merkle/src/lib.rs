@@ -1,4 +1,4 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
 #![forbid(unsafe_code)]
@@ -81,8 +81,8 @@ pub mod test_helper;
 mod tree_cache;
 
 use anyhow::{bail, ensure, format_err, Result};
-use libra_crypto::HashValue;
-use libra_types::{
+use diem_crypto::HashValue;
+use diem_types::{
     account_state_blob::AccountStateBlob,
     proof::{SparseMerkleProof, SparseMerkleRangeProof},
     transaction::Version,
@@ -126,6 +126,14 @@ pub type NodeBatch = BTreeMap<NodeKey, Node>;
 /// with other batches.
 pub type StaleNodeIndexBatch = BTreeSet<StaleNodeIndex>;
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct NodeStats {
+    pub new_nodes: usize,
+    pub new_leaves: usize,
+    pub stale_nodes: usize,
+    pub stale_leaves: usize,
+}
+
 /// Indicates a node becomes stale since `stale_since_version`.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[cfg_attr(any(test, feature = "fuzzing"), derive(Arbitrary))]
@@ -145,8 +153,7 @@ pub struct StaleNodeIndex {
 pub struct TreeUpdateBatch {
     pub node_batch: NodeBatch,
     pub stale_node_index_batch: StaleNodeIndexBatch,
-    pub num_new_leaves: usize,
-    pub num_stale_leaves: usize,
+    pub node_stats: Vec<NodeStats>,
 }
 
 /// The Jellyfish Merkle tree data structure. See [`crate`] for description.

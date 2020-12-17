@@ -1,4 +1,4 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{
@@ -36,10 +36,7 @@ enum Token {
 
 impl Token {
     fn is_whitespace(&self) -> bool {
-        match self {
-            Self::Whitespace(_) => true,
-            _ => false,
-        }
+        matches!(self, Self::Whitespace(_))
     }
 }
 

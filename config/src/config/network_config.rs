@@ -1,4 +1,4 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{
@@ -7,11 +7,11 @@ use crate::{
     network_id::NetworkId,
     utils,
 };
-use libra_crypto::{x25519, Uniform};
-use libra_network_address::NetworkAddress;
-use libra_network_address_encryption::Encryptor;
-use libra_secure_storage::{CryptoStorage, KVStorage, Storage};
-use libra_types::{transaction::authenticator::AuthenticationKey, PeerId};
+use diem_crypto::{x25519, Uniform};
+use diem_network_address::NetworkAddress;
+use diem_network_address_encryption::Encryptor;
+use diem_secure_storage::{CryptoStorage, KVStorage, Storage};
+use diem_types::{transaction::authenticator::AuthenticationKey, PeerId};
 use rand::{
     rngs::{OsRng, StdRng},
     Rng, SeedableRng,
@@ -37,7 +37,8 @@ pub const CONNECTIVITY_CHECK_INTERVAL_MS: u64 = 5000;
 pub const MAX_CONCURRENT_NETWORK_REQS: usize = 100;
 pub const MAX_CONCURRENT_NETWORK_NOTIFS: usize = 100;
 pub const MAX_CONNECTION_DELAY_MS: u64 = 60_000; /* 1 minute */
-pub const MAX_FULLNODE_CONNECTIONS: usize = 3;
+pub const MAX_FULLNODE_OUTBOUND_CONNECTIONS: usize = 3;
+pub const MAX_INBOUND_CONNECTIONS: usize = 100;
 pub const MAX_FRAME_SIZE: usize = 8 * 1024 * 1024; /* 8 MiB */
 pub const CONNECTION_BACKOFF_BASE: u64 = 2;
 
@@ -91,8 +92,10 @@ pub struct NetworkConfig {
     pub ping_timeout_ms: u64,
     // Number of failed healthcheck pings until a peer is marked unhealthy
     pub ping_failures_tolerated: u64,
-    // Maximum number of allows fullnode connections.  Will prevent future outbound connections
-    pub max_fullnode_connections: usize,
+    // Maximum number of outbound connections, limited by ConnectivityManager
+    pub max_outbound_connections: usize,
+    // Maximum number of outbound connections, limited by PeerManager
+    pub max_inbound_connections: usize,
 }
 
 impl Default for NetworkConfig {
@@ -123,7 +126,8 @@ impl NetworkConfig {
             ping_interval_ms: PING_INTERVAL_MS,
             ping_timeout_ms: PING_TIMEOUT_MS,
             ping_failures_tolerated: PING_FAILURES_TOLERATED,
-            max_fullnode_connections: MAX_FULLNODE_CONNECTIONS,
+            max_outbound_connections: MAX_FULLNODE_OUTBOUND_CONNECTIONS,
+            max_inbound_connections: MAX_INBOUND_CONNECTIONS,
         };
         config.prepare_identity();
         config
@@ -233,12 +237,12 @@ impl NetworkConfig {
         self.identity = Identity::from_config(identity_key, peer_id);
     }
 
-    /// Check that all seed peer addresses look like canonical LibraNet addresses
+    /// Check that all seed peer addresses look like canonical DiemNet addresses
     pub fn verify_seed_addrs(&self) -> Result<(), Error> {
         for (peer_id, addrs) in self.seed_addrs.iter() {
             for addr in addrs {
                 crate::config::invariant(
-                    addr.is_libranet_addr(),
+                    addr.is_diemnet_addr(),
                     format!(
                         "Unexpected seed peer address format: peer_id: {}, addr: '{}'",
                         peer_id.short_str(),

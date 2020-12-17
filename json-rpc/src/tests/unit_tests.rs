@@ -1,35 +1,28 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{
     errors::{JsonRpcError, ServerCode},
     tests::{
         genesis::generate_genesis_state,
-        utils::{test_bootstrap, MockLibraDB},
+        utils::{test_bootstrap, MockDiemDB},
     },
 };
-use futures::{
-    channel::{
-        mpsc::{channel, Receiver},
-        oneshot,
-    },
-    StreamExt,
-};
-use libra_config::{config::DEFAULT_CONTENT_LENGTH_LIMIT, utils};
-use libra_crypto::{ed25519::Ed25519PrivateKey, hash::CryptoHash, HashValue, PrivateKey, Uniform};
-use libra_json_rpc_client::{
+use diem_config::{config::DEFAULT_CONTENT_LENGTH_LIMIT, utils};
+use diem_crypto::{ed25519::Ed25519PrivateKey, hash::CryptoHash, HashValue, PrivateKey, Uniform};
+use diem_json_rpc_client::{
     views::{
         AccountStateWithProofView, AccountView, BytesView, EventView, MetadataView, StateProofView,
         TransactionDataView, TransactionView, VMStatusView,
     },
     JsonRpcAsyncClient, JsonRpcBatch, JsonRpcResponse, ResponseAsView,
 };
-use libra_mempool::SubmissionStatus;
-use libra_metrics::get_all_metrics;
-use libra_proptest_helpers::ValueGenerator;
-use libra_types::{
+use diem_mempool::SubmissionStatus;
+use diem_metrics::get_all_metrics;
+use diem_proptest_helpers::ValueGenerator;
+use diem_types::{
     account_address::AccountAddress,
-    account_config::{from_currency_code_string, AccountResource, FreezingBit, COIN1_NAME},
+    account_config::{from_currency_code_string, AccountResource, FreezingBit, XUS_NAME},
     account_state::AccountState,
     account_state_blob::{AccountStateBlob, AccountStateWithProof},
     chain_id::ChainId,
@@ -42,7 +35,14 @@ use libra_types::{
     transaction::{SignedTransaction, Transaction, TransactionInfo, TransactionPayload},
     vm_status::StatusCode,
 };
-use libradb::test_helper::arb_blocks_to_commit;
+use diemdb::test_helper::arb_blocks_to_commit;
+use futures::{
+    channel::{
+        mpsc::{channel, Receiver},
+        oneshot,
+    },
+    StreamExt,
+};
 use move_core_types::{
     language_storage::TypeTag,
     move_resource::MoveResource,
@@ -66,8 +66,8 @@ use vm_validator::{
 
 use serde_json::json;
 
-// returns MockLibraDB for unit-testing
-fn mock_db() -> MockLibraDB {
+// returns MockDiemDB for unit-testing
+fn mock_db() -> MockDiemDB {
     let mut gen = ValueGenerator::new();
     let blocks = gen.generate(arb_blocks_to_commit());
     let mut account_state_with_proof = gen.generate(any::<AccountStateWithProof>());
@@ -134,7 +134,7 @@ fn mock_db() -> MockLibraDB {
     }
 
     let (genesis, _) = generate_genesis_state();
-    MockLibraDB {
+    MockDiemDB {
         version: version as u64,
         genesis,
         all_accounts,
@@ -215,9 +215,9 @@ fn test_json_rpc_protocol_invalid_requests() {
                 },
                 "id": 1,
                 "jsonrpc": "2.0",
-                "libra_chain_id": ChainId::test().id(),
-                "libra_ledger_timestampusec": timestamp,
-                "libra_ledger_version": version
+                "diem_chain_id": ChainId::test().id(),
+                "diem_ledger_timestampusec": timestamp,
+                "diem_ledger_version": version
             }),
         ),
         (
@@ -229,9 +229,9 @@ fn test_json_rpc_protocol_invalid_requests() {
                 },
                 "id": null,
                 "jsonrpc": "2.0",
-                "libra_chain_id": ChainId::test().id(),
-                "libra_ledger_timestampusec": timestamp,
-                "libra_ledger_version": version
+                "diem_chain_id": ChainId::test().id(),
+                "diem_ledger_timestampusec": timestamp,
+                "diem_ledger_version": version
             }),
         ),
         (
@@ -243,9 +243,9 @@ fn test_json_rpc_protocol_invalid_requests() {
                 },
                 "id": null,
                 "jsonrpc": "2.0",
-                "libra_chain_id": ChainId::test().id(),
-                "libra_ledger_timestampusec": timestamp,
-                "libra_ledger_version": version
+                "diem_chain_id": ChainId::test().id(),
+                "diem_ledger_timestampusec": timestamp,
+                "diem_ledger_version": version
             }),
         ),
         (
@@ -257,9 +257,9 @@ fn test_json_rpc_protocol_invalid_requests() {
                 },
                 "id": 1,
                 "jsonrpc": "2.0",
-                "libra_chain_id": ChainId::test().id(),
-                "libra_ledger_timestampusec": timestamp,
-                "libra_ledger_version": version
+                "diem_chain_id": ChainId::test().id(),
+                "diem_ledger_timestampusec": timestamp,
+                "diem_ledger_version": version
             }),
         ),
         (
@@ -271,9 +271,9 @@ fn test_json_rpc_protocol_invalid_requests() {
                 },
                 "id": 1,
                 "jsonrpc": "2.0",
-                "libra_chain_id": ChainId::test().id(),
-                "libra_ledger_timestampusec": timestamp,
-                "libra_ledger_version": version
+                "diem_chain_id": ChainId::test().id(),
+                "diem_ledger_timestampusec": timestamp,
+                "diem_ledger_version": version
             }),
         ),
         (
@@ -285,9 +285,9 @@ fn test_json_rpc_protocol_invalid_requests() {
                 },
                 "id": 1,
                 "jsonrpc": "2.0",
-                "libra_chain_id": ChainId::test().id(),
-                "libra_ledger_timestampusec": timestamp,
-                "libra_ledger_version": version
+                "diem_chain_id": ChainId::test().id(),
+                "diem_ledger_timestampusec": timestamp,
+                "diem_ledger_version": version
             }),
         ),
         (
@@ -299,9 +299,9 @@ fn test_json_rpc_protocol_invalid_requests() {
                 },
                 "id": 1,
                 "jsonrpc": "2.0",
-                "libra_chain_id": ChainId::test().id(),
-                "libra_ledger_timestampusec": timestamp,
-                "libra_ledger_version": version
+                "diem_chain_id": ChainId::test().id(),
+                "diem_ledger_timestampusec": timestamp,
+                "diem_ledger_version": version
             }),
         ),
         (
@@ -315,9 +315,9 @@ fn test_json_rpc_protocol_invalid_requests() {
                 },
                 "id": 1,
                 "jsonrpc": "2.0",
-                "libra_chain_id": ChainId::test().id(),
-                "libra_ledger_timestampusec": timestamp,
-                "libra_ledger_version": version
+                "diem_chain_id": ChainId::test().id(),
+                "diem_ledger_timestampusec": timestamp,
+                "diem_ledger_version": version
             }),
         ),
         (
@@ -331,9 +331,9 @@ fn test_json_rpc_protocol_invalid_requests() {
                 },
                 "id": 1,
                 "jsonrpc": "2.0",
-                "libra_chain_id": ChainId::test().id(),
-                "libra_ledger_timestampusec": timestamp,
-                "libra_ledger_version": version
+                "diem_chain_id": ChainId::test().id(),
+                "diem_ledger_timestampusec": timestamp,
+                "diem_ledger_version": version
             }),
         ),
         (
@@ -347,9 +347,9 @@ fn test_json_rpc_protocol_invalid_requests() {
                 },
                 "id": 1,
                 "jsonrpc": "2.0",
-                "libra_chain_id": ChainId::test().id(),
-                "libra_ledger_timestampusec": timestamp,
-                "libra_ledger_version": version
+                "diem_chain_id": ChainId::test().id(),
+                "diem_ledger_timestampusec": timestamp,
+                "diem_ledger_version": version
             }),
         ),
         (
@@ -363,9 +363,9 @@ fn test_json_rpc_protocol_invalid_requests() {
                 },
                 "id": 1,
                 "jsonrpc": "2.0",
-                "libra_chain_id": ChainId::test().id(),
-                "libra_ledger_timestampusec": timestamp,
-                "libra_ledger_version": version
+                "diem_chain_id": ChainId::test().id(),
+                "diem_ledger_timestampusec": timestamp,
+                "diem_ledger_version": version
             }),
         ),
         (
@@ -379,9 +379,9 @@ fn test_json_rpc_protocol_invalid_requests() {
                 },
                 "id": 1,
                 "jsonrpc": "2.0",
-                "libra_chain_id": ChainId::test().id(),
-                "libra_ledger_timestampusec": timestamp,
-                "libra_ledger_version": version
+                "diem_chain_id": ChainId::test().id(),
+                "diem_ledger_timestampusec": timestamp,
+                "diem_ledger_version": version
             }),
         ),
         (
@@ -395,9 +395,9 @@ fn test_json_rpc_protocol_invalid_requests() {
                 },
                 "id": 1,
                 "jsonrpc": "2.0",
-                "libra_chain_id": ChainId::test().id(),
-                "libra_ledger_timestampusec": timestamp,
-                "libra_ledger_version": version
+                "diem_chain_id": ChainId::test().id(),
+                "diem_ledger_timestampusec": timestamp,
+                "diem_ledger_version": version
             }),
         ),
         (
@@ -406,14 +406,14 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid param data(params[0]): should be hex-encoded string of LCS serialized Libra SignedTransaction type",
+                    "message": "Invalid param data(params[0]): should be hex-encoded string of BCS serialized Diem SignedTransaction type",
                     "data": null
                 },
                 "id": 1,
                 "jsonrpc": "2.0",
-                "libra_chain_id": ChainId::test().id(),
-                "libra_ledger_timestampusec": timestamp,
-                "libra_ledger_version": version
+                "diem_chain_id": ChainId::test().id(),
+                "diem_ledger_timestampusec": timestamp,
+                "diem_ledger_version": version
             }),
         ),
         (
@@ -427,9 +427,9 @@ fn test_json_rpc_protocol_invalid_requests() {
                 },
                 "id": 1,
                 "jsonrpc": "2.0",
-                "libra_chain_id": ChainId::test().id(),
-                "libra_ledger_timestampusec": timestamp,
-                "libra_ledger_version": version
+                "diem_chain_id": ChainId::test().id(),
+                "diem_ledger_timestampusec": timestamp,
+                "diem_ledger_version": version
             }),
         ),
         (
@@ -438,9 +438,9 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "id": 1,
                 "jsonrpc": "2.0",
-                "libra_chain_id": ChainId::test().id(),
-                "libra_ledger_timestampusec": timestamp,
-                "libra_ledger_version": version,
+                "diem_chain_id": ChainId::test().id(),
+                "diem_ledger_timestampusec": timestamp,
+                "diem_ledger_version": version,
                 "result": []
             }),
         ),
@@ -455,9 +455,9 @@ fn test_json_rpc_protocol_invalid_requests() {
                 },
                 "id": 1,
                 "jsonrpc": "2.0",
-                "libra_chain_id": ChainId::test().id(),
-                "libra_ledger_timestampusec": timestamp,
-                "libra_ledger_version": version
+                "diem_chain_id": ChainId::test().id(),
+                "diem_ledger_timestampusec": timestamp,
+                "diem_ledger_version": version
             }),
         ),
         (
@@ -471,9 +471,69 @@ fn test_json_rpc_protocol_invalid_requests() {
                 },
                 "id": 1,
                 "jsonrpc": "2.0",
-                "libra_chain_id": ChainId::test().id(),
-                "libra_ledger_timestampusec": timestamp,
-                "libra_ledger_version": version
+                "diem_chain_id": ChainId::test().id(),
+                "diem_ledger_timestampusec": timestamp,
+                "diem_ledger_version": version
+            }),
+        ),
+        (
+            "get_transactions_with_proofs: invalid start_version param",
+            json!({"jsonrpc": "2.0", "method": "get_transactions_with_proofs", "params": ["helloworld", 1], "id": 1}),
+            json!({
+                "error": {
+                    "code": -32602,
+                    "message": "Invalid param start_version(params[0]): should be unsigned int64",
+                    "data": null
+                },
+                "id": 1,
+                "jsonrpc": "2.0",
+                "diem_chain_id": ChainId::test().id(),
+                "diem_ledger_timestampusec": timestamp,
+                "diem_ledger_version": version
+            }),
+        ),
+        (
+            "get_transactions_with_proofs: start_version is too big, returns empty array",
+            json!({"jsonrpc": "2.0", "method": "get_transactions_with_proofs", "params": [version+1, 1], "id": 1}),
+            json!({
+                "id": 1,
+                "jsonrpc": "2.0",
+                "diem_chain_id": ChainId::test().id(),
+                "diem_ledger_timestampusec": timestamp,
+                "diem_ledger_version": version,
+                "result": null
+            }),
+        ),
+        (
+            "get_transactions_with_proofs: invalid limit param",
+            json!({"jsonrpc": "2.0", "method": "get_transactions_with_proofs", "params": [1, false], "id": 1}),
+            json!({
+                "error": {
+                    "code": -32602,
+                    "message": "Invalid param limit(params[1]): should be unsigned int64",
+                    "data": null
+                },
+                "id": 1,
+                "jsonrpc": "2.0",
+                "diem_chain_id": ChainId::test().id(),
+                "diem_ledger_timestampusec": timestamp,
+                "diem_ledger_version": version
+            }),
+        ),
+        (
+            "get_transactions_with_proofs: limit is too big",
+            json!({"jsonrpc": "2.0", "method": "get_transactions_with_proofs", "params": [1, 1001], "id": 1}),
+            json!({
+                "error": {
+                    "code": -32600,
+                    "message": "Invalid Request: page size = 1001, exceed limit 1000",
+                    "data": null
+                },
+                "id": 1,
+                "jsonrpc": "2.0",
+                "diem_chain_id": ChainId::test().id(),
+                "diem_ledger_timestampusec": timestamp,
+                "diem_ledger_version": version
             }),
         ),
         (
@@ -487,9 +547,9 @@ fn test_json_rpc_protocol_invalid_requests() {
                 },
                 "id": 1,
                 "jsonrpc": "2.0",
-                "libra_chain_id": ChainId::test().id(),
-                "libra_ledger_timestampusec": timestamp,
-                "libra_ledger_version": version
+                "diem_chain_id": ChainId::test().id(),
+                "diem_ledger_timestampusec": timestamp,
+                "diem_ledger_version": version
             }),
         ),
         (
@@ -503,9 +563,9 @@ fn test_json_rpc_protocol_invalid_requests() {
                 },
                 "id": 1,
                 "jsonrpc": "2.0",
-                "libra_chain_id": ChainId::test().id(),
-                "libra_ledger_timestampusec": timestamp,
-                "libra_ledger_version": version
+                "diem_chain_id": ChainId::test().id(),
+                "diem_ledger_timestampusec": timestamp,
+                "diem_ledger_version": version
             }),
         ),
         (
@@ -519,9 +579,9 @@ fn test_json_rpc_protocol_invalid_requests() {
                 },
                 "id": 1,
                 "jsonrpc": "2.0",
-                "libra_chain_id": ChainId::test().id(),
-                "libra_ledger_timestampusec": timestamp,
-                "libra_ledger_version": version
+                "diem_chain_id": ChainId::test().id(),
+                "diem_ledger_timestampusec": timestamp,
+                "diem_ledger_version": version
             }),
         ),
         (
@@ -530,9 +590,9 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "id": 1,
                 "jsonrpc": "2.0",
-                "libra_chain_id": ChainId::test().id(),
-                "libra_ledger_timestampusec": timestamp,
-                "libra_ledger_version": version,
+                "diem_chain_id": ChainId::test().id(),
+                "diem_ledger_timestampusec": timestamp,
+                "diem_ledger_version": version,
                 "result": []
             }),
         ),
@@ -547,9 +607,9 @@ fn test_json_rpc_protocol_invalid_requests() {
                 },
                 "id": 1,
                 "jsonrpc": "2.0",
-                "libra_chain_id": ChainId::test().id(),
-                "libra_ledger_timestampusec": timestamp,
-                "libra_ledger_version": version
+                "diem_chain_id": ChainId::test().id(),
+                "diem_ledger_timestampusec": timestamp,
+                "diem_ledger_version": version
             }),
         ),
         (
@@ -563,9 +623,9 @@ fn test_json_rpc_protocol_invalid_requests() {
                 },
                 "id": 1,
                 "jsonrpc": "2.0",
-                "libra_chain_id": ChainId::test().id(),
-                "libra_ledger_timestampusec": timestamp,
-                "libra_ledger_version": version
+                "diem_chain_id": ChainId::test().id(),
+                "diem_ledger_timestampusec": timestamp,
+                "diem_ledger_version": version
             }),
         ),
         (
@@ -579,9 +639,9 @@ fn test_json_rpc_protocol_invalid_requests() {
                 },
                 "id": 1,
                 "jsonrpc": "2.0",
-                "libra_chain_id": ChainId::test().id(),
-                "libra_ledger_timestampusec": timestamp,
-                "libra_ledger_version": version
+                "diem_chain_id": ChainId::test().id(),
+                "diem_ledger_timestampusec": timestamp,
+                "diem_ledger_version": version
             }),
         ),
         (
@@ -595,9 +655,9 @@ fn test_json_rpc_protocol_invalid_requests() {
                 },
                 "id": 1,
                 "jsonrpc": "2.0",
-                "libra_chain_id": ChainId::test().id(),
-                "libra_ledger_timestampusec": timestamp,
-                "libra_ledger_version": version
+                "diem_chain_id": ChainId::test().id(),
+                "diem_ledger_timestampusec": timestamp,
+                "diem_ledger_version": version
             }),
         ),
         (
@@ -606,9 +666,9 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "id": 1,
                 "jsonrpc": "2.0",
-                "libra_chain_id": ChainId::test().id(),
-                "libra_ledger_timestampusec": timestamp,
-                "libra_ledger_version": version,
+                "diem_chain_id": ChainId::test().id(),
+                "diem_ledger_timestampusec": timestamp,
+                "diem_ledger_version": version,
                 "result": null
             }),
         ),
@@ -623,9 +683,9 @@ fn test_json_rpc_protocol_invalid_requests() {
                 },
                 "id": 1,
                 "jsonrpc": "2.0",
-                "libra_chain_id": ChainId::test().id(),
-                "libra_ledger_timestampusec": timestamp,
-                "libra_ledger_version": version
+                "diem_chain_id": ChainId::test().id(),
+                "diem_ledger_timestampusec": timestamp,
+                "diem_ledger_version": version
             }),
         ),
         (
@@ -639,9 +699,9 @@ fn test_json_rpc_protocol_invalid_requests() {
                 },
                 "id": 1,
                 "jsonrpc": "2.0",
-                "libra_chain_id": ChainId::test().id(),
-                "libra_ledger_timestampusec": timestamp,
-                "libra_ledger_version": version
+                "diem_chain_id": ChainId::test().id(),
+                "diem_ledger_timestampusec": timestamp,
+                "diem_ledger_version": version
             }),
         ),
         (
@@ -655,9 +715,9 @@ fn test_json_rpc_protocol_invalid_requests() {
                 },
                 "id": 1,
                 "jsonrpc": "2.0",
-                "libra_chain_id": ChainId::test().id(),
-                "libra_ledger_timestampusec": timestamp,
-                "libra_ledger_version": version
+                "diem_chain_id": ChainId::test().id(),
+                "diem_ledger_timestampusec": timestamp,
+                "diem_ledger_version": version
             }),
         ),
         (
@@ -666,9 +726,9 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "id": 1,
                 "jsonrpc": "2.0",
-                "libra_chain_id": ChainId::test().id(),
-                "libra_ledger_timestampusec": timestamp,
-                "libra_ledger_version": version,
+                "diem_chain_id": ChainId::test().id(),
+                "diem_ledger_timestampusec": timestamp,
+                "diem_ledger_version": version,
                 "result": []
             }),
         ),
@@ -683,9 +743,9 @@ fn test_json_rpc_protocol_invalid_requests() {
                 },
                 "id": 1,
                 "jsonrpc": "2.0",
-                "libra_chain_id": ChainId::test().id(),
-                "libra_ledger_timestampusec": timestamp,
-                "libra_ledger_version": version
+                "diem_chain_id": ChainId::test().id(),
+                "diem_ledger_timestampusec": timestamp,
+                "diem_ledger_version": version
             }),
         ),
         (
@@ -699,9 +759,9 @@ fn test_json_rpc_protocol_invalid_requests() {
                 },
                 "id": 1,
                 "jsonrpc": "2.0",
-                "libra_chain_id": ChainId::test().id(),
-                "libra_ledger_timestampusec": timestamp,
-                "libra_ledger_version": version
+                "diem_chain_id": ChainId::test().id(),
+                "diem_ledger_timestampusec": timestamp,
+                "diem_ledger_version": version
             }),
         ),
         (
@@ -715,9 +775,9 @@ fn test_json_rpc_protocol_invalid_requests() {
                 },
                 "id": 1,
                 "jsonrpc": "2.0",
-                "libra_chain_id": ChainId::test().id(),
-                "libra_ledger_timestampusec": timestamp,
-                "libra_ledger_version": version
+                "diem_chain_id": ChainId::test().id(),
+                "diem_ledger_timestampusec": timestamp,
+                "diem_ledger_version": version
             }),
         ),
         (
@@ -731,9 +791,9 @@ fn test_json_rpc_protocol_invalid_requests() {
                 },
                 "id": 1,
                 "jsonrpc": "2.0",
-                "libra_chain_id": ChainId::test().id(),
-                "libra_ledger_timestampusec": timestamp,
-                "libra_ledger_version": version
+                "diem_chain_id": ChainId::test().id(),
+                "diem_ledger_timestampusec": timestamp,
+                "diem_ledger_version": version
             }),
         ),
         (
@@ -747,9 +807,9 @@ fn test_json_rpc_protocol_invalid_requests() {
                 },
                 "id": 1,
                 "jsonrpc": "2.0",
-                "libra_chain_id": ChainId::test().id(),
-                "libra_ledger_timestampusec": timestamp,
-                "libra_ledger_version": version
+                "diem_chain_id": ChainId::test().id(),
+                "diem_ledger_timestampusec": timestamp,
+                "diem_ledger_version": version
             }),
         ),
         (
@@ -763,9 +823,9 @@ fn test_json_rpc_protocol_invalid_requests() {
                 },
                 "id": 1,
                 "jsonrpc": "2.0",
-                "libra_chain_id": ChainId::test().id(),
-                "libra_ledger_timestampusec": timestamp,
-                "libra_ledger_version": version
+                "diem_chain_id": ChainId::test().id(),
+                "diem_ledger_timestampusec": timestamp,
+                "diem_ledger_version": version
             }),
         ),
         (
@@ -779,9 +839,9 @@ fn test_json_rpc_protocol_invalid_requests() {
                 },
                 "id": 1,
                 "jsonrpc": "2.0",
-                "libra_chain_id": ChainId::test().id(),
-                "libra_ledger_timestampusec": timestamp,
-                "libra_ledger_version": version
+                "diem_chain_id": ChainId::test().id(),
+                "diem_ledger_timestampusec": timestamp,
+                "diem_ledger_version": version
             }),
         ),
         (
@@ -795,9 +855,9 @@ fn test_json_rpc_protocol_invalid_requests() {
                 },
                 "id": 1,
                 "jsonrpc": "2.0",
-                "libra_chain_id": ChainId::test().id(),
-                "libra_ledger_timestampusec": timestamp,
-                "libra_ledger_version": version
+                "diem_chain_id": ChainId::test().id(),
+                "diem_ledger_timestampusec": timestamp,
+                "diem_ledger_version": version
             }),
         ),
         (
@@ -811,9 +871,9 @@ fn test_json_rpc_protocol_invalid_requests() {
                 },
                 "id": 1,
                 "jsonrpc": "2.0",
-                "libra_chain_id": ChainId::test().id(),
-                "libra_ledger_timestampusec": timestamp,
-                "libra_ledger_version": version
+                "diem_chain_id": ChainId::test().id(),
+                "diem_ledger_timestampusec": timestamp,
+                "diem_ledger_version": version
             }),
         ),
         (
@@ -827,9 +887,9 @@ fn test_json_rpc_protocol_invalid_requests() {
                 },
                 "id": 1,
                 "jsonrpc": "2.0",
-                "libra_chain_id": ChainId::test().id(),
-                "libra_ledger_timestampusec": timestamp,
-                "libra_ledger_version": version
+                "diem_chain_id": ChainId::test().id(),
+                "diem_ledger_timestampusec": timestamp,
+                "diem_ledger_version": version
             }),
         ),
         (
@@ -843,9 +903,9 @@ fn test_json_rpc_protocol_invalid_requests() {
                 },
                 "id": 1,
                 "jsonrpc": "2.0",
-                "libra_chain_id": ChainId::test().id(),
-                "libra_ledger_timestampusec": timestamp,
-                "libra_ledger_version": version
+                "diem_chain_id": ChainId::test().id(),
+                "diem_ledger_timestampusec": timestamp,
+                "diem_ledger_version": version
             }),
         ),
         (
@@ -854,17 +914,23 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "id": null,
                 "jsonrpc": "2.0",
-                "libra_chain_id": ChainId::test().id(),
-                "libra_ledger_timestampusec": timestamp,
-                "libra_ledger_version": version,
+                "diem_chain_id": ChainId::test().id(),
+                "diem_ledger_timestampusec": timestamp,
+                "diem_ledger_version": version,
                 "result": {
                     "chain_id": ChainId::test().id(),
                     "timestamp": timestamp,
                     "version": version,
                     "script_hash_allow_list": [],
                     "module_publishing_allowed": true,
+<<<<<<< HEAD
                     "libra_version": 1,
                     "accumulator_root_hash": "0000000000000000000000000000000000000000000000000000000000000000"
+=======
+                    "diem_version": 1,
+                    "accumulator_root_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+                    "dual_attestation_limit": 1000000000,
+>>>>>>> testnet
                 }
             }),
         ),
@@ -872,6 +938,27 @@ fn test_json_rpc_protocol_invalid_requests() {
     for (name, request, expected) in calls {
         let resp = client.post(&url).json(&request).send().unwrap();
         assert_eq!(resp.status(), 200);
+        let headers = resp.headers().clone();
+        assert_eq!(
+            headers.get("X-Diem-Chain-Id").unwrap().to_str().unwrap(),
+            "4"
+        );
+        assert_eq!(
+            headers
+                .get("X-Diem-Ledger-Version")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            version.to_string()
+        );
+        assert_eq!(
+            headers
+                .get("X-Diem-Ledger-TimestampUsec")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            timestamp.to_string()
+        );
 
         let resp_json: serde_json::Value = resp.json().unwrap();
         assert_eq!(expected, resp_json, "test: {}", name);
@@ -906,18 +993,18 @@ fn test_metrics() {
     let metrics = get_all_metrics();
     let expected_metrics = vec![
         // rpc request count
-        "libra_client_service_rpc_requests_count{type=single}",
-        "libra_client_service_rpc_requests_count{type=batch}",
+        "diem_client_service_rpc_requests_count{type=single}",
+        "diem_client_service_rpc_requests_count{type=batch}",
         // rpc request latency
-        "libra_client_service_rpc_request_latency_seconds{type=single}",
-        "libra_client_service_rpc_request_latency_seconds{type=batch}",
+        "diem_client_service_rpc_request_latency_seconds{type=single}",
+        "diem_client_service_rpc_request_latency_seconds{type=batch}",
         // method request count
-        "libra_client_service_requests_count{method=get_currencies,result=success,type=single}",
+        "diem_client_service_requests_count{method=get_currencies,result=success,type=single}",
         // method latency
-        "libra_client_service_method_latency_seconds{method=get_currencies,type=single}",
-        "libra_client_service_method_latency_seconds{method=get_currencies,type=batch}",
+        "diem_client_service_method_latency_seconds{method=get_currencies,type=single}",
+        "diem_client_service_method_latency_seconds{method=get_currencies,type=batch}",
         // invalid params
-        "libra_client_service_invalid_requests_count{errortype=invalid_params,method=get_currencies,type=single}",
+        "diem_client_service_invalid_requests_count{errortype=invalid_params,method=get_currencies,type=single}",
     ];
 
     for name in expected_metrics {
@@ -1002,7 +1089,7 @@ fn test_get_account() {
         .expect("account does not exist");
     let account_balances: Vec<_> = account.balances.iter().map(|bal| bal.amount).collect();
     let expected_resource_balances: Vec<_> = expected_resource
-        .get_balance_resources(&[from_currency_code_string(COIN1_NAME).unwrap()])
+        .get_balance_resources(&[from_currency_code_string(XUS_NAME).unwrap()])
         .unwrap()
         .iter()
         .map(|(_, bal_resource)| bal_resource.coin())
@@ -1042,7 +1129,7 @@ fn test_get_account() {
             .expect("account does not exist");
         let account_balances: Vec<_> = account.balances.iter().map(|bal| bal.amount).collect();
         let expected_resource_balances: Vec<_> = states[idx]
-            .get_balance_resources(&[from_currency_code_string(COIN1_NAME).unwrap()])
+            .get_balance_resources(&[from_currency_code_string(XUS_NAME).unwrap()])
             .unwrap()
             .iter()
             .map(|(_, bal_resource)| bal_resource.coin())
@@ -1187,7 +1274,7 @@ fn test_get_transactions() {
             let version = base_version + i as u64;
             assert_eq!(view.version, version);
             let (tx, status) = &mock_db.all_txns[version as usize];
-            assert_eq!(view.hash, tx.hash().to_hex());
+            assert_eq!(view.hash.0, tx.hash().to_hex());
 
             // Check we returned correct events
             let expected_events = mock_db
@@ -1214,7 +1301,7 @@ fn test_get_transactions() {
             match tx {
                 Transaction::BlockMetadata(t) => match view.transaction {
                     TransactionDataView::BlockMetadata { timestamp_usecs } => {
-                        assert_eq!(t.clone().into_inner().unwrap().1, timestamp_usecs);
+                        assert_eq!(t.clone().into_inner().1, timestamp_usecs);
                     }
                     _ => panic!("Returned value doesn't match!"),
                 },
@@ -1229,11 +1316,17 @@ fn test_get_transactions() {
                         chain_id,
                         ..
                     } => {
-                        assert_eq!(&t.sender().to_string(), sender);
+                        assert_eq!(
+                            t.sender().to_string().to_lowercase(),
+                            sender.clone().to_string()
+                        );
                         assert_eq!(&t.chain_id().id(), chain_id);
                         // TODO: verify every field
                         if let TransactionPayload::Script(s) = t.payload() {
-                            assert_eq!(script_hash, &HashValue::sha3_256_of(s.code()).to_hex());
+                            assert_eq!(
+                                script_hash.clone().to_string(),
+                                HashValue::sha3_256_of(s.code()).to_hex()
+                            );
                         }
                     }
                     _ => panic!("Returned value doesn't match!"),
@@ -1264,7 +1357,7 @@ fn test_get_account_transaction() {
                 .find_map(|(t, status)| {
                     if let Ok(x) = t.as_signed_user_txn() {
                         if x.sender() == *acc && x.sequence_number() == seq {
-                            assert_eq!(tx_view.hash, t.hash().to_hex());
+                            assert_eq!(tx_view.hash.clone().to_string(), t.hash().to_hex());
                             return Some((x, status));
                         }
                     }
@@ -1306,11 +1399,14 @@ fn test_get_account_transaction() {
                     script_hash,
                     ..
                 } => {
-                    assert_eq!(acc.to_string(), sender);
+                    assert_eq!(acc.to_string().to_lowercase(), sender.to_string());
                     assert_eq!(seq, sequence_number);
 
                     if let TransactionPayload::Script(s) = expected_tx.payload() {
-                        assert_eq!(script_hash, HashValue::sha3_256_of(s.code()).to_hex());
+                        assert_eq!(
+                            script_hash.to_string(),
+                            HashValue::sha3_256_of(s.code()).to_hex()
+                        );
                     }
                 }
                 _ => panic!("wrong type"),
@@ -1374,11 +1470,11 @@ fn test_get_account_state_with_proof() {
 
     // blob
     let account_blob: AccountStateBlob =
-        lcs::from_bytes(&received_proof.blob.unwrap().into_bytes().unwrap()).unwrap();
+        bcs::from_bytes(&received_proof.blob.unwrap().into_bytes().unwrap()).unwrap();
     assert_eq!(account_blob, *expected_blob);
 
     // proof
-    let sm_proof: SparseMerkleProof = lcs::from_bytes(
+    let sm_proof: SparseMerkleProof = bcs::from_bytes(
         &received_proof
             .proof
             .transaction_info_to_account_proof
@@ -1388,8 +1484,8 @@ fn test_get_account_state_with_proof() {
     .unwrap();
     assert_eq!(sm_proof, *expected_sm_proof);
     let txn_info: TransactionInfo =
-        lcs::from_bytes(&received_proof.proof.transaction_info.into_bytes().unwrap()).unwrap();
-    let li_proof: TransactionAccumulatorProof = lcs::from_bytes(
+        bcs::from_bytes(&received_proof.proof.transaction_info.into_bytes().unwrap()).unwrap();
+    let li_proof: TransactionAccumulatorProof = bcs::from_bytes(
         &received_proof
             .proof
             .ledger_info_to_transaction_info_proof
@@ -1411,7 +1507,7 @@ fn test_get_state_proof() {
     let result = execute_batch_and_get_first_response(&client, &mut runtime, batch);
     let proof = StateProofView::from_response(result).unwrap();
     let li: LedgerInfoWithSignatures =
-        lcs::from_bytes(&proof.ledger_info_with_signatures.into_bytes().unwrap()).unwrap();
+        bcs::from_bytes(&proof.ledger_info_with_signatures.into_bytes().unwrap()).unwrap();
     assert_eq!(li.ledger_info().version(), version);
 }
 
@@ -1432,9 +1528,9 @@ fn test_get_network_status() {
     }
 }
 
-/// Creates and returns a MockLibraDB, JsonRpcAsyncClient and corresponding server Runtime tuple for
+/// Creates and returns a MockDiemDB, JsonRpcAsyncClient and corresponding server Runtime tuple for
 /// testing. The given channel_buffer specifies the buffer size of the mempool client sender channel.
-fn create_database_client_and_runtime() -> (MockLibraDB, JsonRpcAsyncClient, Runtime) {
+fn create_database_client_and_runtime() -> (MockDiemDB, JsonRpcAsyncClient, Runtime) {
     let (mock_db, runtime, url, _) = create_db_and_runtime();
     let client =
         JsonRpcAsyncClient::new(reqwest::Url::from_str(url.as_str()).expect("invalid url"));
@@ -1443,7 +1539,7 @@ fn create_database_client_and_runtime() -> (MockLibraDB, JsonRpcAsyncClient, Run
 }
 
 fn create_db_and_runtime() -> (
-    MockLibraDB,
+    MockDiemDB,
     Runtime,
     String,
     Receiver<(
@@ -1467,7 +1563,7 @@ fn create_db_and_runtime() -> (
 }
 
 /// Returns the first account address stored in the given mock database.
-fn get_first_account_from_mock_db(mock_db: &MockLibraDB) -> AccountAddress {
+fn get_first_account_from_mock_db(mock_db: &MockDiemDB) -> AccountAddress {
     *mock_db
         .all_accounts
         .keys()
@@ -1476,7 +1572,7 @@ fn get_first_account_from_mock_db(mock_db: &MockLibraDB) -> AccountAddress {
 }
 
 /// Returns the first account_state_with_proof stored in the given mock database.
-fn get_first_state_proof_from_mock_db(mock_db: &MockLibraDB) -> AccountStateWithProof {
+fn get_first_state_proof_from_mock_db(mock_db: &MockDiemDB) -> AccountStateWithProof {
     mock_db
         .account_state_with_proof
         .get(0)

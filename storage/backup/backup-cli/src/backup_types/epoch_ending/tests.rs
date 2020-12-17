@@ -1,4 +1,4 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{
@@ -9,13 +9,19 @@ use crate::{
     storage::{local_fs::LocalFs, BackupStorage},
     utils::{
         backup_service_client::BackupServiceClient, test_utils::tmp_db_with_random_content,
-        GlobalBackupOpt, GlobalRestoreOpt,
+        GlobalBackupOpt, GlobalRestoreOpt, RocksdbOpt,
     },
 };
 use backup_service::start_backup_service;
+<<<<<<< HEAD
 use libra_config::{config::RocksdbConfig, utils::get_available_port};
 use libra_temppath::TempPath;
 use libradb::LibraDB;
+=======
+use diem_config::{config::RocksdbConfig, utils::get_available_port};
+use diem_temppath::TempPath;
+use diemdb::DiemDB;
+>>>>>>> testnet
 use std::{
     convert::TryInto,
     net::{IpAddr, Ipv4Addr, SocketAddr},
@@ -70,13 +76,13 @@ fn end_to_end() {
                 db_dir: Some(tgt_db_dir.path().to_path_buf()),
                 dry_run: false,
                 target_version: Some(target_version),
+                rocksdb_opt: RocksdbOpt::default(),
             }
             .try_into()
             .unwrap(),
             store,
-            None,
         )
-        .run(),
+        .run(None),
     )
     .unwrap();
 
@@ -90,7 +96,7 @@ fn end_to_end() {
         .map(|li| li.ledger_info().next_block_epoch())
         .unwrap_or(0);
 
-    let tgt_db = LibraDB::open(
+    let tgt_db = DiemDB::open(
         &tgt_db_dir,
         true, /* read_only */
         None, /* pruner */

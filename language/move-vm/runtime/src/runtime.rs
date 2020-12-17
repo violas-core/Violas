@@ -1,4 +1,4 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{
@@ -8,8 +8,8 @@ use crate::{
     logging::LogContext,
     session::Session,
 };
-use libra_logger::prelude::*;
-use libra_types::account_config::addresses::*;
+use diem_logger::prelude::*;
+use diem_types::account_config::diem_root_address;
 use move_core_types::{
     account_address::AccountAddress,
     identifier::IdentStr,
@@ -66,7 +66,7 @@ impl VMRuntime {
         // where the module will actually be published. If we did not check this, the sender could
         // publish a module under anyone's account.
 
-        if compiled_module.address() != &sender && sender != libra_root_address() {
+        if compiled_module.address() != &sender && sender != diem_root_address() {
             return Err(verification_error(
                 StatusCode::MODULE_ADDRESS_DOES_NOT_MATCH_SENDER,
                 IndexKind::AddressIdentifier,

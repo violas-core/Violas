@@ -1,4 +1,4 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
 //! Processes that are directly spawned by shared mempool runtime initialization
@@ -17,17 +17,17 @@ use crate::{
 use ::network::protocols::network::Event;
 use anyhow::Result;
 use bounded_executor::BoundedExecutor;
-use channel::libra_channel;
+use channel::diem_channel;
+use diem_config::{config::PeerNetworkId, network_id::NodeNetworkId};
+use diem_infallible::Mutex;
+use diem_logger::prelude::*;
+use diem_trace::prelude::*;
+use diem_types::{on_chain_config::OnChainConfigPayload, transaction::SignedTransaction};
 use futures::{
     channel::{mpsc, oneshot},
     stream::{select_all, FuturesUnordered},
     StreamExt,
 };
-use libra_config::{config::PeerNetworkId, network_id::NodeNetworkId};
-use libra_infallible::Mutex;
-use libra_logger::prelude::*;
-use libra_trace::prelude::*;
-use libra_types::{on_chain_config::OnChainConfigPayload, transaction::SignedTransaction};
 use std::{
     ops::Deref,
     sync::Arc,
@@ -47,7 +47,7 @@ pub(crate) async fn coordinator<V>(
     )>,
     mut consensus_requests: mpsc::Receiver<ConsensusRequest>,
     mut state_sync_requests: mpsc::Receiver<CommitNotification>,
-    mut mempool_reconfig_events: libra_channel::Receiver<(), OnChainConfigPayload>,
+    mut mempool_reconfig_events: diem_channel::Receiver<(), OnChainConfigPayload>,
 ) where
     V: TransactionValidation,
 {
@@ -71,8 +71,9 @@ pub(crate) async fn coordinator<V>(
     let bounded_executor = BoundedExecutor::new(workers_available, executor.clone());
 
     loop {
+        let _timer = counters::MAIN_LOOP.start_timer();
         ::futures::select! {
-            (mut msg, callback) = client_events.select_next_some() => {
+            (msg, callback) = client_events.select_next_some() => {
                 trace_event!("mempool::client_event", {"txn", msg.sender(), msg.sequence_number()});
                 // this timer measures how long it took for the bounded executor to *schedule* the
                 // task
@@ -181,7 +182,7 @@ pub(crate) async fn coordinator<V>(
                             }
                         }
                     }
-                    Event::RpcRequest(peer_id, msg, res_tx) => {
+                    Event::RpcRequest(peer_id, _msg, _res_tx) => {
                         counters::UNEXPECTED_NETWORK_MSG_COUNT
                             .with_label_values(&[&network_id.network_id().to_string(), &peer_id.to_string()])
                             .inc();

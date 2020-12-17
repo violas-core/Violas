@@ -1,4 +1,4 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{
@@ -355,12 +355,12 @@ impl Exp {
 
 impl UnannotatedExp_ {
     pub fn is_unit(&self) -> bool {
-        match self {
+        matches!(
+            self,
             UnannotatedExp_::Unit {
                 trailing: _trailing,
-            } => true,
-            _ => false,
-        }
+            }
+        )
     }
 }
 

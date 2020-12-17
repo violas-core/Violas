@@ -13,7 +13,7 @@ jobs:
     runs-on: self-hosted
     # NOTE the total time should cover build (~10 min) and test (~20 min).
     # The additional time can cover the retries and wait.
-    timeout-minutes: 50
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v1
       - name: Get PR number
@@ -79,15 +79,12 @@ jobs:
           fi;
       - name: Determine which cluster-test suite to run
         if: steps.check_ks.outputs.should_run == 'true'
-        # Runs land_blocking if KS activated or [breaking] in commit message heading.
-        # Runs land_blocking_compat otherwise. Compat needs to find an image with PREV_TAG
-        # to test against, otherwise will create one from BASE_GIT_REV in the next step,
-        # flagged by setting BUILD_PREV
+        # Runs land_blocking if KILL_SWITCH_LAND_BLOCKING_COMPAT activated.
+        # Runs land_blocking_compat otherwise.
+        # Compat needs to find an image with PREV_TAG to test against, otherwise will
+        # create one from BASE_GIT_REV in the next step, flagged by setting BUILD_PREV
         run: |
           set +e
-          commit_message=$(git log --pretty=oneline $BASE_GIT_REV..$HEAD_GIT_REV)
-          echo $commit_message | grep '\[breaking\]'
-          ret=$?
           if ${{ secrets.KILL_SWITCH_LAND_BLOCKING_COMPAT }}; then
             echo "Compat killswitch activated! Will run land_blocking suite"
             echo "TEST_COMPAT=0" >> $GITHUB_ENV
@@ -271,7 +268,7 @@ jobs:
                 body = "Cluster Test runner failed.";
                 console.error(err);
               }
-              body += " See https://github.com/libra/libra/actions/runs/${{github.run_id}}";
+              body += " See https://github.com/diem/diem/actions/runs/${{github.run_id}}";
               // Post comment on PR then fail this workflow
               should_fail = true;
             }

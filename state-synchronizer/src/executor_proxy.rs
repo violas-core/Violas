@@ -1,4 +1,4 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{
@@ -7,10 +7,8 @@ use crate::{
     SynchronizerState,
 };
 use anyhow::{format_err, Result};
-use executor_types::{ChunkExecutor, ExecutedTrees};
-use itertools::Itertools;
-use libra_logger::prelude::*;
-use libra_types::{
+use diem_logger::prelude::*;
+use diem_types::{
     account_state::AccountState,
     contract_event::ContractEvent,
     ledger_info::LedgerInfoWithSignatures,
@@ -18,6 +16,8 @@ use libra_types::{
     on_chain_config::{config_address, OnChainConfigPayload, ON_CHAIN_CONFIG_REGISTRY},
     transaction::TransactionListWithProof,
 };
+use executor_types::{ChunkExecutor, ExecutedTrees};
+use itertools::Itertools;
 use std::{collections::HashSet, convert::TryFrom, sync::Arc};
 use storage_interface::DbReader;
 use subscription_service::ReconfigSubscription;
@@ -49,10 +49,13 @@ pub trait ExecutorProxyTrait: Send {
     /// Get ledger info at an epoch boundary version.
     fn get_epoch_ending_ledger_info(&self, version: u64) -> Result<LedgerInfoWithSignatures>;
 
+    /// Returns the ledger's timestamp for the given version in microseconds
+    fn get_version_timestamp(&self, version: u64) -> Result<u64>;
+
     /// Load all on-chain configs from storage
     /// Note: this method is being exposed as executor proxy trait temporarily because storage read is currently
     /// using the tonic storage read client, which needs the tokio runtime to block on with no runtime/async issues
-    /// Once we make storage reads sync (by replacing the storage read client with direct LibraDB),
+    /// Once we make storage reads sync (by replacing the storage read client with direct DiemDB),
     /// we can make this entirely internal to `ExecutorProxy`'s initialization procedure
     fn load_on_chain_configs(&mut self) -> Result<()>;
 
@@ -193,6 +196,10 @@ impl ExecutorProxyTrait for ExecutorProxy {
 
     fn get_epoch_ending_ledger_info(&self, version: u64) -> Result<LedgerInfoWithSignatures> {
         self.storage.get_epoch_ending_ledger_info(version)
+    }
+
+    fn get_version_timestamp(&self, version: u64) -> Result<u64> {
+        self.storage.get_block_timestamp(version)
     }
 
     fn load_on_chain_configs(&mut self) -> Result<()> {

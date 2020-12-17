@@ -6,7 +6,7 @@ address 0x1 {
 
 module VASP {
     use 0x1::Errors;
-    use 0x1::LibraTimestamp;
+    use 0x1::DiemTimestamp;
     use 0x1::Signer;
     use 0x1::Roles;
     use 0x1::AccountLimits;
@@ -40,10 +40,10 @@ module VASP {
     ///////////////////////////////////////////////////////////////////////////
 
     /// Create a new `ParentVASP` resource under `vasp`
-    /// Aborts if `lr_account` is not the libra root account,
+    /// Aborts if `dr_account` is not the diem root account,
     /// or if there is already a VASP (child or parent) at this account.
     public fun publish_parent_vasp_credential(vasp: &signer, tc_account: &signer) {
-        LibraTimestamp::assert_operating();
+        DiemTimestamp::assert_operating();
         Roles::assert_treasury_compliance(tc_account);
         Roles::assert_parent_vasp_role(vasp);
         let vasp_addr = Signer::address_of(vasp);
@@ -52,7 +52,7 @@ module VASP {
     }
 
     spec fun publish_parent_vasp_credential {
-        include LibraTimestamp::AbortsIfNotOperating;
+        include DiemTimestamp::AbortsIfNotOperating;
         include Roles::AbortsIfNotTreasuryCompliance{account: tc_account};
         include Roles::AbortsIfNotParentVasp{account: vasp};
         let vasp_addr = Signer::spec_address_of(vasp);
@@ -73,6 +73,7 @@ module VASP {
         child: &signer,
     ) acquires ParentVASP {
         Roles::assert_parent_vasp_role(parent);
+        Roles::assert_child_vasp_role(child);
         let child_vasp_addr = Signer::address_of(child);
         assert(!is_vasp(child_vasp_addr), Errors::already_published(EPARENT_OR_CHILD_VASP));
         let parent_vasp_addr = Signer::address_of(parent);
@@ -85,7 +86,10 @@ module VASP {
     }
     spec fun publish_child_vasp_credential {
         let child_addr = Signer::spec_address_of(child);
-        include PublishChildVASPAbortsIf{child_addr: child_addr};
+        include PublishChildVASPAbortsIf{child_addr};
+        // NB: This aborts condition is separated out so that `PublishChildVASPAbortsIf` can be used in
+        //     `DiemAccount::create_child_vasp_account` since this doesn't hold of the new account in the pre-state.
+        include Roles::AbortsIfNotChildVasp{account: child_addr};
         include PublishChildVASPEnsures{parent_addr: Signer::spec_address_of(parent), child_addr: child_addr};
     }
 
@@ -197,7 +201,8 @@ module VASP {
     }
 
 
-    /// Return the number of child accounts for this VASP.
+    /// If `addr` is the address of a `ParentVASP`, return the number of children.
+    /// If it is the address of a ChildVASP, return the number of children of the parent.
     /// The total number of accounts for this VASP is num_children() + 1
     /// Aborts if `addr` is not a ParentVASP or ChildVASP account
     public fun num_children(addr: address): u64  acquires ChildVASP, ParentVASP {
@@ -215,6 +220,15 @@ module VASP {
     // **************** SPECIFICATIONS ****************
     spec module {} // switch documentation context back to module level
 
+    /// # Persistence of parent and child VASPs
+    spec module {
+        invariant update [global] forall addr: address where old(is_parent(addr)):
+            is_parent(addr);
+
+        invariant update [global] forall addr: address where old(is_child(addr)):
+            is_child(addr);
+    }
+
     /// # Existence of Parents
     spec module {
         invariant [global]
@@ -222,11 +236,10 @@ module VASP {
                 is_parent(global<ChildVASP>(child_addr).parent_vasp_addr);
     }
 
-
     /// # Creation of Child VASPs
 
     spec module {
-        /// Only a parent VASP calling `Self::publish_child_vast_credential` can create
+        /// Only a parent VASP calling `Self::publish_child_vasp_credential` can create
         /// child VASPs.
         apply ChildVASPsDontChange to *<T>, * except publish_child_vasp_credential;
 

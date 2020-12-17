@@ -1,10 +1,10 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
 #![forbid(unsafe_code)]
 
 use compiled_stdlib::{transaction_scripts::StdlibScript, StdLibOptions};
-use libra_types::{
+use diem_types::{
     access_path::AccessPath,
     block_metadata::BlockMetadata,
     transaction::{ChangeSet, Transaction},
@@ -27,7 +27,7 @@ pub fn encode_stdlib_upgrade_transaction(option: StdLibOptions) -> ChangeSet {
             .serialize(&mut bytes)
             .expect("Failed to serialize module");
         write_set.push((
-            AccessPath::code_access_path(&module.self_id()),
+            AccessPath::code_access_path(module.self_id()),
             WriteOp::Value(bytes),
         ));
     }

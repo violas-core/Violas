@@ -5,8 +5,8 @@ module VLS {
     use 0x1::CoreAddresses;
     use 0x1::Errors;
     use 0x1::FixedPoint32::{Self, FixedPoint32};
-    use 0x1::Libra::{Self, Libra};    
-    use 0x1::LibraTimestamp;    
+    use 0x1::Diem::{Self, Diem};    
+    use 0x1::DiemTimestamp;    
     use 0x1::Vector;
     
     /// The type tag representing the `VLS` currency on-chain.
@@ -15,13 +15,13 @@ module VLS {
     /// VLS holds mint capability for mining
     resource struct Reserve {
         /// The mint capability allowing minting of `VLS` coins.
-        mint_cap: Libra::MintCapability<VLS>,
+        mint_cap: Diem::MintCapability<VLS>,
         /// The burn capability for `VLS` coins. This is used for the unpacking
         /// of `VLS` coins into the underlying backing currencies.
-        burn_cap: Libra::BurnCapability<VLS>,
+        burn_cap: Diem::BurnCapability<VLS>,
         /// The preburn for `VLS`. This is an administrative field since we
         /// need to alway preburn before we burn.
-        preburn_cap: Libra::Preburn<VLS>,
+        preburn_cap: Diem::Preburn<VLS>,
         /// Initial timestamp
         initial_timestamp: u64,        
     }
@@ -45,7 +45,7 @@ module VLS {
 
     /// The address of Violas association account 
     public fun VIOLAS_ASSOCIATION_ADDRESS(): address {
-        0xDD02
+        0x564C5302  //'V' 'L' 'S' 02
     }
 
     /// Initializes the `VLS` module. 
@@ -54,15 +54,15 @@ module VLS {
         lr_account: &signer,
         tc_account: &signer,
     ) {
-        LibraTimestamp::assert_genesis();
+        DiemTimestamp::assert_genesis();
 
         // Operational constraint
         CoreAddresses::assert_currency_info(lr_account);
 
         // Reserve must not exist.
-        assert(!exists<Reserve>(CoreAddresses::LIBRA_ROOT_ADDRESS()), Errors::already_published(E_RESERVE_HAS_BEEN_INITIALIZED));
+        assert(!exists<Reserve>(CoreAddresses::DIEM_ROOT_ADDRESS()), Errors::already_published(E_RESERVE_HAS_BEEN_INITIALIZED));
 
-        let (mint_cap, burn_cap) = Libra::register_currency<VLS>(
+        let (mint_cap, burn_cap) = Diem::register_currency<VLS>(
             lr_account,
             FixedPoint32::create_from_rational(1, 1), // exchange rate to VLS
             false,    // is_synthetic
@@ -72,26 +72,26 @@ module VLS {
         );
 
         AccountLimits::publish_unrestricted_limits<VLS>(lr_account);
-        let preburn_cap = Libra::create_preburn<VLS>(tc_account);
+        let preburn_cap = Diem::create_preburn<VLS>(tc_account);
         
         move_to(lr_account, Reserve { mint_cap, burn_cap, preburn_cap, initial_timestamp: 0 });
     }
 
     public fun initialize_timestamp() 
     acquires Reserve {
-        LibraTimestamp::assert_operating();
+        DiemTimestamp::assert_operating();
 
-        let reserve = borrow_global_mut<Reserve>(CoreAddresses::LIBRA_ROOT_ADDRESS());
+        let reserve = borrow_global_mut<Reserve>(CoreAddresses::DIEM_ROOT_ADDRESS());
         
         assert(reserve.initial_timestamp == 0, Errors::already_published(E_INITIAL_TIMESTAMP_HAS_BEEN_INITIALIED));
 
-        reserve.initial_timestamp = LibraTimestamp::now_seconds();               
+        reserve.initial_timestamp = DiemTimestamp::now_seconds();               
     }
 
     /// Returns true if `CoinType` is `VLS::VLS`
     public fun is_vls<CoinType>(): bool {
-        Libra::is_currency<CoinType>() &&
-            Libra::currency_code<CoinType>() == Libra::currency_code<VLS>()
+        Diem::is_currency<CoinType>() &&
+            Diem::currency_code<CoinType>() == Diem::currency_code<VLS>()
     }
 
     spec fun is_vls {
@@ -108,47 +108,47 @@ module VLS {
     /// * If `amount_vls` is zero the function will abort.
     fun mint(
         amount_vls: u64,
-    ): Libra<VLS>
+    ): Diem<VLS>
     acquires Reserve {              
 
         assert(amount_vls > 0, Errors::invalid_argument(EMINTING_ZERO_VLS_IS_NOT_ALLOWED));
         
-        let reserve = borrow_global_mut<Reserve>(CoreAddresses::LIBRA_ROOT_ADDRESS());              
+        let reserve = borrow_global_mut<Reserve>(CoreAddresses::DIEM_ROOT_ADDRESS());              
                 
         // Once the coins have been deposited in the reserve, we can mint the VLS
-        Libra::mint_with_capability<VLS>(amount_vls, &reserve.mint_cap)
+        Diem::mint_with_capability<VLS>(amount_vls, &reserve.mint_cap)
     }
 
     spec fun mint {
         pragma opaque;
-        modifies global<Reserve>(CoreAddresses::LIBRA_ROOT_ADDRESS());
-        modifies global<Libra::CurrencyInfo<VLS>>(CoreAddresses::CURRENCY_INFO_ADDRESS());
+        modifies global<Reserve>(CoreAddresses::DIEM_ROOT_ADDRESS());
+        modifies global<Diem::CurrencyInfo<VLS>>(CoreAddresses::CURRENCY_INFO_ADDRESS());
         include CreateAbortsIf;
-        let reserve = global<Reserve>(CoreAddresses::LIBRA_ROOT_ADDRESS());
+        let reserve = global<Reserve>(CoreAddresses::DIEM_ROOT_ADDRESS());
                 
-        ensures exists<Reserve>(CoreAddresses::LIBRA_ROOT_ADDRESS());
-        include Libra::MintEnsures<VLS>{value: amount_vls};
+        ensures exists<Reserve>(CoreAddresses::DIEM_ROOT_ADDRESS());
+        include Diem::MintEnsures<VLS>{value: amount_vls};
     }
 
     spec schema CreateAbortsIf {
         amount_vls: u64;
         
-        let reserve = global<Reserve>(CoreAddresses::LIBRA_ROOT_ADDRESS());
+        let reserve = global<Reserve>(CoreAddresses::DIEM_ROOT_ADDRESS());
         aborts_if amount_vls == 0 with Errors::INVALID_ARGUMENT;
         
-        include LibraTimestamp::AbortsIfNotOperating;
+        include DiemTimestamp::AbortsIfNotOperating;
         
-        include Libra::MintAbortsIf<VLS>{value: amount_vls};        
+        include Diem::MintAbortsIf<VLS>{value: amount_vls};        
     }
 
     /// mine VLS, total amount 100,000,000    
-    public fun mine() : Libra<VLS>
+    public fun mine() : Diem<VLS>
     acquires Reserve {                
-        let reserve = borrow_global<Reserve>(CoreAddresses::LIBRA_ROOT_ADDRESS());
+        let reserve = borrow_global<Reserve>(CoreAddresses::DIEM_ROOT_ADDRESS());
         let initial_timestamp = reserve.initial_timestamp;
         assert(initial_timestamp != 0, Errors::invalid_argument(E_INITIAL_TIMESTAMP_HAS_NOT_BEEN_INITIALIED));
                 
-        let now_minutes = (LibraTimestamp::now_seconds() - initial_timestamp) / 60;
+        let now_minutes = (DiemTimestamp::now_seconds() - initial_timestamp) / 60;
         let step = now_minutes / MINING_PERIOD;        
         let process = now_minutes % MINING_PERIOD;
         let mining_capacity = MINING_CAPACITY_PER_MINUTE;
@@ -170,7 +170,7 @@ module VLS {
         if (expected_amount > VLS_TOTAL_AMOUNT)
             expected_amount = VLS_TOTAL_AMOUNT;
 
-        let minted_amount : u64 = (Libra::market_cap<VLS>() as u64);
+        let minted_amount : u64 = (Diem::market_cap<VLS>() as u64);
 
         assert(minted_amount < VLS_TOTAL_AMOUNT,  Errors::invalid_argument(E_THE_AMOUNT_OF_VLS_HAS_REACHED_MAXIMIUM));
 
@@ -183,11 +183,11 @@ module VLS {
     public fun get_receivers() : vector<Receiver> {    
         let receivers = Vector::empty<Receiver>();
 
-        let element1 = Receiver { addr: 0xDD01, ratio: FixedPoint32::create_from_rational(71,100) };   //VLS-COMM
-        let element2 = Receiver { addr: VIOLAS_ASSOCIATION_ADDRESS(), ratio: FixedPoint32::create_from_rational(15,100) };   //VLS-ASSOCA
-        let element3 = Receiver { addr: 0xDD03, ratio: FixedPoint32::create_from_rational(12,100) };   //VLS-TEAM
-        let element4 = Receiver { addr: 0xDD04, ratio: FixedPoint32::create_from_rational(1,100)  };   //VLS-ADVS
-        let element5 = Receiver { addr: 0xDD05, ratio: FixedPoint32::create_from_rational(1,100)  };   //VLS-OPEN
+        let element1 = Receiver { addr: 0x564C5301, ratio: FixedPoint32::create_from_rational(71,100) };   //VLS-COMM, 'V' 'L' 'S' 01
+        let element2 = Receiver { addr: VIOLAS_ASSOCIATION_ADDRESS(), ratio: FixedPoint32::create_from_rational(15,100) };   //VLS-ASSOCA, 'V' 'L' 'S' 02
+        let element3 = Receiver { addr: 0x564C5303, ratio: FixedPoint32::create_from_rational(12,100) };   //VLS-TEAM, 'V' 'L' 'S' 03
+        let element4 = Receiver { addr: 0x564C5304, ratio: FixedPoint32::create_from_rational(1,100)  };   //VLS-ADVS, 'V' 'L' 'S' 04
+        let element5 = Receiver { addr: 0x564C5305, ratio: FixedPoint32::create_from_rational(1,100)  };   //VLS-OPEN, 'V' 'L' 'S' 05
 
         Vector::push_back(&mut receivers, element1);
         Vector::push_back(&mut receivers, element2);

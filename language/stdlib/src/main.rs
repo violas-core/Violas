@@ -1,4 +1,4 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
 #![forbid(unsafe_code)]
@@ -21,7 +21,7 @@ use vm::{normalized::Module, CompiledModule};
 fn main() {
     let cli = App::new("stdlib")
         .name("Move standard library")
-        .author("The Libra Core Contributors")
+        .author("The Diem Core Contributors")
         .arg(
             Arg::with_name("no-doc")
                 .long("no-doc")
@@ -35,7 +35,7 @@ fn main() {
         )
         .arg(
             Arg::with_name("no-script-builder")
-                .long("no-script-builer")
+                .long("no-script-builder")
                 .help("do not generate script builders"),
         )
         .arg(
@@ -45,8 +45,13 @@ fn main() {
         )
         .arg(
             Arg::with_name("no-check-linking-layout-compatibility")
-                .long("no-check-linking-layout-compatiblity")
+                .long("no-check-linking-layout-compatibility")
                 .help("do not print information about linking and layout compatibility between the old and new standard library"),
+        )
+        .arg(
+            Arg::with_name("with-diagram")
+                .long("with-diagram")
+                .help("include diagrams in the stdlib documentation")
         );
     let matches = cli.get_matches();
     let no_doc = matches.is_present("no-doc");
@@ -55,6 +60,7 @@ fn main() {
     let no_compiler = matches.is_present("no-compiler");
     let no_check_linking_layout_compatibility =
         matches.is_present("no-check-liking-layout-compatibility");
+    let with_diagram = matches.is_present("with-diagram");
 
     // Make sure that the current directory is `language/stdlib` from now on.
     let exec_path = std::env::args().next().expect("path of the executable");
@@ -76,7 +82,7 @@ fn main() {
             || {
                 let mut module_path = PathBuf::from(COMPILED_OUTPUT_PATH);
                 module_path.push(COMPILED_STDLIB_DIR);
-                for f in datatest_stable::utils::iterate_directory(&module_path) {
+                for f in stdlib::utils::iterate_directory(&module_path) {
                     let mut bytes = Vec::new();
                     File::open(f)
                         .expect("Failed to open module bytecode file")
@@ -137,8 +143,7 @@ fn main() {
         );
     }
 
-    let txn_source_files =
-        datatest_stable::utils::iterate_directory(Path::new(TRANSACTION_SCRIPTS));
+    let txn_source_files = stdlib::utils::iterate_directory(Path::new(TRANSACTION_SCRIPTS));
     let transaction_files = filter_move_files(txn_source_files)
         .flat_map(|path| path.into_os_string().into_string().ok())
         .collect::<Vec<_>>();
@@ -162,12 +167,12 @@ fn main() {
         time_it("Generating stdlib documentation", || {
             std::fs::remove_dir_all(&STD_LIB_DOC_DIR).unwrap_or(());
             std::fs::create_dir_all(&STD_LIB_DOC_DIR).unwrap();
-            build_stdlib_doc();
+            build_stdlib_doc(with_diagram);
         });
         time_it("Generating script documentation", || {
             std::fs::remove_dir_all(&TRANSACTION_SCRIPTS_DOC_DIR).unwrap_or(());
             std::fs::create_dir_all(&TRANSACTION_SCRIPTS_DOC_DIR).unwrap();
-            build_transaction_script_doc(&transaction_files);
+            build_transaction_script_doc(&transaction_files, with_diagram);
         });
     }
 
