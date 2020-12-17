@@ -1,10 +1,10 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use libra_global_constants::OWNER_ACCOUNT;
-use libra_management::{constants, error::Error, secure_backend::SharedBackend};
-use libra_network_address::NetworkAddress;
-use libra_types::transaction::Transaction;
+use diem_global_constants::OWNER_ACCOUNT;
+use diem_management::{constants, error::Error, secure_backend::SharedBackend};
+use diem_network_address::NetworkAddress;
+use diem_types::transaction::Transaction;
 use structopt::StructOpt;
 
 #[derive(Debug, StructOpt)]
@@ -12,13 +12,15 @@ pub struct ValidatorConfig {
     #[structopt(long)]
     owner_name: String,
     #[structopt(flatten)]
-    validator_config: libra_management::validator_config::ValidatorConfig,
+    validator_config: diem_management::validator_config::ValidatorConfig,
     #[structopt(long)]
     validator_address: NetworkAddress,
     #[structopt(long)]
     fullnode_address: NetworkAddress,
     #[structopt(flatten)]
     shared_backend: SharedBackend,
+    #[structopt(long, help = "Disables network address validation")]
+    disable_address_validation: bool,
 }
 
 impl ValidatorConfig {
@@ -30,7 +32,7 @@ impl ValidatorConfig {
 
         // Retrieve and set owner account
         let owner_account =
-            libra_config::utils::validator_owner_account_from_name(self.owner_name.as_bytes());
+            diem_config::utils::validator_owner_account_from_name(self.owner_name.as_bytes());
         let mut validator_storage = config.validator_backend();
         validator_storage.set(OWNER_ACCOUNT, owner_account)?;
 
@@ -39,6 +41,7 @@ impl ValidatorConfig {
             self.fullnode_address,
             self.validator_address,
             false,
+            self.disable_address_validation,
         )?;
 
         // Upload the validator config to shared storage

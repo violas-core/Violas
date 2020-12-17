@@ -1,4 +1,4 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
@@ -6,8 +6,8 @@ use crate::test_helpers::{
     arb_hash_batch, arb_list_of_hash_batches, test_append_empty_impl, test_append_many_impl,
     MockHashStore, TestAccumulator,
 };
-use libra_crypto::hash::ACCUMULATOR_PLACEHOLDER_HASH;
-use libra_types::proof::definition::LeafCount;
+use diem_crypto::hash::ACCUMULATOR_PLACEHOLDER_HASH;
+use diem_types::proof::definition::LeafCount;
 
 #[test]
 fn test_append_empty_on_empty() {
@@ -24,7 +24,7 @@ fn test_append_one() {
     store.verify(&[]).unwrap();
 
     let mut leaves = Vec::new();
-    for _ in 0..100 {
+    for v in 0..100 {
         let hash = HashValue::random();
         let (root_hash, writes) =
             TestAccumulator::append(&store, leaves.len() as LeafCount, &[hash]).unwrap();
@@ -33,7 +33,11 @@ fn test_append_one() {
         leaves.push(hash);
         let expected_root_hash = store.verify(&leaves).unwrap();
 
-        assert_eq!(root_hash, expected_root_hash)
+        assert_eq!(root_hash, expected_root_hash);
+        assert_eq!(
+            TestAccumulator::get_root_hash(&store, v + 1).unwrap(),
+            expected_root_hash
+        );
     }
 }
 

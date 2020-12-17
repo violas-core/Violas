@@ -1,13 +1,13 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
 #![forbid(unsafe_code)]
 
-//! Test infrastructure for the Libra VM.
+//! Test infrastructure for the Diem VM.
 //!
-//! This crate contains helpers for executing tests against the Libra VM.
+//! This crate contains helpers for executing tests against the Diem VM.
 
-use libra_types::{transaction::TransactionStatus, vm_status::KeptVMStatus};
+use diem_types::{transaction::TransactionStatus, vm_status::KeptVMStatus};
 
 pub mod account;
 pub mod account_universe;
@@ -18,6 +18,7 @@ pub mod data_store;
 pub mod execution_strategies;
 pub mod executor;
 pub mod gas_costs;
+mod golden_outputs;
 pub mod keygen;
 mod proptest_types;
 
@@ -54,4 +55,18 @@ macro_rules! assert_prologue_disparity {
         assert_eq!($e1, $e2);
         assert!(transaction_status_eq($e3, &$e4));
     };
+}
+
+/// Returns the name of the current function. This macro is used to derive the name for the golden
+/// file of each test case.
+#[macro_export]
+macro_rules! current_function_name {
+    () => {{
+        fn f() {}
+        fn type_name_of<T>(_: T) -> &'static str {
+            std::any::type_name::<T>()
+        }
+        let name = type_name_of(f);
+        &name[..name.len() - 3]
+    }};
 }

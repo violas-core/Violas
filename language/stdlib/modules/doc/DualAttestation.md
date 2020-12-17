@@ -24,26 +24,26 @@ Module managing dual attestation.
 -  [Function `assert_signature_is_valid`](#0x1_DualAttestation_assert_signature_is_valid)
 -  [Function `assert_payment_ok`](#0x1_DualAttestation_assert_payment_ok)
 -  [Function `initialize`](#0x1_DualAttestation_initialize)
--  [Function `get_cur_microlibra_limit`](#0x1_DualAttestation_get_cur_microlibra_limit)
--  [Function `set_microlibra_limit`](#0x1_DualAttestation_set_microlibra_limit)
+-  [Function `get_cur_microdiem_limit`](#0x1_DualAttestation_get_cur_microdiem_limit)
+-  [Function `set_microdiem_limit`](#0x1_DualAttestation_set_microdiem_limit)
 -  [Module Specification](#@Module_Specification_1)
     -  [Initialization](#@Initialization_2)
     -  [Helper Functions](#@Helper_Functions_3)
     -  [Access Control](#@Access_Control_4)
 
 
-<pre><code><b>use</b> <a href="CoreAddresses.md#0x1_CoreAddresses">0x1::CoreAddresses</a>;
+<pre><code><b>use</b> <a href="BCS.md#0x1_BCS">0x1::BCS</a>;
+<b>use</b> <a href="CoreAddresses.md#0x1_CoreAddresses">0x1::CoreAddresses</a>;
+<b>use</b> <a href="Diem.md#0x1_Diem">0x1::Diem</a>;
+<b>use</b> <a href="DiemTimestamp.md#0x1_DiemTimestamp">0x1::DiemTimestamp</a>;
 <b>use</b> <a href="Errors.md#0x1_Errors">0x1::Errors</a>;
 <b>use</b> <a href="Event.md#0x1_Event">0x1::Event</a>;
-<b>use</b> <a href="LBR.md#0x1_LBR">0x1::LBR</a>;
-<b>use</b> <a href="LCS.md#0x1_LCS">0x1::LCS</a>;
-<b>use</b> <a href="Libra.md#0x1_Libra">0x1::Libra</a>;
-<b>use</b> <a href="LibraTimestamp.md#0x1_LibraTimestamp">0x1::LibraTimestamp</a>;
 <b>use</b> <a href="Roles.md#0x1_Roles">0x1::Roles</a>;
 <b>use</b> <a href="Signature.md#0x1_Signature">0x1::Signature</a>;
 <b>use</b> <a href="Signer.md#0x1_Signer">0x1::Signer</a>;
 <b>use</b> <a href="VASP.md#0x1_VASP">0x1::VASP</a>;
 <b>use</b> <a href="Vector.md#0x1_Vector">0x1::Vector</a>;
+<b>use</b> <a href="XDX.md#0x1_XDX">0x1::XDX</a>;
 </code></pre>
 
 
@@ -88,7 +88,7 @@ participate in off-chain protocols.
      transactions subject to the travel rule)
  (2) information exchanged in the off-chain protocols (e.g., KYC info in the travel rule
      protocol)
- Note that this is different than <code>authentication_key</code> used in LibraAccount, which is
+ Note that this is different than <code>authentication_key</code> used in DiemAccount, which is
  a hash of a public key + signature scheme identifier, not a public key. Mutable.
 </dd>
 <dt>
@@ -96,7 +96,7 @@ participate in off-chain protocols.
 </dt>
 <dd>
  Expiration date in microseconds from unix epoch. For V1, it is always set to
- U64_MAX. Mutable, but only by LibraRoot.
+ U64_MAX. Mutable, but only by DiemRoot.
 </dd>
 <dt>
 <code>compliance_key_rotation_events: <a href="Event.md#0x1_Event_EventHandle">Event::EventHandle</a>&lt;<a href="DualAttestation.md#0x1_DualAttestation_ComplianceKeyRotationEvent">DualAttestation::ComplianceKeyRotationEvent</a>&gt;</code>
@@ -134,7 +134,7 @@ Struct to store the limit on-chain
 
 <dl>
 <dt>
-<code>micro_lbr_limit: u64</code>
+<code>micro_xdx_limit: u64</code>
 </dt>
 <dd>
 
@@ -231,7 +231,7 @@ The message sent whenever the base url for a <code><a href="DualAttestation.md#0
 Suffix of every signed dual attestation message
 
 
-<pre><code><b>const</b> <a href="DualAttestation.md#0x1_DualAttestation_DOMAIN_SEPARATOR">DOMAIN_SEPARATOR</a>: vector&lt;u8&gt; = [64, 64, 36, 36, 76, 73, 66, 82, 65, 95, 65, 84, 84, 69, 83, 84, 36, 36, 64, 64];
+<pre><code><b>const</b> <a href="DualAttestation.md#0x1_DualAttestation_DOMAIN_SEPARATOR">DOMAIN_SEPARATOR</a>: vector&lt;u8&gt; = [64, 64, 36, 36, 68, 73, 69, 77, 95, 65, 84, 84, 69, 83, 84, 36, 36, 64, 64];
 </code></pre>
 
 
@@ -282,6 +282,16 @@ Cannot parse this as an ed25519 signature (e.g., != 64 bytes)
 
 
 <pre><code><b>const</b> <a href="DualAttestation.md#0x1_DualAttestation_EMALFORMED_METADATA_SIGNATURE">EMALFORMED_METADATA_SIGNATURE</a>: u64 = 3;
+</code></pre>
+
+
+
+<a name="0x1_DualAttestation_EPAYEE_BASE_URL_NOT_SET"></a>
+
+The recipient of a dual attestation payment needs to set a base URL
+
+
+<pre><code><b>const</b> <a href="DualAttestation.md#0x1_DualAttestation_EPAYEE_BASE_URL_NOT_SET">EPAYEE_BASE_URL_NOT_SET</a>: u64 = 6;
 </code></pre>
 
 
@@ -421,7 +431,7 @@ Rotate the base URL for <code>account</code> to <code>new_url</code>
     credential.base_url = <b>copy</b> new_url;
     <a href="Event.md#0x1_Event_emit_event">Event::emit_event</a>(&<b>mut</b> credential.base_url_rotation_events, <a href="DualAttestation.md#0x1_DualAttestation_BaseUrlRotationEvent">BaseUrlRotationEvent</a> {
         new_base_url: new_url,
-        time_rotated_seconds: <a href="LibraTimestamp.md#0x1_LibraTimestamp_now_seconds">LibraTimestamp::now_seconds</a>(),
+        time_rotated_seconds: <a href="DiemTimestamp.md#0x1_DiemTimestamp_now_seconds">DiemTimestamp::now_seconds</a>(),
     });
 }
 </code></pre>
@@ -447,7 +457,7 @@ Rotate the base URL for <code>account</code> to <code>new_url</code>
 
 <pre><code><b>schema</b> <a href="DualAttestation.md#0x1_DualAttestation_RotateBaseUrlAbortsIf">RotateBaseUrlAbortsIf</a> {
     account: signer;
-    <a name="0x1_DualAttestation_sender$24"></a>
+    <a name="0x1_DualAttestation_sender$25"></a>
     <b>let</b> sender = <a href="Signer.md#0x1_Signer_spec_address_of">Signer::spec_address_of</a>(account);
 }
 </code></pre>
@@ -458,7 +468,7 @@ Must abort if the account does not have the resource Credential [[H16]][PERMISSI
 
 <pre><code><b>schema</b> <a href="DualAttestation.md#0x1_DualAttestation_RotateBaseUrlAbortsIf">RotateBaseUrlAbortsIf</a> {
     <b>include</b> <a href="DualAttestation.md#0x1_DualAttestation_AbortsIfNoCredential">AbortsIfNoCredential</a>{addr: sender};
-    <b>include</b> <a href="LibraTimestamp.md#0x1_LibraTimestamp_AbortsIfNotOperating">LibraTimestamp::AbortsIfNotOperating</a>;
+    <b>include</b> <a href="DiemTimestamp.md#0x1_DiemTimestamp_AbortsIfNotOperating">DiemTimestamp::AbortsIfNotOperating</a>;
 }
 </code></pre>
 
@@ -483,7 +493,7 @@ Must abort if the account does not have the resource Credential [[H16]][PERMISSI
 <pre><code><b>schema</b> <a href="DualAttestation.md#0x1_DualAttestation_RotateBaseUrlEnsures">RotateBaseUrlEnsures</a> {
     account: signer;
     new_url: vector&lt;u8&gt;;
-    <a name="0x1_DualAttestation_sender$25"></a>
+    <a name="0x1_DualAttestation_sender$26"></a>
     <b>let</b> sender = <a href="Signer.md#0x1_Signer_spec_address_of">Signer::spec_address_of</a>(account);
     <b>ensures</b> <b>global</b>&lt;<a href="DualAttestation.md#0x1_DualAttestation_Credential">Credential</a>&gt;(sender).base_url == new_url;
 }
@@ -530,7 +540,7 @@ Rotate the compliance public key for <code>account</code> to <code>new_key</code
     credential.compliance_public_key = <b>copy</b> new_key;
     <a href="Event.md#0x1_Event_emit_event">Event::emit_event</a>(&<b>mut</b> credential.compliance_key_rotation_events, <a href="DualAttestation.md#0x1_DualAttestation_ComplianceKeyRotationEvent">ComplianceKeyRotationEvent</a> {
         new_compliance_public_key: new_key,
-        time_rotated_seconds: <a href="LibraTimestamp.md#0x1_LibraTimestamp_now_seconds">LibraTimestamp::now_seconds</a>(),
+        time_rotated_seconds: <a href="DiemTimestamp.md#0x1_DiemTimestamp_now_seconds">DiemTimestamp::now_seconds</a>(),
     });
 
 }
@@ -558,7 +568,7 @@ Rotate the compliance public key for <code>account</code> to <code>new_key</code
 <pre><code><b>schema</b> <a href="DualAttestation.md#0x1_DualAttestation_RotateCompliancePublicKeyAbortsIf">RotateCompliancePublicKeyAbortsIf</a> {
     account: signer;
     new_key: vector&lt;u8&gt;;
-    <a name="0x1_DualAttestation_sender$26"></a>
+    <a name="0x1_DualAttestation_sender$27"></a>
     <b>let</b> sender = <a href="Signer.md#0x1_Signer_spec_address_of">Signer::spec_address_of</a>(account);
 }
 </code></pre>
@@ -569,7 +579,7 @@ Must abort if the account does not have the resource Credential [[H16]][PERMISSI
 
 <pre><code><b>schema</b> <a href="DualAttestation.md#0x1_DualAttestation_RotateCompliancePublicKeyAbortsIf">RotateCompliancePublicKeyAbortsIf</a> {
     <b>include</b> <a href="DualAttestation.md#0x1_DualAttestation_AbortsIfNoCredential">AbortsIfNoCredential</a>{addr: sender};
-    <b>include</b> <a href="LibraTimestamp.md#0x1_LibraTimestamp_AbortsIfNotOperating">LibraTimestamp::AbortsIfNotOperating</a>;
+    <b>include</b> <a href="DiemTimestamp.md#0x1_DiemTimestamp_AbortsIfNotOperating">DiemTimestamp::AbortsIfNotOperating</a>;
     <b>aborts_if</b> !<a href="Signature.md#0x1_Signature_ed25519_validate_pubkey">Signature::ed25519_validate_pubkey</a>(new_key) <b>with</b> <a href="Errors.md#0x1_Errors_INVALID_ARGUMENT">Errors::INVALID_ARGUMENT</a>;
 }
 </code></pre>
@@ -583,7 +593,7 @@ Must abort if the account does not have the resource Credential [[H16]][PERMISSI
 <pre><code><b>schema</b> <a href="DualAttestation.md#0x1_DualAttestation_RotateCompliancePublicKeyEnsures">RotateCompliancePublicKeyEnsures</a> {
     account: signer;
     new_key: vector&lt;u8&gt;;
-    <a name="0x1_DualAttestation_sender$27"></a>
+    <a name="0x1_DualAttestation_sender$28"></a>
     <b>let</b> sender = <a href="Signer.md#0x1_Signer_spec_address_of">Signer::spec_address_of</a>(account);
     <b>ensures</b> <b>global</b>&lt;<a href="DualAttestation.md#0x1_DualAttestation_Credential">Credential</a>&gt;(sender).compliance_public_key == new_key;
 }
@@ -679,6 +689,18 @@ Aborts if <code>addr</code> does not have a <code><a href="DualAttestation.md#0x
 <pre><code><b>pragma</b> opaque;
 <b>include</b> <a href="DualAttestation.md#0x1_DualAttestation_AbortsIfNoCredential">AbortsIfNoCredential</a>;
 <b>ensures</b> result == <b>global</b>&lt;<a href="DualAttestation.md#0x1_DualAttestation_Credential">Credential</a>&gt;(addr).base_url;
+</code></pre>
+
+
+Spec version of <code><a href="DualAttestation.md#0x1_DualAttestation_base_url">Self::base_url</a></code>.
+
+
+<a name="0x1_DualAttestation_spec_base_url"></a>
+
+
+<pre><code><b>define</b> <a href="DualAttestation.md#0x1_DualAttestation_spec_base_url">spec_base_url</a>(addr: address): vector&lt;u8&gt; {
+   <b>global</b>&lt;<a href="DualAttestation.md#0x1_DualAttestation_Credential">Credential</a>&gt;(addr).base_url
+}
 </code></pre>
 
 
@@ -853,9 +875,9 @@ Helper which returns true if dual attestion is required for a deposit.
     payer: address, payee: address, deposit_value: u64
 ): bool <b>acquires</b> <a href="DualAttestation.md#0x1_DualAttestation_Limit">Limit</a> {
     // travel rule applies for payments over a limit
-    <b>let</b> travel_rule_limit_microlibra = <a href="DualAttestation.md#0x1_DualAttestation_get_cur_microlibra_limit">get_cur_microlibra_limit</a>();
-    <b>let</b> approx_lbr_microlibra_value = <a href="Libra.md#0x1_Libra_approx_lbr_for_value">Libra::approx_lbr_for_value</a>&lt;Token&gt;(deposit_value);
-    <b>let</b> above_limit = approx_lbr_microlibra_value &gt;= travel_rule_limit_microlibra;
+    <b>let</b> travel_rule_limit_microdiem = <a href="DualAttestation.md#0x1_DualAttestation_get_cur_microdiem_limit">get_cur_microdiem_limit</a>();
+    <b>let</b> approx_xdx_microdiem_value = <a href="Diem.md#0x1_Diem_approx_xdx_for_value">Diem::approx_xdx_for_value</a>&lt;Token&gt;(deposit_value);
+    <b>let</b> above_limit = approx_xdx_microdiem_value &gt;= travel_rule_limit_microdiem;
     <b>if</b> (!above_limit) {
         <b>return</b> <b>false</b>
     };
@@ -892,7 +914,7 @@ Helper which returns true if dual attestion is required for a deposit.
 
 <pre><code><b>schema</b> <a href="DualAttestation.md#0x1_DualAttestation_DualAttestationRequiredAbortsIf">DualAttestationRequiredAbortsIf</a>&lt;Token&gt; {
     deposit_value: num;
-    <b>include</b> <a href="Libra.md#0x1_Libra_ApproxLbrForValueAbortsIf">Libra::ApproxLbrForValueAbortsIf</a>&lt;Token&gt;{from_value: deposit_value};
+    <b>include</b> <a href="Diem.md#0x1_Diem_ApproxXdmForValueAbortsIf">Diem::ApproxXdmForValueAbortsIf</a>&lt;Token&gt;{from_value: deposit_value};
     <b>aborts_if</b> !<a href="DualAttestation.md#0x1_DualAttestation_spec_is_published">spec_is_published</a>() <b>with</b> <a href="Errors.md#0x1_Errors_NOT_PUBLISHED">Errors::NOT_PUBLISHED</a>;
 }
 </code></pre>
@@ -919,8 +941,8 @@ Helper functions which simulates <code><a href="DualAttestation.md#0x1_DualAttes
 <pre><code><b>define</b> <a href="DualAttestation.md#0x1_DualAttestation_spec_dual_attestation_required">spec_dual_attestation_required</a>&lt;Token&gt;(
    payer: address, payee: address, deposit_value: u64
 ): bool {
-   <a href="Libra.md#0x1_Libra_spec_approx_lbr_for_value">Libra::spec_approx_lbr_for_value</a>&lt;Token&gt;(deposit_value)
-               &gt;= <a href="DualAttestation.md#0x1_DualAttestation_spec_get_cur_microlibra_limit">spec_get_cur_microlibra_limit</a>() &&
+   <a href="Diem.md#0x1_Diem_spec_approx_xdx_for_value">Diem::spec_approx_xdx_for_value</a>&lt;Token&gt;(deposit_value)
+               &gt;= <a href="DualAttestation.md#0x1_DualAttestation_spec_get_cur_microdiem_limit">spec_get_cur_microdiem_limit</a>() &&
    payer != payee &&
    <a href="DualAttestation.md#0x1_DualAttestation_spec_is_inter_vasp">spec_is_inter_vasp</a>(payer, payee)
 }
@@ -951,8 +973,8 @@ Message is <code>metadata</code> | <code>payer</code> | <code>amount</code> | <c
     payer: address, metadata: vector&lt;u8&gt;, deposit_value: u64
 ): vector&lt;u8&gt; {
     <b>let</b> message = metadata;
-    <a href="Vector.md#0x1_Vector_append">Vector::append</a>(&<b>mut</b> message, <a href="LCS.md#0x1_LCS_to_bytes">LCS::to_bytes</a>(&payer));
-    <a href="Vector.md#0x1_Vector_append">Vector::append</a>(&<b>mut</b> message, <a href="LCS.md#0x1_LCS_to_bytes">LCS::to_bytes</a>(&deposit_value));
+    <a href="Vector.md#0x1_Vector_append">Vector::append</a>(&<b>mut</b> message, <a href="BCS.md#0x1_BCS_to_bytes">BCS::to_bytes</a>(&payer));
+    <a href="Vector.md#0x1_Vector_append">Vector::append</a>(&<b>mut</b> message, <a href="BCS.md#0x1_BCS_to_bytes">BCS::to_bytes</a>(&deposit_value));
     <a href="Vector.md#0x1_Vector_append">Vector::append</a>(&<b>mut</b> message, <a href="DualAttestation.md#0x1_DualAttestation_DOMAIN_SEPARATOR">DOMAIN_SEPARATOR</a>);
     message
 }
@@ -966,7 +988,7 @@ Message is <code>metadata</code> | <code>payer</code> | <code>amount</code> | <c
 <summary>Specification</summary>
 
 
-Abstract from construction of message for the prover. Concatenation of results from <code><a href="LCS.md#0x1_LCS_to_bytes">LCS::to_bytes</a></code>
+Abstract from construction of message for the prover. Concatenation of results from <code><a href="BCS.md#0x1_BCS_to_bytes">BCS::to_bytes</a></code>
 are difficult to reason about, so we avoid doing it. This is possible because the actual value of this
 message is not important for the verification problem, as long as the prover considers both
 messages which fail verification and which do not.
@@ -1026,6 +1048,12 @@ Helper function to check validity of a signature when dual attestion is required
         !<a href="Vector.md#0x1_Vector_is_empty">Vector::is_empty</a>(&payee_compliance_key),
         <a href="Errors.md#0x1_Errors_invalid_state">Errors::invalid_state</a>(<a href="DualAttestation.md#0x1_DualAttestation_EPAYEE_COMPLIANCE_KEY_NOT_SET">EPAYEE_COMPLIANCE_KEY_NOT_SET</a>)
     );
+    // sanity check of payee base URL validity
+    <b>let</b> payee_base_url = <a href="DualAttestation.md#0x1_DualAttestation_base_url">base_url</a>(<a href="DualAttestation.md#0x1_DualAttestation_credential_address">credential_address</a>(payee));
+    <b>assert</b>(
+        !<a href="Vector.md#0x1_Vector_is_empty">Vector::is_empty</a>(&payee_base_url),
+        <a href="Errors.md#0x1_Errors_invalid_state">Errors::invalid_state</a>(<a href="DualAttestation.md#0x1_DualAttestation_EPAYEE_BASE_URL_NOT_SET">EPAYEE_BASE_URL_NOT_SET</a>)
+    );
     // cryptographic check of signature validity
     <b>let</b> message = <a href="DualAttestation.md#0x1_DualAttestation_dual_attestation_message">dual_attestation_message</a>(payer, metadata, deposit_value);
     <b>assert</b>(
@@ -1062,6 +1090,7 @@ Helper function to check validity of a signature when dual attestion is required
     deposit_value: u64;
     <b>include</b> <a href="DualAttestation.md#0x1_DualAttestation_AbortsIfNoCredential">AbortsIfNoCredential</a>{addr: <a href="DualAttestation.md#0x1_DualAttestation_spec_credential_address">spec_credential_address</a>(payee)};
     <b>aborts_if</b> <a href="Vector.md#0x1_Vector_is_empty">Vector::is_empty</a>(<a href="DualAttestation.md#0x1_DualAttestation_spec_compliance_public_key">spec_compliance_public_key</a>(<a href="DualAttestation.md#0x1_DualAttestation_spec_credential_address">spec_credential_address</a>(payee))) <b>with</b> <a href="Errors.md#0x1_Errors_INVALID_STATE">Errors::INVALID_STATE</a>;
+    <b>aborts_if</b> <a href="Vector.md#0x1_Vector_is_empty">Vector::is_empty</a>(<a href="DualAttestation.md#0x1_DualAttestation_spec_base_url">spec_base_url</a>(<a href="DualAttestation.md#0x1_DualAttestation_spec_credential_address">spec_credential_address</a>(payee))) <b>with</b> <a href="Errors.md#0x1_Errors_INVALID_STATE">Errors::INVALID_STATE</a>;
     <b>aborts_if</b> !<a href="DualAttestation.md#0x1_DualAttestation_spec_signature_is_valid">spec_signature_is_valid</a>(payer, payee, metadata_signature, metadata, deposit_value)
         <b>with</b> <a href="Errors.md#0x1_Errors_INVALID_ARGUMENT">Errors::INVALID_ARGUMENT</a>;
 }
@@ -1176,7 +1205,7 @@ the conditions in (2) is not met.
 Travel rule limit set during genesis
 
 
-<pre><code><b>public</b> <b>fun</b> <a href="DualAttestation.md#0x1_DualAttestation_initialize">initialize</a>(lr_account: &signer)
+<pre><code><b>public</b> <b>fun</b> <a href="DualAttestation.md#0x1_DualAttestation_initialize">initialize</a>(dr_account: &signer)
 </code></pre>
 
 
@@ -1185,16 +1214,16 @@ Travel rule limit set during genesis
 <summary>Implementation</summary>
 
 
-<pre><code><b>public</b> <b>fun</b> <a href="DualAttestation.md#0x1_DualAttestation_initialize">initialize</a>(lr_account: &signer) {
-    <a href="LibraTimestamp.md#0x1_LibraTimestamp_assert_genesis">LibraTimestamp::assert_genesis</a>();
-    <a href="CoreAddresses.md#0x1_CoreAddresses_assert_libra_root">CoreAddresses::assert_libra_root</a>(lr_account); // operational constraint.
-    <b>assert</b>(!<b>exists</b>&lt;<a href="DualAttestation.md#0x1_DualAttestation_Limit">Limit</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>()), <a href="Errors.md#0x1_Errors_already_published">Errors::already_published</a>(<a href="DualAttestation.md#0x1_DualAttestation_ELIMIT">ELIMIT</a>));
-    <b>let</b> initial_limit = (<a href="DualAttestation.md#0x1_DualAttestation_INITIAL_DUAL_ATTESTATION_LIMIT">INITIAL_DUAL_ATTESTATION_LIMIT</a> <b>as</b> u128) * (<a href="Libra.md#0x1_Libra_scaling_factor">Libra::scaling_factor</a>&lt;<a href="LBR.md#0x1_LBR">LBR</a>&gt;() <b>as</b> u128);
+<pre><code><b>public</b> <b>fun</b> <a href="DualAttestation.md#0x1_DualAttestation_initialize">initialize</a>(dr_account: &signer) {
+    <a href="DiemTimestamp.md#0x1_DiemTimestamp_assert_genesis">DiemTimestamp::assert_genesis</a>();
+    <a href="CoreAddresses.md#0x1_CoreAddresses_assert_diem_root">CoreAddresses::assert_diem_root</a>(dr_account); // operational constraint.
+    <b>assert</b>(!<b>exists</b>&lt;<a href="DualAttestation.md#0x1_DualAttestation_Limit">Limit</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_DIEM_ROOT_ADDRESS">CoreAddresses::DIEM_ROOT_ADDRESS</a>()), <a href="Errors.md#0x1_Errors_already_published">Errors::already_published</a>(<a href="DualAttestation.md#0x1_DualAttestation_ELIMIT">ELIMIT</a>));
+    <b>let</b> initial_limit = (<a href="DualAttestation.md#0x1_DualAttestation_INITIAL_DUAL_ATTESTATION_LIMIT">INITIAL_DUAL_ATTESTATION_LIMIT</a> <b>as</b> u128) * (<a href="Diem.md#0x1_Diem_scaling_factor">Diem::scaling_factor</a>&lt;<a href="XDX.md#0x1_XDX">XDX</a>&gt;() <b>as</b> u128);
     <b>assert</b>(initial_limit &lt;= <a href="DualAttestation.md#0x1_DualAttestation_MAX_U64">MAX_U64</a>, <a href="Errors.md#0x1_Errors_limit_exceeded">Errors::limit_exceeded</a>(<a href="DualAttestation.md#0x1_DualAttestation_ELIMIT">ELIMIT</a>));
     move_to(
-        lr_account,
+        dr_account,
         <a href="DualAttestation.md#0x1_DualAttestation_Limit">Limit</a> {
-            micro_lbr_limit: (initial_limit <b>as</b> u64)
+            micro_xdx_limit: (initial_limit <b>as</b> u64)
         }
     )
 }
@@ -1209,27 +1238,27 @@ Travel rule limit set during genesis
 
 
 
-<pre><code><b>include</b> <a href="LibraTimestamp.md#0x1_LibraTimestamp_AbortsIfNotGenesis">LibraTimestamp::AbortsIfNotGenesis</a>;
-<b>include</b> <a href="CoreAddresses.md#0x1_CoreAddresses_AbortsIfNotLibraRoot">CoreAddresses::AbortsIfNotLibraRoot</a>{account: lr_account};
-<b>aborts_if</b> <b>exists</b>&lt;<a href="DualAttestation.md#0x1_DualAttestation_Limit">Limit</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>()) <b>with</b> <a href="Errors.md#0x1_Errors_ALREADY_PUBLISHED">Errors::ALREADY_PUBLISHED</a>;
-<a name="0x1_DualAttestation_initial_limit$28"></a>
-<b>let</b> initial_limit = <a href="DualAttestation.md#0x1_DualAttestation_INITIAL_DUAL_ATTESTATION_LIMIT">INITIAL_DUAL_ATTESTATION_LIMIT</a> * <a href="Libra.md#0x1_Libra_spec_scaling_factor">Libra::spec_scaling_factor</a>&lt;<a href="LBR.md#0x1_LBR">LBR</a>&gt;();
+<pre><code><b>include</b> <a href="DiemTimestamp.md#0x1_DiemTimestamp_AbortsIfNotGenesis">DiemTimestamp::AbortsIfNotGenesis</a>;
+<b>include</b> <a href="CoreAddresses.md#0x1_CoreAddresses_AbortsIfNotDiemRoot">CoreAddresses::AbortsIfNotDiemRoot</a>{account: dr_account};
+<b>aborts_if</b> <b>exists</b>&lt;<a href="DualAttestation.md#0x1_DualAttestation_Limit">Limit</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_DIEM_ROOT_ADDRESS">CoreAddresses::DIEM_ROOT_ADDRESS</a>()) <b>with</b> <a href="Errors.md#0x1_Errors_ALREADY_PUBLISHED">Errors::ALREADY_PUBLISHED</a>;
+<a name="0x1_DualAttestation_initial_limit$29"></a>
+<b>let</b> initial_limit = <a href="DualAttestation.md#0x1_DualAttestation_INITIAL_DUAL_ATTESTATION_LIMIT">INITIAL_DUAL_ATTESTATION_LIMIT</a> * <a href="Diem.md#0x1_Diem_spec_scaling_factor">Diem::spec_scaling_factor</a>&lt;<a href="XDX.md#0x1_XDX">XDX</a>&gt;();
 <b>aborts_if</b> initial_limit &gt; <a href="DualAttestation.md#0x1_DualAttestation_MAX_U64">MAX_U64</a> <b>with</b> <a href="Errors.md#0x1_Errors_LIMIT_EXCEEDED">Errors::LIMIT_EXCEEDED</a>;
-<b>include</b> <a href="Libra.md#0x1_Libra_AbortsIfNoCurrency">Libra::AbortsIfNoCurrency</a>&lt;<a href="LBR.md#0x1_LBR">LBR</a>&gt;;
+<b>include</b> <a href="Diem.md#0x1_Diem_AbortsIfNoCurrency">Diem::AbortsIfNoCurrency</a>&lt;<a href="XDX.md#0x1_XDX">XDX</a>&gt;;
 </code></pre>
 
 
 
 </details>
 
-<a name="0x1_DualAttestation_get_cur_microlibra_limit"></a>
+<a name="0x1_DualAttestation_get_cur_microdiem_limit"></a>
 
-## Function `get_cur_microlibra_limit`
+## Function `get_cur_microdiem_limit`
 
-Return the current dual attestation limit in microlibra
+Return the current dual attestation limit in microdiem
 
 
-<pre><code><b>public</b> <b>fun</b> <a href="DualAttestation.md#0x1_DualAttestation_get_cur_microlibra_limit">get_cur_microlibra_limit</a>(): u64
+<pre><code><b>public</b> <b>fun</b> <a href="DualAttestation.md#0x1_DualAttestation_get_cur_microdiem_limit">get_cur_microdiem_limit</a>(): u64
 </code></pre>
 
 
@@ -1238,9 +1267,9 @@ Return the current dual attestation limit in microlibra
 <summary>Implementation</summary>
 
 
-<pre><code><b>public</b> <b>fun</b> <a href="DualAttestation.md#0x1_DualAttestation_get_cur_microlibra_limit">get_cur_microlibra_limit</a>(): u64 <b>acquires</b> <a href="DualAttestation.md#0x1_DualAttestation_Limit">Limit</a> {
-    <b>assert</b>(<b>exists</b>&lt;<a href="DualAttestation.md#0x1_DualAttestation_Limit">Limit</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>()), <a href="Errors.md#0x1_Errors_not_published">Errors::not_published</a>(<a href="DualAttestation.md#0x1_DualAttestation_ELIMIT">ELIMIT</a>));
-    borrow_global&lt;<a href="DualAttestation.md#0x1_DualAttestation_Limit">Limit</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>()).micro_lbr_limit
+<pre><code><b>public</b> <b>fun</b> <a href="DualAttestation.md#0x1_DualAttestation_get_cur_microdiem_limit">get_cur_microdiem_limit</a>(): u64 <b>acquires</b> <a href="DualAttestation.md#0x1_DualAttestation_Limit">Limit</a> {
+    <b>assert</b>(<b>exists</b>&lt;<a href="DualAttestation.md#0x1_DualAttestation_Limit">Limit</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_DIEM_ROOT_ADDRESS">CoreAddresses::DIEM_ROOT_ADDRESS</a>()), <a href="Errors.md#0x1_Errors_not_published">Errors::not_published</a>(<a href="DualAttestation.md#0x1_DualAttestation_ELIMIT">ELIMIT</a>));
+    borrow_global&lt;<a href="DualAttestation.md#0x1_DualAttestation_Limit">Limit</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_DIEM_ROOT_ADDRESS">CoreAddresses::DIEM_ROOT_ADDRESS</a>()).micro_xdx_limit
 }
 </code></pre>
 
@@ -1255,22 +1284,22 @@ Return the current dual attestation limit in microlibra
 
 <pre><code><b>pragma</b> opaque;
 <b>aborts_if</b> !<a href="DualAttestation.md#0x1_DualAttestation_spec_is_published">spec_is_published</a>() <b>with</b> <a href="Errors.md#0x1_Errors_NOT_PUBLISHED">Errors::NOT_PUBLISHED</a>;
-<b>ensures</b> result == <a href="DualAttestation.md#0x1_DualAttestation_spec_get_cur_microlibra_limit">spec_get_cur_microlibra_limit</a>();
+<b>ensures</b> result == <a href="DualAttestation.md#0x1_DualAttestation_spec_get_cur_microdiem_limit">spec_get_cur_microdiem_limit</a>();
 </code></pre>
 
 
 
 </details>
 
-<a name="0x1_DualAttestation_set_microlibra_limit"></a>
+<a name="0x1_DualAttestation_set_microdiem_limit"></a>
 
-## Function `set_microlibra_limit`
+## Function `set_microdiem_limit`
 
-Set the dual attestation limit to <code>micro_libra_limit</code>.
+Set the dual attestation limit to <code>micro_diem_limit</code>.
 Aborts if <code>tc_account</code> does not have the TreasuryCompliance role
 
 
-<pre><code><b>public</b> <b>fun</b> <a href="DualAttestation.md#0x1_DualAttestation_set_microlibra_limit">set_microlibra_limit</a>(tc_account: &signer, micro_lbr_limit: u64)
+<pre><code><b>public</b> <b>fun</b> <a href="DualAttestation.md#0x1_DualAttestation_set_microdiem_limit">set_microdiem_limit</a>(tc_account: &signer, micro_xdx_limit: u64)
 </code></pre>
 
 
@@ -1279,10 +1308,10 @@ Aborts if <code>tc_account</code> does not have the TreasuryCompliance role
 <summary>Implementation</summary>
 
 
-<pre><code><b>public</b> <b>fun</b> <a href="DualAttestation.md#0x1_DualAttestation_set_microlibra_limit">set_microlibra_limit</a>(tc_account: &signer, micro_lbr_limit: u64) <b>acquires</b> <a href="DualAttestation.md#0x1_DualAttestation_Limit">Limit</a> {
+<pre><code><b>public</b> <b>fun</b> <a href="DualAttestation.md#0x1_DualAttestation_set_microdiem_limit">set_microdiem_limit</a>(tc_account: &signer, micro_xdx_limit: u64) <b>acquires</b> <a href="DualAttestation.md#0x1_DualAttestation_Limit">Limit</a> {
     <a href="Roles.md#0x1_Roles_assert_treasury_compliance">Roles::assert_treasury_compliance</a>(tc_account);
-    <b>assert</b>(<b>exists</b>&lt;<a href="DualAttestation.md#0x1_DualAttestation_Limit">Limit</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>()), <a href="Errors.md#0x1_Errors_not_published">Errors::not_published</a>(<a href="DualAttestation.md#0x1_DualAttestation_ELIMIT">ELIMIT</a>));
-    borrow_global_mut&lt;<a href="DualAttestation.md#0x1_DualAttestation_Limit">Limit</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>()).micro_lbr_limit = micro_lbr_limit;
+    <b>assert</b>(<b>exists</b>&lt;<a href="DualAttestation.md#0x1_DualAttestation_Limit">Limit</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_DIEM_ROOT_ADDRESS">CoreAddresses::DIEM_ROOT_ADDRESS</a>()), <a href="Errors.md#0x1_Errors_not_published">Errors::not_published</a>(<a href="DualAttestation.md#0x1_DualAttestation_ELIMIT">ELIMIT</a>));
+    borrow_global_mut&lt;<a href="DualAttestation.md#0x1_DualAttestation_Limit">Limit</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_DIEM_ROOT_ADDRESS">CoreAddresses::DIEM_ROOT_ADDRESS</a>()).micro_xdx_limit = micro_xdx_limit;
 }
 </code></pre>
 
@@ -1300,7 +1329,7 @@ The permission UpdateDualAttestationLimit is granted to TreasuryCompliance.
 
 <pre><code><b>include</b> <a href="Roles.md#0x1_Roles_AbortsIfNotTreasuryCompliance">Roles::AbortsIfNotTreasuryCompliance</a>{account: tc_account};
 <b>aborts_if</b> !<a href="DualAttestation.md#0x1_DualAttestation_spec_is_published">spec_is_published</a>() <b>with</b> <a href="Errors.md#0x1_Errors_NOT_PUBLISHED">Errors::NOT_PUBLISHED</a>;
-<b>ensures</b> <b>global</b>&lt;<a href="DualAttestation.md#0x1_DualAttestation_Limit">Limit</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>()).micro_lbr_limit == micro_lbr_limit;
+<b>ensures</b> <b>global</b>&lt;<a href="DualAttestation.md#0x1_DualAttestation_Limit">Limit</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_DIEM_ROOT_ADDRESS">CoreAddresses::DIEM_ROOT_ADDRESS</a>()).micro_xdx_limit == micro_xdx_limit;
 </code></pre>
 
 
@@ -1320,7 +1349,7 @@ The permission UpdateDualAttestationLimit is granted to TreasuryCompliance.
 The Limit resource should be published after genesis
 
 
-<pre><code><b>invariant</b> [<b>global</b>] <a href="LibraTimestamp.md#0x1_LibraTimestamp_is_operating">LibraTimestamp::is_operating</a>() ==&gt; <a href="DualAttestation.md#0x1_DualAttestation_spec_is_published">spec_is_published</a>();
+<pre><code><b>invariant</b> [<b>global</b>] <a href="DiemTimestamp.md#0x1_DiemTimestamp_is_operating">DiemTimestamp::is_operating</a>() ==&gt; <a href="DualAttestation.md#0x1_DualAttestation_spec_is_published">spec_is_published</a>();
 </code></pre>
 
 
@@ -1337,19 +1366,19 @@ Helper function to determine whether the Limit is published.
 
 
 <pre><code><b>define</b> <a href="DualAttestation.md#0x1_DualAttestation_spec_is_published">spec_is_published</a>(): bool {
-    <b>exists</b>&lt;<a href="DualAttestation.md#0x1_DualAttestation_Limit">Limit</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>())
+    <b>exists</b>&lt;<a href="DualAttestation.md#0x1_DualAttestation_Limit">Limit</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_DIEM_ROOT_ADDRESS">CoreAddresses::DIEM_ROOT_ADDRESS</a>())
 }
 </code></pre>
 
 
-Mirrors <code><a href="DualAttestation.md#0x1_DualAttestation_get_cur_microlibra_limit">Self::get_cur_microlibra_limit</a></code>.
+Mirrors <code><a href="DualAttestation.md#0x1_DualAttestation_get_cur_microdiem_limit">Self::get_cur_microdiem_limit</a></code>.
 
 
-<a name="0x1_DualAttestation_spec_get_cur_microlibra_limit"></a>
+<a name="0x1_DualAttestation_spec_get_cur_microdiem_limit"></a>
 
 
-<pre><code><b>define</b> <a href="DualAttestation.md#0x1_DualAttestation_spec_get_cur_microlibra_limit">spec_get_cur_microlibra_limit</a>(): u64 {
-    <b>global</b>&lt;<a href="DualAttestation.md#0x1_DualAttestation_Limit">Limit</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_LIBRA_ROOT_ADDRESS">CoreAddresses::LIBRA_ROOT_ADDRESS</a>()).micro_lbr_limit
+<pre><code><b>define</b> <a href="DualAttestation.md#0x1_DualAttestation_spec_get_cur_microdiem_limit">spec_get_cur_microdiem_limit</a>(): u64 {
+    <b>global</b>&lt;<a href="DualAttestation.md#0x1_DualAttestation_Limit">Limit</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_DIEM_ROOT_ADDRESS">CoreAddresses::DIEM_ROOT_ADDRESS</a>()).micro_xdx_limit
 }
 </code></pre>
 
@@ -1410,7 +1439,7 @@ The permission "RotateDualAttestationInfo(addr)" is only granted to ParentVASP o
 </code></pre>
 
 
-Only set_microlibra_limit can change the limit [[H6]][PERMISSION].
+Only set_microdiem_limit can change the limit [[H6]][PERMISSION].
 
 
 <a name="0x1_DualAttestation_DualAttestationLimitRemainsSame"></a>
@@ -1420,14 +1449,14 @@ The DualAttestation limit stays constant.
 
 <pre><code><b>schema</b> <a href="DualAttestation.md#0x1_DualAttestation_DualAttestationLimitRemainsSame">DualAttestationLimitRemainsSame</a> {
     <b>ensures</b> <b>old</b>(<a href="DualAttestation.md#0x1_DualAttestation_spec_is_published">spec_is_published</a>())
-        ==&gt; <a href="DualAttestation.md#0x1_DualAttestation_spec_get_cur_microlibra_limit">spec_get_cur_microlibra_limit</a>() == <b>old</b>(<a href="DualAttestation.md#0x1_DualAttestation_spec_get_cur_microlibra_limit">spec_get_cur_microlibra_limit</a>());
+        ==&gt; <a href="DualAttestation.md#0x1_DualAttestation_spec_get_cur_microdiem_limit">spec_get_cur_microdiem_limit</a>() == <b>old</b>(<a href="DualAttestation.md#0x1_DualAttestation_spec_get_cur_microdiem_limit">spec_get_cur_microdiem_limit</a>());
 }
 </code></pre>
 
 
 
 
-<pre><code><b>apply</b> <a href="DualAttestation.md#0x1_DualAttestation_DualAttestationLimitRemainsSame">DualAttestationLimitRemainsSame</a> <b>to</b> * <b>except</b> set_microlibra_limit;
+<pre><code><b>apply</b> <a href="DualAttestation.md#0x1_DualAttestation_DualAttestationLimitRemainsSame">DualAttestationLimitRemainsSame</a> <b>to</b> * <b>except</b> set_microdiem_limit;
 </code></pre>
 
 
@@ -1474,6 +1503,6 @@ The base url stays constant.
 
 
 [//]: # ("File containing references which can be used from documentation")
-[ACCESS_CONTROL]: https://github.com/libra/lip/blob/master/lips/lip-2.md
-[ROLE]: https://github.com/libra/lip/blob/master/lips/lip-2.md#roles
-[PERMISSION]: https://github.com/libra/lip/blob/master/lips/lip-2.md#permissions
+[ACCESS_CONTROL]: https://github.com/diem/dip/blob/master/dips/dip-2.md
+[ROLE]: https://github.com/diem/dip/blob/master/dips/dip-2.md#roles
+[PERMISSION]: https://github.com/diem/dip/blob/master/dips/dip-2.md#permissions

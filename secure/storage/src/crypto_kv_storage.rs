@@ -1,8 +1,8 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{CryptoStorage, Error, KVStorage, PublicKeyResponse};
-use libra_crypto::{
+use diem_crypto::{
     ed25519::{Ed25519PrivateKey, Ed25519PublicKey, Ed25519Signature},
     hash::CryptoHash,
     PrivateKey, SigningKey, Uniform,
@@ -86,7 +86,7 @@ impl<T: CryptoKVStorage> CryptoStorage for T {
     }
 
     fn sign<U: CryptoHash + Serialize>(
-        &mut self,
+        &self,
         name: &str,
         message: &U,
     ) -> Result<Ed25519Signature, Error> {
@@ -95,7 +95,7 @@ impl<T: CryptoKVStorage> CryptoStorage for T {
     }
 
     fn sign_using_version<U: CryptoHash + Serialize>(
-        &mut self,
+        &self,
         name: &str,
         version: Ed25519PublicKey,
         message: &U,

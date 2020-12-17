@@ -1,4 +1,4 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::utils;
@@ -7,6 +7,29 @@ use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path::PathBuf,
 };
+
+/// Port selected RocksDB options for tuning underlying rocksdb instance of DiemDB.
+/// see https://github.com/facebook/rocksdb/blob/master/include/rocksdb/options.h
+/// for detailed explanations.
+#[derive(Copy, Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RocksdbConfig {
+    pub max_open_files: i32,
+    pub max_total_wal_size: u64,
+}
+
+impl Default for RocksdbConfig {
+    fn default() -> Self {
+        Self {
+            // Set max_open_files to 10k instead of -1 to avoid keep-growing memory in accordance
+            // with the number of files.
+            max_open_files: 10_000,
+            // For now we set the max total WAL size to be 1G. This config can be useful when column
+            // families are updated at non-uniform frequencies.
+            max_total_wal_size: 1u64 << 30,
+        }
+    }
+}
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(default, deny_unknown_fields)]
@@ -22,6 +45,8 @@ pub struct StorageConfig {
     data_dir: PathBuf,
     /// Read, Write, Connect timeout for network operations in milliseconds
     pub timeout_ms: u64,
+    /// Rocksdb-specific configurations
+    pub rocksdb_config: RocksdbConfig,
 }
 
 impl Default for StorageConfig {
@@ -31,12 +56,12 @@ impl Default for StorageConfig {
             backup_service_address: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 6186),
             dir: PathBuf::from("db"),
             grpc_max_receive_len: Some(100_000_000),
-            // At 100 tps on avg, we keep 4~5 days of history.
-            // n.b. Validators have more aggressive override in the config builder.
-            prune_window: Some(40_000_000),
-            data_dir: PathBuf::from("/opt/libra/data"),
+            // ~50GB state tree history (about 1 day at 100 tps)
+            prune_window: Some(10_000_000),
+            data_dir: PathBuf::from("/opt/diem/data"),
             // Default read/write/connection timeout, in milliseconds
             timeout_ms: 30_000,
+            rocksdb_config: RocksdbConfig::default(),
         }
     }
 }

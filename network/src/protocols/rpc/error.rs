@@ -1,12 +1,12 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
 //! Rpc protocol errors
 
 use crate::peer_manager::PeerManagerError;
 use anyhow::anyhow;
+use diem_types::PeerId;
 use futures::channel::{mpsc, oneshot};
-use libra_types::PeerId;
 use std::io;
 use thiserror::Error;
 
@@ -18,8 +18,8 @@ pub enum RpcError {
     #[error("IO error: {0}")]
     IoError(#[from] io::Error),
 
-    #[error("Lcs error: {0:?}")]
-    LcsError(#[from] lcs::Error),
+    #[error("Bcs error: {0:?}")]
+    BcsError(#[from] bcs::Error),
 
     #[error("Failed to open substream, not connected with peer: {0}")]
     NotConnected(PeerId),

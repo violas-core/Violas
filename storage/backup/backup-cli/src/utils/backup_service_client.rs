@@ -1,11 +1,11 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::Result;
+use diem_crypto::HashValue;
+use diem_types::transaction::Version;
+use diemdb::backup::backup_handler::DbState;
 use futures::TryStreamExt;
-use libra_crypto::HashValue;
-use libra_types::transaction::Version;
-use libradb::backup::backup_handler::DbState;
 use structopt::StructOpt;
 use tokio::prelude::*;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
@@ -56,7 +56,7 @@ impl BackupServiceClient {
     pub async fn get_db_state(&self) -> Result<Option<DbState>> {
         let mut buf = Vec::new();
         self.get("db_state").await?.read_to_end(&mut buf).await?;
-        Ok(lcs::from_bytes(&buf)?)
+        Ok(bcs::from_bytes(&buf)?)
     }
 
     pub async fn get_account_range_proof(

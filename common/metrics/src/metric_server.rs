@@ -1,4 +1,4 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{
@@ -28,7 +28,7 @@ fn encode_metrics(encoder: impl Encoder, whitelist: &'static [&'static str]) -> 
 
     NUM_METRICS
         .with_label_values(&["total_bytes"])
-        .inc_by(buffer.len() as i64);
+        .inc_by(buffer.len() as u64);
     buffer
 }
 
@@ -67,7 +67,7 @@ async fn serve_metrics(req: Request<Body>) -> Result<Response<Body>, hyper::Erro
     let mut resp = Response::new(Body::empty());
     match (req.method(), req.uri().path()) {
         (&Method::GET, "/-/healthy") => {
-            *resp.body_mut() = Body::from("libra-node:ok");
+            *resp.body_mut() = Body::from("diem-node:ok");
         }
         (&Method::GET, "/metrics") => {
             //Prometheus server expects metrics to be on host:port/metrics
@@ -82,7 +82,7 @@ async fn serve_metrics(req: Request<Body>) -> Result<Response<Body>, hyper::Erro
             *resp.body_mut() = Body::from(encoded_metrics);
         }
         (&Method::GET, "/counters") => {
-            // Json encoded libra_metrics;
+            // Json encoded diem_metrics;
             let encoder = JsonEncoder;
             let buffer = encode_metrics(encoder, &[]);
             *resp.body_mut() = Body::from(buffer);

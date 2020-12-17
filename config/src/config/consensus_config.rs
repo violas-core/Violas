@@ -1,8 +1,8 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::config::SafetyRulesConfig;
-use libra_types::{account_address::AccountAddress, block_info::Round};
+use diem_types::{account_address::AccountAddress, block_info::Round};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, path::PathBuf};
 
@@ -27,7 +27,7 @@ impl Default for ConsensusConfig {
         ConsensusConfig {
             contiguous_rounds: 2,
             max_block_size: 1000,
-            max_pruned_blocks_in_mem: 10000,
+            max_pruned_blocks_in_mem: 100,
             round_initial_timeout_ms: 1000,
             proposer_type: ConsensusProposerType::LeaderReputation(LeaderReputationConfig {
                 active_weights: 99,

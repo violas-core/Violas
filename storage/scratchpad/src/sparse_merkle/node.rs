@@ -1,4 +1,4 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
 //! This module defines all kinds of nodes in the Sparse Merkle Tree maintained in scratch pad.
@@ -17,16 +17,16 @@
 //!
 //! - An `EmptyNode` represents an empty subtree with zero leaf.
 
-use libra_crypto::{
+use diem_crypto::{
     hash::{CryptoHash, SPARSE_MERKLE_PLACEHOLDER_HASH},
     HashValue,
 };
-use libra_infallible::RwLock;
-use libra_types::{
+use diem_infallible::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+use diem_types::{
     account_state_blob::AccountStateBlob,
     proof::{SparseMerkleInternalNode, SparseMerkleLeafNode},
 };
-use std::sync::{Arc, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::Arc;
 
 /// We wrap the node in `RwLock`. The only case when we will update the node is when we
 /// drop a subtree originated from this node and commit things to storage. In that case we will
@@ -110,20 +110,12 @@ impl Node {
 
     #[cfg(test)]
     pub fn is_subtree(&self) -> bool {
-        if let Node::Subtree(_) = self {
-            true
-        } else {
-            false
-        }
+        matches!(self, Node::Subtree(_))
     }
 
     #[cfg(test)]
     pub fn is_empty(&self) -> bool {
-        if let Node::Empty = self {
-            true
-        } else {
-            false
-        }
+        matches!(self, Node::Empty)
     }
 
     pub fn hash(&self) -> HashValue {

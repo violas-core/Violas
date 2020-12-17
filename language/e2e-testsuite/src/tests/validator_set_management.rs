@@ -1,22 +1,25 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use language_e2e_tests::{account::Account, executor::FakeExecutor};
-use libra_types::{
+use diem_types::{
     on_chain_config::new_epoch_event_key,
     transaction::{TransactionStatus, WriteSetPayload},
     vm_status::KeptVMStatus,
 };
+use language_e2e_tests::{account::Account, current_function_name, executor::FakeExecutor};
 use transaction_builder::*;
 
 #[test]
 fn validator_add() {
     let mut executor = FakeExecutor::from_genesis_file();
-    let libra_root_account = Account::new_libra_root();
-    let validator_account = Account::new();
+    executor.set_golden_file(current_function_name!());
+
+    let diem_root_account = Account::new_diem_root();
+    let validator_account = executor.create_raw_account();
+    let operator_account = executor.create_raw_account();
 
     executor.execute_and_apply(
-        libra_root_account
+        diem_root_account
             .transaction()
             .script(encode_create_validator_account_script(
                 0,
@@ -27,10 +30,33 @@ fn validator_add() {
             .sequence_number(1)
             .sign(),
     );
+    executor.execute_and_apply(
+        diem_root_account
+            .transaction()
+            .script(encode_create_validator_operator_account_script(
+                0,
+                *operator_account.address(),
+                operator_account.auth_key_prefix(),
+                b"operator_0".to_vec(),
+            ))
+            .sequence_number(2)
+            .sign(),
+    );
+    // validator sets operator
+    executor.execute_and_apply(
+        validator_account
+            .transaction()
+            .script(encode_set_validator_operator_script(
+                b"operator_0".to_vec(),
+                *operator_account.address(),
+            ))
+            .sequence_number(0)
+            .sign(),
+    );
     executor.new_block();
 
     executor.execute_and_apply(
-        validator_account
+        operator_account
             .transaction()
             .script(encode_register_validator_config_script(
                 *validator_account.address(),
@@ -48,14 +74,14 @@ fn validator_add() {
     );
 
     let output = executor.execute_and_apply(
-        libra_root_account
+        diem_root_account
             .transaction()
             .script(encode_add_validator_and_reconfigure_script(
                 2,
                 b"validator_0".to_vec(),
                 *validator_account.address(),
             ))
-            .sequence_number(2)
+            .sequence_number(3)
             .sign(),
     );
 
@@ -72,12 +98,13 @@ fn validator_add() {
 #[test]
 fn validator_rotate_key_and_reconfigure() {
     let mut executor = FakeExecutor::from_genesis_file();
-    let libra_root_account = Account::new_libra_root();
-    let validator_account = Account::new();
-    let validator_operator = Account::new();
+    executor.set_golden_file(current_function_name!());
+    let diem_root_account = Account::new_diem_root();
+    let validator_account = executor.create_raw_account();
+    let validator_operator = executor.create_raw_account();
 
     executor.execute_and_apply(
-        libra_root_account
+        diem_root_account
             .transaction()
             .script(encode_create_validator_account_script(
                 0,
@@ -90,7 +117,7 @@ fn validator_rotate_key_and_reconfigure() {
     );
 
     executor.execute_and_apply(
-        libra_root_account
+        diem_root_account
             .transaction()
             .script(encode_create_validator_operator_account_script(
                 0,
@@ -101,11 +128,22 @@ fn validator_rotate_key_and_reconfigure() {
             .sequence_number(2)
             .sign(),
     );
+    // validator_0 sets operator
+    executor.execute_and_apply(
+        validator_account
+            .transaction()
+            .script(encode_set_validator_operator_script(
+                b"bobby".to_vec(),
+                *validator_operator.address(),
+            ))
+            .sequence_number(0)
+            .sign(),
+    );
 
     executor.new_block();
 
     let output = executor.execute_and_apply(
-        validator_account
+        validator_operator
             .transaction()
             .script(encode_register_validator_config_script(
                 *validator_account.address(),
@@ -127,7 +165,7 @@ fn validator_rotate_key_and_reconfigure() {
     );
 
     let output = executor.execute_and_apply(
-        libra_root_account
+        diem_root_account
             .transaction()
             .script(encode_add_validator_and_reconfigure_script(
                 2,
@@ -149,17 +187,6 @@ fn validator_rotate_key_and_reconfigure() {
 
     executor.new_block_with_timestamp(300000010);
 
-    executor.execute_and_apply(
-        validator_account
-            .transaction()
-            .script(encode_set_validator_operator_script(
-                b"bobby".to_vec(),
-                *validator_operator.address(),
-            ))
-            .sequence_number(1)
-            .sign(),
-    );
-
     let output = executor.execute_and_apply(
         validator_operator
             .transaction()
@@ -174,7 +201,7 @@ fn validator_rotate_key_and_reconfigure() {
                 vec![254; 32],
                 vec![253; 32],
             ))
-            .sequence_number(0)
+            .sequence_number(1)
             .sign(),
     );
 
@@ -191,14 +218,15 @@ fn validator_rotate_key_and_reconfigure() {
 #[test]
 fn validator_set_operator_set_key_reconfigure() {
     let mut executor = FakeExecutor::from_genesis_file();
-    let libra_root_account = Account::new_libra_root();
-    let validator_account = Account::new();
-    let operator_account_0 = Account::new();
-    let operator_account_1 = Account::new();
+    executor.set_golden_file(current_function_name!());
+    let diem_root_account = Account::new_diem_root();
+    let validator_account = executor.create_raw_account();
+    let operator_account_0 = executor.create_raw_account();
+    let operator_account_1 = executor.create_raw_account();
 
     // Create operator 0
     let output = executor.execute_and_apply(
-        libra_root_account
+        diem_root_account
             .transaction()
             .script(encode_create_validator_operator_account_script(
                 0,
@@ -217,7 +245,7 @@ fn validator_set_operator_set_key_reconfigure() {
 
     // Create operator 1
     let output = executor.execute_and_apply(
-        libra_root_account
+        diem_root_account
             .transaction()
             .script(encode_create_validator_operator_account_script(
                 0,
@@ -236,7 +264,7 @@ fn validator_set_operator_set_key_reconfigure() {
 
     // Create validator 0
     let output = executor.execute_and_apply(
-        libra_root_account
+        diem_root_account
             .transaction()
             .script(encode_create_validator_account_script(
                 0,
@@ -253,13 +281,13 @@ fn validator_set_operator_set_key_reconfigure() {
     );
     executor.new_block();
 
-    // LR sets operator 1 for validator 0
+    // DR sets operator 1 for validator 0
     let admin_script = encode_set_validator_operator_with_nonce_admin_script(
         0,
         b"operator_1".to_vec(),
         *operator_account_1.address(),
     );
-    let txn = libra_root_account
+    let txn = diem_root_account
         .transaction()
         .write_set(WriteSetPayload::Script {
             script: admin_script,
@@ -315,7 +343,7 @@ fn validator_set_operator_set_key_reconfigure() {
     );
 
     let output = executor.execute_and_apply(
-        libra_root_account
+        diem_root_account
             .transaction()
             .script(encode_add_validator_and_reconfigure_script(
                 3,

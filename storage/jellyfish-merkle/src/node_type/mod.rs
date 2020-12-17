@@ -1,4 +1,4 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
 //! Node types of [`JellyfishMerkleTree`](crate::JellyfishMerkleTree)
@@ -16,12 +16,12 @@ mod node_type_test;
 use crate::{nibble_path::NibblePath, ROOT_NIBBLE_HEIGHT};
 use anyhow::{ensure, Context, Result};
 use byteorder::{BigEndian, LittleEndian, ReadBytesExt, WriteBytesExt};
-use libra_crypto::{
+use diem_crypto::{
     hash::{CryptoHash, SPARSE_MERKLE_PLACEHOLDER_HASH},
     HashValue,
 };
-use libra_nibble::Nibble;
-use libra_types::{
+use diem_nibble::Nibble;
+use diem_types::{
     account_state_blob::AccountStateBlob,
     proof::{SparseMerkleInternalNode, SparseMerkleLeafNode},
     transaction::Version,
@@ -608,7 +608,7 @@ impl Node {
             }
             Node::Leaf(leaf_node) => {
                 out.push(NodeTag::Leaf as u8);
-                out.extend(lcs::to_bytes(&leaf_node)?);
+                out.extend(bcs::to_bytes(&leaf_node)?);
             }
         }
         Ok(out)
@@ -633,7 +633,7 @@ impl Node {
         match node_tag {
             Some(NodeTag::Null) => Ok(Node::Null),
             Some(NodeTag::Internal) => Ok(Node::Internal(InternalNode::deserialize(&val[1..])?)),
-            Some(NodeTag::Leaf) => Ok(Node::Leaf(lcs::from_bytes(&val[1..])?)),
+            Some(NodeTag::Leaf) => Ok(Node::Leaf(bcs::from_bytes(&val[1..])?)),
             None => Err(NodeDecodeError::UnknownTag { unknown_tag: tag }.into()),
         }
     }

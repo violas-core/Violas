@@ -1,7 +1,7 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use libra_management::{config::ConfigPath, error::Error, secure_backend::ValidatorBackend};
+use diem_management::{config::ConfigPath, error::Error, secure_backend::ValidatorBackend};
 use serde::Serialize;
 use std::{fs::File, io::Write, path::PathBuf};
 use structopt::StructOpt;
@@ -61,7 +61,7 @@ impl ExtractPrivateKey {
 }
 
 fn save_key<T: Serialize>(key: &T, key_name: &'static str, path: &PathBuf) -> Result<(), Error> {
-    let encoded = lcs::to_bytes(key).map_err(|e| Error::LCS(key_name.to_string(), e))?;
+    let encoded = bcs::to_bytes(key).map_err(|e| Error::BCS(key_name.to_string(), e))?;
     let mut file = File::create(path).map_err(|e| Error::IO(key_name.to_string(), e))?;
     file.write_all(&encoded)
         .map_err(|e| Error::IO(key_name.to_string(), e))?;

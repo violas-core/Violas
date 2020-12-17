@@ -1,15 +1,15 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{HashReader, MerkleAccumulator, MerkleAccumulatorView};
 use anyhow::{ensure, format_err, Result};
-use libra_crypto::hash::{HashValue, TestOnlyHasher, ACCUMULATOR_PLACEHOLDER_HASH};
-use libra_types::proof::{definition::LeafCount, position::Position};
+use diem_crypto::hash::{HashValue, TestOnlyHasher, ACCUMULATOR_PLACEHOLDER_HASH};
+use diem_types::proof::{definition::LeafCount, position::Position};
 use proptest::{collection::vec, prelude::*};
 use std::collections::HashMap;
 
 pub(crate) type InMemoryAccumulator =
-    libra_types::proof::accumulator::InMemoryAccumulator<TestOnlyHasher>;
+    diem_types::proof::accumulator::InMemoryAccumulator<TestOnlyHasher>;
 pub(crate) type TestAccumulator = MerkleAccumulator<MockHashStore, TestOnlyHasher>;
 
 pub(crate) struct MockHashStore {
@@ -310,7 +310,11 @@ pub fn test_append_many_impl(batches: Vec<Vec<HashValue>>) {
         num_leaves += hashes.len() as LeafCount;
         leaves.extend(hashes.iter());
         let expected_root_hash = store.verify(&leaves).unwrap();
-        assert_eq!(root_hash, expected_root_hash)
+        assert_eq!(root_hash, expected_root_hash);
+        assert_eq!(
+            TestAccumulator::get_root_hash(&store, num_leaves).unwrap(),
+            expected_root_hash
+        );
     }
 }
 

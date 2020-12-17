@@ -1,11 +1,11 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::Result;
 use criterion::Criterion;
-use libra_state_view::StateView;
-use libra_types::{access_path::AccessPath, account_address::AccountAddress};
-use libra_vm::data_cache::StateViewCache;
+use diem_state_view::StateView;
+use diem_types::{access_path::AccessPath, account_address::AccountAddress};
+use diem_vm::data_cache::StateViewCache;
 use move_core_types::{
     gas_schedule::{GasAlgebra, GasUnits},
     identifier::{IdentStr, Identifier},
@@ -29,14 +29,15 @@ pub fn bench(c: &mut Criterion, fun: &str) {
 
 // Compile `bench.move`
 fn compile_module(addr: &[u8; AccountAddress::LENGTH]) -> CompiledModule {
-    // TODO: this has only been tried with `cargo bench` from `libra/src/language/benchmarks`
+    // TODO: this has only been tried with `cargo bench` from `diem/src/language/benchmarks`
     let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     path.push("src/bench.move");
     let s = path.to_str().expect("no path specified").to_owned();
 
-    let (_, mut modules) = move_lang::move_compile(&[s], &[], Some(Address::new(*addr)), None)
-        .expect("Error compiling...");
-    match modules.remove(0) {
+    let (_files, mut compiled_units) =
+        move_lang::move_compile_and_report(&[s], &[], Some(Address::new(*addr)), None)
+            .expect("Error compiling...");
+    match compiled_units.remove(0) {
         CompiledUnit::Module { module, .. } => module,
         CompiledUnit::Script { .. } => panic!("Expected a module but received a script"),
     }

@@ -1,4 +1,4 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
 // <Black magic>
@@ -10,22 +10,18 @@ pub use interface::NetworkProvider;
 
 pub mod connectivity_manager;
 pub mod constants;
+pub mod counters;
 pub mod error;
 pub mod interface;
 pub mod logging;
+pub mod noise;
+pub mod peer;
 pub mod peer_manager;
 pub mod protocols;
-
-pub mod counters;
-mod peer;
 pub mod transport;
 
 #[cfg(feature = "fuzzing")]
 pub mod fuzzing;
-#[cfg(not(any(feature = "testing", feature = "fuzzing")))]
-mod noise;
-#[cfg(any(feature = "testing", feature = "fuzzing"))]
-pub mod noise;
 #[cfg(any(test, feature = "testing", feature = "fuzzing"))]
 pub mod testutils;
 

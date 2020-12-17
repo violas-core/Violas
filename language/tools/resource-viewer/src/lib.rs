@@ -1,4 +1,4 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{
@@ -7,8 +7,8 @@ use crate::{
     resolver::Resolver,
 };
 use anyhow::{anyhow, Result};
-use libra_state_view::StateView;
-use libra_types::{
+use diem_state_view::StateView;
+use diem_types::{
     access_path::AccessPath, account_address::AccountAddress, account_state::AccountState,
     contract_event::ContractEvent,
 };
@@ -207,7 +207,7 @@ fn pretty_print_value(
         AnnotatedMoveValue::U8(v) => write!(f, "{}u8", v),
         AnnotatedMoveValue::U64(v) => write!(f, "{}", v),
         AnnotatedMoveValue::U128(v) => write!(f, "{}u128", v),
-        AnnotatedMoveValue::Address(a) => write!(f, "{}", a.short_str()),
+        AnnotatedMoveValue::Address(a) => write!(f, "{}", a.short_str_lossless()),
         AnnotatedMoveValue::Vector(v) => {
             writeln!(f, "[")?;
             for value in v.iter() {

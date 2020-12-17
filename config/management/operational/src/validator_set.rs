@@ -1,13 +1,12 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{json_rpc::JsonRpcClientWrapper, validator_config::DecryptedValidatorConfig};
-use libra_crypto::ed25519::Ed25519PublicKey;
-use libra_management::{config::ConfigPath, error::Error, secure_backend::ValidatorBackend};
-use libra_network_address::NetworkAddress;
-use libra_types::account_address::AccountAddress;
+use diem_crypto::ed25519::Ed25519PublicKey;
+use diem_management::{config::ConfigPath, error::Error, secure_backend::ValidatorBackend};
+use diem_network_address::NetworkAddress;
+use diem_types::account_address::AccountAddress;
 use serde::Serialize;
-use std::str::FromStr;
 use structopt::StructOpt;
 
 #[derive(Debug, StructOpt)]
@@ -40,33 +39,8 @@ impl ValidatorSet {
                 info.config(),
                 *info.account_address(),
                 &encryptor,
-            );
-            let config = match config {
-                Ok(config) => config,
-                Err(err) => {
-                    println!(
-                        "Unable to decode account {}: {}. Using a dummy validator network address!",
-                        info.account_address(),
-                        err
-                    );
-
-                    // Return the partially decrypted validator config (using a dummy validator
-                    // network address).
-                    let encrypted_config = info.config();
-                    DecryptedValidatorConfig {
-                        name: "".to_string(),
-                        consensus_public_key: encrypted_config.consensus_public_key.clone(),
-                        fullnode_network_address: encrypted_config
-                            .fullnode_network_addresses()
-                            .map_err(|e| Error::NetworkAddressDecodeError(e.to_string()))?[0]
-                            .clone(),
-                        validator_network_address: NetworkAddress::from_str(
-                            "/dns4/could-not-decrypt",
-                        )
-                        .map_err(|e| Error::NetworkAddressDecodeError(e.to_string()))?,
-                    }
-                }
-            };
+            )
+            .map_err(|e| Error::NetworkAddressDecodeError(e.to_string()))?;
 
             let config_resource = client.validator_config(*info.account_address())?;
             let name = DecryptedValidatorConfig::human_name(&config_resource.human_name);

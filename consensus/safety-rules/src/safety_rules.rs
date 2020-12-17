@@ -1,7 +1,8 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{
+    configurable_validator_signer::ConfigurableValidatorSigner,
     consensus_state::ConsensusState,
     counters,
     error::Error,
@@ -20,23 +21,25 @@ use consensus_types::{
     vote_data::VoteData,
     vote_proposal::{MaybeSignedVoteProposal, VoteProposal},
 };
-use libra_crypto::{
+use diem_crypto::{
     ed25519::{Ed25519PublicKey, Ed25519Signature},
-    hash::HashValue,
+    hash::{CryptoHash, HashValue},
     traits::Signature,
 };
-use libra_logger::prelude::*;
-use libra_types::{
+use diem_logger::prelude::*;
+use diem_types::{
     block_info::BlockInfo, epoch_change::EpochChangeProof, epoch_state::EpochState,
-    ledger_info::LedgerInfo, validator_signer::ValidatorSigner, waypoint::Waypoint,
+    ledger_info::LedgerInfo, waypoint::Waypoint,
 };
+use serde::Serialize;
 use std::cmp::Ordering;
 
 /// @TODO consider a cache of verified QCs to cut down on verification costs
 pub struct SafetyRules {
     persistent_storage: PersistentSafetyStorage,
     execution_public_key: Option<Ed25519PublicKey>,
-    validator_signer: Option<ValidatorSigner>,
+    export_consensus_key: bool,
+    validator_signer: Option<ConfigurableValidatorSigner>,
     epoch_state: Option<EpochState>,
 }
 
@@ -46,6 +49,7 @@ impl SafetyRules {
     pub fn new(
         persistent_storage: PersistentSafetyStorage,
         verify_vote_proposal_signature: bool,
+        export_consensus_key: bool,
     ) -> Self {
         let execution_public_key = if verify_vote_proposal_signature {
             Some(
@@ -59,12 +63,18 @@ impl SafetyRules {
         Self {
             persistent_storage,
             execution_public_key,
+            export_consensus_key,
             validator_signer: None,
             epoch_state: None,
         }
     }
 
-    fn signer(&self) -> Result<&ValidatorSigner, Error> {
+    fn sign<T: Serialize + CryptoHash>(&self, message: &T) -> Result<Ed25519Signature, Error> {
+        let signer = self.signer()?;
+        signer.sign(message, &self.persistent_storage)
+    }
+
+    fn signer(&self) -> Result<&ConfigurableValidatorSigner, Error> {
         self.validator_signer
             .as_ref()
             .ok_or_else(|| Error::NotInitialized("validator_signer".into()))
@@ -247,44 +257,7 @@ impl SafetyRules {
             .cloned()
             .ok_or(Error::InvalidLedgerInfo)?;
 
-        let author = self.persistent_storage.author()?;
-        if let Some(expected_key) = epoch_state.verifier.get_public_key(&author) {
-            let curr_key = self.signer().ok().map(|s| s.public_key());
-            if curr_key != Some(expected_key.clone()) {
-                let consensus_key = self
-                    .persistent_storage
-                    .consensus_key_for_version(expected_key)
-                    .map_err(|e| {
-                        let error = Error::InternalError(format!(
-                            "Validator key not found: {:?}",
-                            e.to_string()
-                        ));
-                        error!(
-                            SafetyLogSchema::new(LogEntry::KeyReconciliation, LogEvent::Error)
-                                .error(&error),
-                        );
-
-                        self.validator_signer = None;
-                        error
-                    })?;
-
-                self.validator_signer = Some(ValidatorSigner::new(author, consensus_key));
-            }
-
-            debug!(
-                SafetyLogSchema::new(LogEntry::KeyReconciliation, LogEvent::Success),
-                "in set",
-            );
-        } else {
-            debug!(
-                SafetyLogSchema::new(LogEntry::KeyReconciliation, LogEvent::Success),
-                "not in set",
-            );
-            self.validator_signer = None;
-        }
-
         let current_epoch = self.persistent_storage.safety_data()?.epoch;
-
         if current_epoch < epoch_state.epoch {
             // This is ordered specifically to avoid configuration issues:
             // * First set the waypoint to lock in the minimum restarting point,
@@ -303,9 +276,58 @@ impl SafetyRules {
 
             info!(SafetyLogSchema::new(LogEntry::Epoch, LogEvent::Update).epoch(epoch_state.epoch));
         }
-        self.epoch_state = Some(epoch_state);
+        self.epoch_state = Some(epoch_state.clone());
 
-        Ok(())
+        let author = self.persistent_storage.author()?;
+        let expected_key = epoch_state.verifier.get_public_key(&author);
+        let initialize_result = match expected_key {
+            None => Err(Error::ValidatorNotInSet(author.to_string())),
+            Some(expected_key) => {
+                let current_key = self.signer().ok().map(|s| s.public_key());
+                if current_key == Some(expected_key.clone()) {
+                    debug!(
+                        SafetyLogSchema::new(LogEntry::KeyReconciliation, LogEvent::Success),
+                        "in set",
+                    );
+                    Ok(())
+                } else if self.export_consensus_key {
+                    // Try to export the consensus key directly from storage.
+                    match self
+                        .persistent_storage
+                        .consensus_key_for_version(expected_key)
+                    {
+                        Ok(consensus_key) => {
+                            self.validator_signer = Some(ConfigurableValidatorSigner::new_signer(
+                                author,
+                                consensus_key,
+                            ));
+                            Ok(())
+                        }
+                        Err(Error::SecureStorageMissingDataError(error)) => {
+                            Err(Error::ValidatorKeyNotFound(error))
+                        }
+                        Err(error) => Err(error),
+                    }
+                } else {
+                    // Try to generate a signature over a test message to ensure the expected key
+                    // is actually held in storage.
+                    self.validator_signer = Some(ConfigurableValidatorSigner::new_handle(
+                        author,
+                        expected_key,
+                    ));
+                    self.sign(&Timeout::new(0, 0))
+                        .map(|_signature| ())
+                        .map_err(|error| Error::ValidatorKeyNotFound(error.to_string()))
+                }
+            }
+        };
+        initialize_result.map_err(|error| {
+            info!(
+                SafetyLogSchema::new(LogEntry::KeyReconciliation, LogEvent::Error).error(&error),
+            );
+            self.validator_signer = None;
+            error
+        })
     }
 
     fn guarded_construct_and_sign_vote(
@@ -322,7 +344,7 @@ impl SafetyRules {
 
         if let Some(public_key) = self.execution_public_key.as_ref() {
             execution_signature
-                .ok_or_else(|| Error::VoteProposalSignatureNotFound)?
+                .ok_or(Error::VoteProposalSignatureNotFound)?
                 .verify(vote_proposal, public_key)
                 .map_err(|error| Error::InternalError(error.to_string()))?;
         }
@@ -349,12 +371,16 @@ impl SafetyRules {
             &mut safety_data,
         )?;
 
-        let validator_signer = self.signer()?;
-        let vote = Vote::new(
-            self.extension_check(vote_proposal)?,
-            validator_signer.author(),
-            self.construct_ledger_info(proposed_block)?,
-            validator_signer,
+        // Construct and sign vote
+        let vote_data = self.extension_check(vote_proposal)?;
+        let mut ledger_info_placeholder = self.construct_ledger_info(proposed_block)?;
+        ledger_info_placeholder.set_consensus_data_hash(vote_data.hash());
+        let signature = self.sign(&ledger_info_placeholder)?;
+        let vote = Vote::new_with_signature(
+            vote_data,
+            self.signer()?.author(),
+            ledger_info_placeholder,
+            signature,
         );
 
         safety_data.last_vote = Some(vote.clone());
@@ -383,9 +409,9 @@ impl SafetyRules {
             self.persistent_storage.set_safety_data(safety_data)?;
         }
 
-        Ok(Block::new_proposal_from_block_data(
-            block_data,
-            self.signer()?,
+        let signature = self.sign(&block_data)?;
+        Ok(Block::new_proposal_from_block_data_and_signature(
+            block_data, signature,
         ))
     }
 
@@ -412,7 +438,7 @@ impl SafetyRules {
             self.persistent_storage.set_safety_data(safety_data)?;
         }
 
-        let signature = timeout.sign(self.signer()?);
+        let signature = self.sign(timeout)?;
         Ok(signature)
     }
 }

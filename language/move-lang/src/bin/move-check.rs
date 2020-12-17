@@ -1,4 +1,4 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
 #![forbid(unsafe_code)]
@@ -54,5 +54,6 @@ pub fn main() -> anyhow::Result<()> {
         out_dir,
     } = Options::from_args();
 
-    move_lang::move_check(&source_files, &dependencies, sender, out_dir)
+    let _files = move_lang::move_check_and_report(&source_files, &dependencies, sender, out_dir)?;
+    Ok(())
 }

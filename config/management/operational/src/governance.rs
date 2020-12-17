@@ -1,17 +1,17 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::{json_rpc::JsonRpcClientWrapper, TransactionContext};
-use libra_global_constants::LIBRA_ROOT_KEY;
-use libra_management::{
+use crate::{auto_validate::AutoValidate, json_rpc::JsonRpcClientWrapper, TransactionContext};
+use diem_global_constants::DIEM_ROOT_KEY;
+use diem_management::{
     config::{Config, ConfigPath},
     error::Error,
     secure_backend::ValidatorBackend,
     transaction::build_raw_transaction,
 };
-use libra_types::{
+use diem_types::{
     account_address::AccountAddress,
-    account_config::libra_root_address,
+    account_config::diem_root_address,
     chain_id::ChainId,
     transaction::{authenticator::AuthenticationKey, Script},
 };
@@ -32,6 +32,8 @@ pub struct CreateAccount {
     chain_id: Option<ChainId>,
     #[structopt(flatten)]
     validator_backend: ValidatorBackend,
+    #[structopt(flatten)]
+    auto_validate: AutoValidate,
 }
 
 impl CreateAccount {
@@ -51,11 +53,12 @@ impl CreateAccount {
             .override_chain_id(self.chain_id)
             .override_json_server(&self.json_server)
             .override_validator_backend(&self.validator_backend.validator_backend)?;
-        let key = libra_management::read_key_from_file(&self.path_to_key)
+
+        let key = diem_management::read_key_from_file(&self.path_to_key)
             .map_err(|e| Error::UnableToReadFile(format!("{:?}", self.path_to_key), e))?;
         let client = JsonRpcClientWrapper::new(config.json_server.clone());
 
-        let seq_num = client.sequence_number(libra_root_address())?;
+        let seq_num = client.sequence_number(diem_root_address())?;
         let auth_key = AuthenticationKey::ed25519(&key);
         let account_address = auth_key.derived_address();
         let script = script_callback(
@@ -64,8 +67,15 @@ impl CreateAccount {
             auth_key.prefix().to_vec(),
             self.name.as_bytes().to_vec(),
         );
-        build_and_submit_libra_root_transaction(&config, seq_num, script, action)
-            .map(|a| (a, account_address))
+        let mut transaction_context =
+            build_and_submit_diem_root_transaction(&config, seq_num, script, action)?;
+
+        // Perform auto validation if required
+        transaction_context = self
+            .auto_validate
+            .execute(config.json_server, transaction_context)?;
+
+        Ok((transaction_context, account_address))
     }
 }
 
@@ -107,7 +117,9 @@ struct RootValidatorOperation {
     #[structopt(long, required_unless = "config")]
     json_server: Option<String>,
     #[structopt(flatten)]
-    validator_config: libra_management::validator_config::ValidatorConfig,
+    validator_config: diem_management::validator_config::ValidatorConfig,
+    #[structopt(flatten)]
+    auto_validate: AutoValidate,
 }
 
 impl RootValidatorOperation {
@@ -136,13 +148,22 @@ impl AddValidator {
             .validator_config(self.input.account_address)?
             .human_name;
 
-        let seq_num = client.sequence_number(libra_root_address())?;
+        let seq_num = client.sequence_number(diem_root_address())?;
         let script = transaction_builder::encode_add_validator_and_reconfigure_script(
             seq_num,
             name,
             self.input.account_address,
         );
-        build_and_submit_libra_root_transaction(&config, seq_num, script, "add-validator")
+        let mut transaction_context =
+            build_and_submit_diem_root_transaction(&config, seq_num, script, "add-validator")?;
+
+        // Perform auto validation if required
+        transaction_context = self
+            .input
+            .auto_validate
+            .execute(config.json_server, transaction_context)?;
+
+        Ok(transaction_context)
     }
 }
 
@@ -163,27 +184,36 @@ impl RemoveValidator {
             .validator_config(self.input.account_address)?
             .human_name;
 
-        let seq_num = client.sequence_number(libra_root_address())?;
+        let seq_num = client.sequence_number(diem_root_address())?;
         let script = transaction_builder::encode_remove_validator_and_reconfigure_script(
             seq_num,
             name,
             self.input.account_address,
         );
 
-        build_and_submit_libra_root_transaction(&config, seq_num, script, "remove-validator")
+        let mut transaction_context =
+            build_and_submit_diem_root_transaction(&config, seq_num, script, "remove-validator")?;
+
+        // Perform auto validation if required
+        transaction_context = self
+            .input
+            .auto_validate
+            .execute(config.json_server, transaction_context)?;
+
+        Ok(transaction_context)
     }
 }
 
-fn build_and_submit_libra_root_transaction(
+fn build_and_submit_diem_root_transaction(
     config: &Config,
     seq_num: u64,
     script: Script,
     action: &'static str,
 ) -> Result<TransactionContext, Error> {
-    let txn = build_raw_transaction(config.chain_id, libra_root_address(), seq_num, script);
+    let txn = build_raw_transaction(config.chain_id, diem_root_address(), seq_num, script);
 
     let mut storage = config.validator_backend();
-    let signed_txn = storage.sign(LIBRA_ROOT_KEY, action, txn)?;
+    let signed_txn = storage.sign(DIEM_ROOT_KEY, action, txn)?;
 
     let client = JsonRpcClientWrapper::new(config.json_server.clone());
     client.submit_transaction(signed_txn)

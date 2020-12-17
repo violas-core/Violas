@@ -1,18 +1,18 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{
     executor_proxy::ExecutorProxyTrait, tests::mock_storage::MockStorage, SynchronizerState,
 };
 use anyhow::Result;
-use libra_config::config::HANDSHAKE_VERSION;
-use libra_crypto::{hash::ACCUMULATOR_PLACEHOLDER_HASH, test_utils::TEST_SEED, x25519, Uniform};
-use libra_infallible::RwLock;
-use libra_network_address::{
+use diem_config::config::HANDSHAKE_VERSION;
+use diem_crypto::{hash::ACCUMULATOR_PLACEHOLDER_HASH, test_utils::TEST_SEED, x25519, Uniform};
+use diem_infallible::RwLock;
+use diem_network_address::{
     encrypted::{TEST_SHARED_VAL_NETADDR_KEY, TEST_SHARED_VAL_NETADDR_KEY_VERSION},
     NetworkAddress, Protocol,
 };
-use libra_types::{
+use diem_types::{
     contract_event::ContractEvent, ledger_info::LedgerInfoWithSignatures,
     on_chain_config::ValidatorSet, proof::TransactionListProof,
     transaction::TransactionListWithProof, validator_config::ValidatorConfig,
@@ -72,8 +72,8 @@ impl SynchronizerEnvHelper {
             let voting_power = if idx == 0 { 1000 } else { 1 };
             let validator_config = ValidatorConfig::new(
                 signer.public_key(),
-                lcs::to_bytes(&vec![enc_addr.unwrap()]).unwrap(),
-                lcs::to_bytes(&vec![addr.clone()]).unwrap(),
+                bcs::to_bytes(&vec![enc_addr.unwrap()]).unwrap(),
+                bcs::to_bytes(&vec![addr.clone()]).unwrap(),
             );
             let validator_info = ValidatorInfo::new(peer_id, voting_power, validator_config);
             validator_infos.push(validator_info);
@@ -150,6 +150,11 @@ impl ExecutorProxyTrait for MockExecutorProxy {
 
     fn get_epoch_ending_ledger_info(&self, version: u64) -> Result<LedgerInfoWithSignatures> {
         self.storage.read().get_epoch_ending_ledger_info(version)
+    }
+
+    fn get_version_timestamp(&self, _version: u64) -> Result<u64> {
+        // Only used for logging purposes so no point in mocking
+        Ok(0)
     }
 
     fn load_on_chain_configs(&mut self) -> Result<()> {

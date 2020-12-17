@@ -1,8 +1,14 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
 #[cfg(test)]
 mod client;
+
+#[cfg(test)]
+mod consensus;
+
+#[cfg(test)]
+mod event_fetcher;
 
 #[cfg(test)]
 mod full_nodes;

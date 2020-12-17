@@ -1,20 +1,19 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use language_e2e_tests::{
-    account::{Account, AccountData},
-    common_transactions::peer_to_peer_txn,
-    executor::FakeExecutor,
-};
-use libra_crypto::HashValue;
-use libra_types::{
-    account_config::libra_root_address,
+use diem_crypto::HashValue;
+use diem_types::{
+    account_config::diem_root_address,
     on_chain_config::new_epoch_event_key,
     transaction::{TransactionPayload, TransactionStatus},
     vm_status::KeptVMStatus,
 };
-use libra_writeset_generator::{
+use diem_writeset_generator::{
     encode_custom_script, encode_halt_network_transaction, encode_remove_validators_transaction,
+};
+use language_e2e_tests::{
+    account::Account, common_transactions::peer_to_peer_txn, current_function_name,
+    executor::FakeExecutor,
 };
 use move_core_types::vm_status::StatusCode;
 use move_vm_types::values::Value;
@@ -24,13 +23,15 @@ use transaction_builder::*;
 #[test]
 fn validator_batch_remove() {
     let mut executor = FakeExecutor::from_genesis_file();
-    let libra_root_account = Account::new_libra_root();
-    let validator_account_0 = Account::new();
-    let validator_account_1 = Account::new();
+    executor.set_golden_file(current_function_name!());
+    let diem_root_account = Account::new_diem_root();
+    let validator_account_0 = executor.create_raw_account();
+    let validator_account_1 = executor.create_raw_account();
+    let operator_account = executor.create_raw_account();
 
     // Add validator_0
     executor.execute_and_apply(
-        libra_root_account
+        diem_root_account
             .transaction()
             .script(encode_create_validator_account_script(
                 0,
@@ -41,10 +42,36 @@ fn validator_batch_remove() {
             .sequence_number(1)
             .sign(),
     );
-    executor.new_block();
-
+    // Add operator
+    executor.execute_and_apply(
+        diem_root_account
+            .transaction()
+            .script(encode_create_validator_operator_account_script(
+                0,
+                *operator_account.address(),
+                operator_account.auth_key_prefix(),
+                b"operator".to_vec(),
+            ))
+            .sequence_number(2)
+            .sign(),
+    );
+    // validator_0 sets operator
     executor.execute_and_apply(
         validator_account_0
+            .transaction()
+            .script(encode_set_validator_operator_script(
+                b"operator".to_vec(),
+                *operator_account.address(),
+            ))
+            .sequence_number(0)
+            .sign(),
+    );
+
+    executor.new_block();
+
+    // operator_accounts registers config
+    executor.execute_and_apply(
+        operator_account
             .transaction()
             .script(encode_register_validator_config_script(
                 *validator_account_0.address(),
@@ -61,22 +88,23 @@ fn validator_batch_remove() {
             .sign(),
     );
 
+    // diem_root adds validator
     executor.execute_and_apply(
-        libra_root_account
+        diem_root_account
             .transaction()
             .script(encode_add_validator_and_reconfigure_script(
                 2,
                 b"validator_0".to_vec(),
                 *validator_account_0.address(),
             ))
-            .sequence_number(2)
+            .sequence_number(3)
             .sign(),
     );
 
     // Add validator_1
     executor.new_block();
     executor.execute_and_apply(
-        libra_root_account
+        diem_root_account
             .transaction()
             .script(encode_create_validator_account_script(
                 0,
@@ -84,13 +112,25 @@ fn validator_batch_remove() {
                 validator_account_1.auth_key_prefix(),
                 b"validator_1".to_vec(),
             ))
-            .sequence_number(3)
+            .sequence_number(4)
+            .sign(),
+    );
+    // validator_1 sets operator
+    executor.execute_and_apply(
+        validator_account_1
+            .transaction()
+            .script(encode_set_validator_operator_script(
+                b"operator".to_vec(),
+                *operator_account.address(),
+            ))
+            .sequence_number(0)
             .sign(),
     );
     executor.new_block();
 
+    // operator sets the config for validator_account_1
     executor.execute_and_apply(
-        validator_account_1
+        operator_account
             .transaction()
             .script(encode_register_validator_config_script(
                 *validator_account_1.address(),
@@ -103,19 +143,20 @@ fn validator_batch_remove() {
                 vec![254; 32],
                 vec![253; 32],
             ))
-            .sequence_number(0)
+            .sequence_number(1)
             .sign(),
     );
 
+    // diem_root adds validator
     executor.execute_and_apply(
-        libra_root_account
+        diem_root_account
             .transaction()
             .script(encode_add_validator_and_reconfigure_script(
                 3,
                 b"validator_1".to_vec(),
                 *validator_account_1.address(),
             ))
-            .sequence_number(4)
+            .sequence_number(5)
             .sign(),
     );
 
@@ -151,26 +192,26 @@ fn validator_batch_remove() {
     // Make sure both validators are removed from the validator set.
     assert!(executor
         .try_exec(
-            "LibraSystem",
+            "DiemSystem",
             "remove_validator",
             vec![],
             vec![
-                Value::transaction_argument_signer_reference(libra_root_address()),
+                Value::transaction_argument_signer_reference(diem_root_address()),
                 Value::address(*validator_account_0.address())
             ],
-            libra_root_account.address()
+            diem_root_account.address()
         )
         .is_err());
     assert!(executor
         .try_exec(
-            "LibraSystem",
+            "DiemSystem",
             "remove_validator",
             vec![],
             vec![
-                Value::transaction_argument_signer_reference(libra_root_address()),
+                Value::transaction_argument_signer_reference(diem_root_address()),
                 Value::address(*validator_account_1.address())
             ],
-            libra_root_account.address()
+            diem_root_account.address()
         )
         .is_err());
 }
@@ -178,9 +219,10 @@ fn validator_batch_remove() {
 #[test]
 fn halt_network() {
     let mut executor = FakeExecutor::from_genesis_file();
-    let libra_root_account = Account::new_libra_root();
-    let sender = AccountData::new(1_000_000, 10);
-    let receiver = AccountData::new(100_000, 10);
+    executor.set_golden_file(current_function_name!());
+    let diem_root_account = Account::new_diem_root();
+    let sender = executor.create_raw_account_data(1_000_000, 10);
+    let receiver = executor.create_raw_account_data(100_000, 10);
     executor.add_account_data(&sender);
     executor.add_account_data(&receiver);
 
@@ -214,9 +256,9 @@ fn halt_network() {
         &TransactionStatus::Discard(StatusCode::UNKNOWN_SCRIPT)
     );
 
-    // LibraRoot can still send transaction
+    // DiemRoot can still send transaction
     executor.execute_and_apply(
-        libra_root_account
+        diem_root_account
             .transaction()
             .script(encode_add_to_script_allow_list_script(script_hash, 0))
             .sequence_number(1)

@@ -1,4 +1,4 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{
@@ -64,7 +64,7 @@ impl Command for AccountCommandRecoverWallet {
         "<file_path>"
     }
     fn get_description(&self) -> &'static str {
-        "Recover Libra wallet from the file path"
+        "Recover Diem wallet from the file path"
     }
     fn execute(&self, client: &mut ClientProxy, params: &[&str]) {
         println!(">> Recovering Wallet");
@@ -78,7 +78,7 @@ impl Command for AccountCommandRecoverWallet {
                     println!("#{} address {}", data.index, hex::encode(data.address));
                 }
             }
-            Err(e) => report_error("Error recovering Libra wallet", e),
+            Err(e) => report_error("Error recovering Diem wallet", e),
         }
     }
 }
@@ -94,10 +94,10 @@ impl Command for AccountCommandWriteRecovery {
         "<file_path>"
     }
     fn get_description(&self) -> &'static str {
-        "Save Libra wallet mnemonic recovery seed to disk"
+        "Save Diem wallet mnemonic recovery seed to disk"
     }
     fn execute(&self, client: &mut ClientProxy, params: &[&str]) {
-        println!(">> Saving Libra wallet mnemonic recovery seed to disk");
+        println!(">> Saving Diem wallet mnemonic recovery seed to disk");
         match client.write_recovery(&params) {
             Ok(_) => println!("Saved mnemonic seed to disk"),
             Err(e) => report_error("Error writing mnemonic recovery seed to file", e),
@@ -131,23 +131,16 @@ impl Command for AccountCommandMint {
         "<receiver_account_ref_id>|<receiver_account_address> <number_of_coins> <currency_code> [use_base_units (default=false)]"
     }
     fn get_description(&self) -> &'static str {
-        "Send currency of the given type from the faucet address to the given recipient address. Creates an account at the recipient address if one does not already exist. Suffix 'b' is for blocking"
+        "Send currency of the given type from the faucet address to the given recipient address. Creates an account at the recipient address if one does not already exist."
     }
     fn execute(&self, client: &mut ClientProxy, params: &[&str]) {
         if params.len() < 4 || params.len() > 5 {
             println!("Invalid number of arguments for mint");
             return;
         }
-        let is_blocking = blocking_cmd(params[0]);
-        match client.mint_coins(&params, is_blocking) {
+        match client.mint_coins(&params, true) {
             Ok(_) => {
-                if is_blocking {
-                    println!("Finished sending coins from faucet!");
-                } else {
-                    // If this value is updated, it must also be changed in
-                    // setup_scripts/docker/mint/server.py
-                    println!("Request submitted to faucet");
-                }
+                println!("Finished sending coins from faucet!");
             }
             Err(e) => report_error("Error transferring coins from faucet", e),
         }

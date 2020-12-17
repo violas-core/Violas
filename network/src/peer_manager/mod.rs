@@ -1,4 +1,4 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
 //! The PeerManager module is responsible for establishing connections between Peers and for
@@ -25,7 +25,11 @@ use crate::{
 };
 use anyhow::format_err;
 use bytes::Bytes;
-use channel::{self, libra_channel};
+use channel::{self, diem_channel};
+use diem_config::network_id::NetworkContext;
+use diem_logger::prelude::*;
+use diem_network_address::NetworkAddress;
+use diem_types::PeerId;
 use futures::{
     channel::oneshot,
     future::{BoxFuture, FutureExt},
@@ -33,10 +37,6 @@ use futures::{
     sink::SinkExt,
     stream::{Fuse, FuturesUnordered, StreamExt},
 };
-use libra_config::network_id::NetworkContext;
-use libra_logger::prelude::*;
-use libra_network_address::NetworkAddress;
-use libra_types::PeerId;
 use netcore::transport::{ConnectionOrigin, Transport};
 use serde::Serialize;
 use std::{
@@ -124,19 +124,19 @@ impl std::fmt::Display for ConnectionNotification {
 /// from PeerManager.
 #[derive(Clone)]
 pub struct PeerManagerRequestSender {
-    inner: libra_channel::Sender<(PeerId, ProtocolId), PeerManagerRequest>,
+    inner: diem_channel::Sender<(PeerId, ProtocolId), PeerManagerRequest>,
 }
 
 /// Convenience wrapper which makes it easy to issue connection requests and await the responses
 /// from PeerManager.
 #[derive(Clone)]
 pub struct ConnectionRequestSender {
-    inner: libra_channel::Sender<PeerId, ConnectionRequest>,
+    inner: diem_channel::Sender<PeerId, ConnectionRequest>,
 }
 
 impl PeerManagerRequestSender {
     /// Construct a new PeerManagerRequestSender with a raw channel::Sender
-    pub fn new(inner: libra_channel::Sender<(PeerId, ProtocolId), PeerManagerRequest>) -> Self {
+    pub fn new(inner: diem_channel::Sender<(PeerId, ProtocolId), PeerManagerRequest>) -> Self {
         Self { inner }
     }
 
@@ -213,8 +213,8 @@ impl PeerManagerRequestSender {
 }
 
 impl ConnectionRequestSender {
-    /// Construct a new ConnectionRequestSender with a raw libra_channel::Sender
-    pub fn new(inner: libra_channel::Sender<PeerId, ConnectionRequest>) -> Self {
+    /// Construct a new ConnectionRequestSender with a raw diem_channel::Sender
+    pub fn new(inner: diem_channel::Sender<PeerId, ConnectionRequest>) -> Self {
         Self { inner }
     }
 
@@ -255,15 +255,15 @@ where
         PeerId,
         (
             ConnectionMetadata,
-            libra_channel::Sender<ProtocolId, NetworkRequest>,
+            diem_channel::Sender<ProtocolId, NetworkRequest>,
         ),
     >,
     /// Channel to receive requests from other actors.
-    requests_rx: libra_channel::Receiver<(PeerId, ProtocolId), PeerManagerRequest>,
+    requests_rx: diem_channel::Receiver<(PeerId, ProtocolId), PeerManagerRequest>,
     /// Upstream handlers for RPC and DirectSend protocols. The handlers are promised fair delivery
     /// of messages across (PeerId, ProtocolId).
     upstream_handlers:
-        HashMap<ProtocolId, libra_channel::Sender<(PeerId, ProtocolId), PeerManagerNotification>>,
+        HashMap<ProtocolId, diem_channel::Sender<(PeerId, ProtocolId), PeerManagerNotification>>,
     /// Channels to send NewPeer/LostPeer notifications to.
     connection_event_handlers: Vec<conn_notifs_channel::Sender>,
     /// Channel used to send Dial requests to the ConnectionHandler actor
@@ -271,7 +271,7 @@ where
     /// Sender for connection events.
     transport_notifs_tx: channel::Sender<TransportNotification<TSocket>>,
     /// Receiver for connection requests.
-    connection_reqs_rx: libra_channel::Receiver<PeerId, ConnectionRequest>,
+    connection_reqs_rx: diem_channel::Receiver<PeerId, ConnectionRequest>,
     /// Receiver for connection events.
     transport_notifs_rx: channel::Receiver<TransportNotification<TSocket>>,
     /// A map of outstanding disconnect requests.
@@ -287,6 +287,8 @@ where
     channel_size: usize,
     /// Max network frame size
     max_frame_size: usize,
+    /// Inbound connection limit separate of outbound connections
+    inbound_connection_limit: usize,
 }
 
 impl<TTransport, TSocket> PeerManager<TTransport, TSocket>
@@ -301,17 +303,18 @@ where
         transport: TTransport,
         network_context: Arc<NetworkContext>,
         listen_addr: NetworkAddress,
-        requests_rx: libra_channel::Receiver<(PeerId, ProtocolId), PeerManagerRequest>,
-        connection_reqs_rx: libra_channel::Receiver<PeerId, ConnectionRequest>,
+        requests_rx: diem_channel::Receiver<(PeerId, ProtocolId), PeerManagerRequest>,
+        connection_reqs_rx: diem_channel::Receiver<PeerId, ConnectionRequest>,
         upstream_handlers: HashMap<
             ProtocolId,
-            libra_channel::Sender<(PeerId, ProtocolId), PeerManagerNotification>,
+            diem_channel::Sender<(PeerId, ProtocolId), PeerManagerNotification>,
         >,
         connection_event_handlers: Vec<conn_notifs_channel::Sender>,
         channel_size: usize,
         max_concurrent_network_reqs: usize,
         max_concurrent_network_notifs: usize,
         max_frame_size: usize,
+        inbound_connection_limit: usize,
     ) -> Self {
         let (transport_notifs_tx, transport_notifs_rx) = channel::new(
             channel_size,
@@ -350,6 +353,7 @@ where
             max_concurrent_network_notifs,
             channel_size,
             max_frame_size,
+            inbound_connection_limit,
         }
     }
 
@@ -363,7 +367,7 @@ where
         let outbound = total.saturating_sub(inbound);
         let role = self.network_context.role().as_str();
 
-        counters::LIBRA_NETWORK_PEERS
+        counters::DIEM_NETWORK_PEERS
             .with_label_values(&[role, "connected"])
             .set(total as i64);
 
@@ -441,18 +445,44 @@ where
         self.sample_connected_peers();
         match event {
             TransportNotification::NewConnection(conn) => {
-                info!(
-                    NetworkSchema::new(&self.network_context)
-                        .connection_metadata_with_address(&conn.metadata),
-                    "{} New connection established: {}", self.network_context, conn.metadata
-                );
+                // TODO: Keep track of somewhere else to not take this hit in case of DDoS
+                let inbound_conns = self
+                    .active_peers
+                    .iter()
+                    .filter(|(_, (metadata, _))| metadata.origin == ConnectionOrigin::Inbound)
+                    .count();
 
-                // Update libra_network_peer counter.
-                self.add_peer(conn);
-                self.update_connected_peers_metrics();
+                // Reject excessive inbound connections by letting them just drop out of scope
+                // We control outbound connections with Connectivity manager before we even send them
+                // and we must allow connections that already exist to pass through tie breaking.
+                // TODO: Allow for trusted peers to still connect
+                if conn.metadata.origin == ConnectionOrigin::Outbound
+                    || self
+                        .active_peers
+                        .contains_key(&conn.metadata.remote_peer_id)
+                    || inbound_conns < self.inbound_connection_limit
+                {
+                    info!(
+                        NetworkSchema::new(&self.network_context)
+                            .connection_metadata_with_address(&conn.metadata),
+                        "{} New connection established: {}", self.network_context, conn.metadata
+                    );
+                    // Add new peer, updating counters and all
+                    self.add_peer(conn);
+                    self.update_connected_peers_metrics();
+                } else {
+                    info!(
+                        NetworkSchema::new(&self.network_context)
+                            .connection_metadata_with_address(&conn.metadata),
+                        "{} Connection rejected due to connection limit: {}",
+                        self.network_context,
+                        conn.metadata
+                    );
+                    self.disconnect(conn);
+                }
             }
             TransportNotification::Disconnected(lost_conn_metadata, reason) => {
-                // See: https://github.com/libra/libra/issues/3128#issuecomment-605351504 for
+                // See: https://github.com/diem/diem/issues/3128#issuecomment-605351504 for
                 // detailed reasoning on `Disconnected` events should be handled correctly.
                 info!(
                     NetworkSchema::new(&self.network_context)
@@ -668,6 +698,30 @@ where
         }
     }
 
+    fn disconnect(&mut self, connection: Connection<TSocket>) {
+        let network_context = self.network_context.clone();
+
+        // Close connection, and drop it
+        let drop_fut = async move {
+            let mut connection = connection;
+            let peer_id = connection.metadata.remote_peer_id;
+            if let Err(e) =
+                tokio::time::timeout(transport::TRANSPORT_TIMEOUT, connection.socket.close()).await
+            {
+                error!(
+                    NetworkSchema::new(&network_context)
+                        .remote_peer(&peer_id),
+                    error = %e,
+                    "{} Closing connection with Peer {} failed with error: {}",
+                    network_context,
+                    peer_id.short_str(),
+                    e
+                );
+            };
+        };
+        self.executor.spawn(drop_fut);
+    }
+
     fn add_peer(&mut self, connection: Connection<TSocket>) {
         let conn_meta = connection.metadata.clone();
         let peer_id = conn_meta.remote_peer_id;
@@ -701,28 +755,8 @@ where
                     self.network_context,
                     peer_id.short_str()
                 );
-                let network_context = self.network_context.clone();
                 // Drop the new connection and keep the one already stored in active_peers
-                let drop_fut = async move {
-                    let mut connection = connection;
-                    if let Err(e) = tokio::time::timeout(
-                        transport::TRANSPORT_TIMEOUT,
-                        connection.socket.close(),
-                    )
-                    .await
-                    {
-                        error!(
-                            NetworkSchema::new(&network_context)
-                                .remote_peer(&peer_id),
-                            error = %e,
-                            "{} Closing connection with Peer {} failed with error: {}",
-                            network_context,
-                            peer_id.short_str(),
-                            e
-                        );
-                    };
-                };
-                self.executor.spawn(drop_fut);
+                self.disconnect(connection);
                 return;
             }
         }
@@ -778,7 +812,7 @@ where
     fn spawn_peer_network_events_handler(
         &self,
         peer_id: PeerId,
-        network_events: libra_channel::Receiver<ProtocolId, NetworkNotification>,
+        network_events: diem_channel::Receiver<ProtocolId, NetworkNotification>,
     ) {
         let mut upstream_handlers = self.upstream_handlers.clone();
         let network_context = self.network_context.clone();
@@ -802,14 +836,14 @@ where
         peer_id: PeerId,
         upstream_handlers: &mut HashMap<
             ProtocolId,
-            libra_channel::Sender<(PeerId, ProtocolId), PeerManagerNotification>,
+            diem_channel::Sender<(PeerId, ProtocolId), PeerManagerNotification>,
         >,
     ) {
         match inbound_event {
             NetworkNotification::RecvMessage(msg) => {
                 let protocol_id = msg.protocol_id;
                 if let Some(handler) = upstream_handlers.get_mut(&protocol_id) {
-                    // Send over libra channel for fairness.
+                    // Send over diem channel for fairness.
                     if let Err(send_err) = handler.push(
                         (peer_id, protocol_id),
                         PeerManagerNotification::RecvMessage(peer_id, msg),
@@ -835,7 +869,7 @@ where
             NetworkNotification::RecvRpc(rpc_req) => {
                 let protocol_id = rpc_req.protocol_id;
                 if let Some(handler) = upstream_handlers.get_mut(&protocol_id) {
-                    // Send over libra channel for fairness.
+                    // Send over diem channel for fairness.
                     if let Err(err) = handler.push(
                         (peer_id, protocol_id),
                         PeerManagerNotification::RecvRpc(peer_id, rpc_req),

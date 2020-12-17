@@ -1,4 +1,4 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{
@@ -12,24 +12,24 @@ use crate::{
     SynchronizerState,
 };
 use anyhow::{bail, ensure, format_err, Result};
-use fail::fail_point;
-use futures::{
-    channel::{mpsc, oneshot},
-    stream::select_all,
-    StreamExt,
-};
-use libra_config::{
+use diem_config::{
     config::{PeerNetworkId, RoleType, StateSyncConfig, UpstreamConfig},
     network_id::NodeNetworkId,
 };
-use libra_logger::prelude::*;
-use libra_mempool::{CommitNotification, CommitResponse, CommittedTransaction};
-use libra_types::{
+use diem_logger::prelude::*;
+use diem_mempool::{CommitNotification, CommitResponse, CommittedTransaction};
+use diem_types::{
     contract_event::ContractEvent,
     epoch_change::Verifier,
     ledger_info::LedgerInfoWithSignatures,
     transaction::{Transaction, TransactionListWithProof, Version},
     waypoint::Waypoint,
+};
+use fail::fail_point;
+use futures::{
+    channel::{mpsc, oneshot},
+    stream::select_all,
+    StreamExt,
 };
 use network::protocols::network::Event;
 use std::{
@@ -122,8 +122,8 @@ impl PendingLedgerInfos {
         let highest_committed_li = sync_state.highest_local_li.ledger_info().version();
         let highest_synced = sync_state.highest_version_in_local_storage();
 
-        // prune any pending LIs that were successfully committed
-        self.pending_li_queue = self.pending_li_queue.split_off(&(highest_committed_li + 1));
+        // prune any pending LIs that are older than the latest local synced version
+        self.pending_li_queue = self.pending_li_queue.split_off(&(highest_synced + 1));
 
         // pick target LI to use for sending ProgressiveTargetType requests.
         self.target_li = if highest_committed_li == highest_synced {
@@ -143,6 +143,10 @@ impl PendingLedgerInfos {
 
     fn target_li(&self) -> Option<LedgerInfoWithSignatures> {
         self.target_li.clone()
+    }
+
+    fn highest_version(&self) -> Option<Version> {
+        self.pending_li_queue.keys().last().cloned()
     }
 }
 
@@ -248,6 +252,7 @@ impl<T: ExecutorProxyTrait> SyncCoordinator<T> {
         let mut network_events = select_all(events).fuse();
 
         loop {
+            let _timer = counters::MAIN_LOOP.start_timer();
             ::futures::select! {
                 msg = self.client_events.select_next_some() => {
                     match msg {
@@ -454,12 +459,21 @@ impl<T: ExecutorProxyTrait> SyncCoordinator<T> {
         let synced_version = self.local_state.highest_version_in_local_storage();
         let committed_version = self.local_state.highest_local_li.ledger_info().version();
         let local_epoch = self.local_state.epoch();
-        counters::VERSION
-            .with_label_values(&[counters::SYNCED_VERSION_LABEL])
-            .set(synced_version as i64);
-        counters::VERSION
-            .with_label_values(&[counters::COMMITTED_VERSION_LABEL])
-            .set(committed_version as i64);
+        counters::set_version(counters::VersionType::Synced, synced_version);
+        counters::set_version(counters::VersionType::Committed, committed_version);
+        counters::set_timestamp(
+            counters::TimestampType::Synced,
+            self.executor_proxy.get_version_timestamp(synced_version)?,
+        );
+        counters::set_timestamp(
+            counters::TimestampType::Committed,
+            self.executor_proxy
+                .get_version_timestamp(committed_version)?,
+        );
+        counters::set_timestamp(
+            counters::TimestampType::Real,
+            diem_infallible::duration_since_epoch().as_micros() as u64,
+        );
         counters::EPOCH.set(local_epoch as i64);
         debug!(LogSchema::new(LogEntry::LocalState)
             .local_li_version(committed_version)
@@ -731,6 +745,13 @@ impl<T: ExecutorProxyTrait> SyncCoordinator<T> {
             None
         };
         if let Some(li) = end_of_epoch_li.as_ref() {
+            ensure!(
+                li.ledger_info().version() >= request.known_version,
+                "waypoint request's current_epoch (epoch {}, version {}) < waypoint request's known_version {}",
+                li.ledger_info().epoch(),
+                li.ledger_info().version(),
+                request.known_version,
+            );
             let num_txns_until_end_of_epoch = li.ledger_info().version() - request.known_version;
             limit = std::cmp::min(limit, num_txns_until_end_of_epoch);
         }
@@ -826,6 +847,7 @@ impl<T: ExecutorProxyTrait> SyncCoordinator<T> {
         debug!(
             LogSchema::event_log(LogEntry::ProcessChunkResponse, LogEvent::Received)
                 .chunk_resp(&response)
+                .peer(peer)
         );
         fail_point!("state_sync::apply_chunk", |_| {
             Err(anyhow::anyhow!("Injected error in apply_chunk"))
@@ -1043,12 +1065,12 @@ impl<T: ExecutorProxyTrait> SyncCoordinator<T> {
         // Optimistically fetch the next chunk.
         let new_version =
             self.local_state.highest_version_in_local_storage() + txn_list_with_proof.len() as u64;
-        // The epoch in the optimistic request should be the next epoch if the current chunk
+        // The epoch in the optimistic request (= new_epoch) should be the next epoch if the current chunk
         // is the last one in its epoch.
         let new_epoch = end_of_epoch_li
             .as_ref()
             .map_or(self.local_state.epoch(), |li| {
-                if li.ledger_info().version() == new_version {
+                if li.ledger_info().version() == new_version && li.ledger_info().ends_epoch() {
                     self.local_state.epoch() + 1
                 } else {
                     self.local_state.epoch()
@@ -1064,6 +1086,22 @@ impl<T: ExecutorProxyTrait> SyncCoordinator<T> {
             }
         }
 
+        // verify the end-of-epoch LI for the following before passing it to execution:
+        // * verify end-of-epoch-li against local state
+        // * verify end-of-epoch-li's version corresponds to end-of-chunk version before
+        // passing it to execution
+        // * Executor expects that when it is passed an end-of-epoch LI, it is going to execute/commit
+        // transactions leading up to that end-of-epoch LI
+        // * verify end-of-epoch-li actually ends an epoch
+        let end_of_epoch_li = end_of_epoch_li
+            .map(|li| {
+                // verify end-of-epoch-li against local state
+                self.local_state.trusted_epoch.verify(&li).map(|_| li)
+            })
+            .transpose()?
+            .filter(|li| {
+                li.ledger_info().version() == new_version && li.ledger_info().ends_epoch()
+            });
         self.waypoint.verify(waypoint_li.ledger_info())?;
         self.validate_and_store_chunk(txn_list_with_proof, waypoint_li, end_of_epoch_li)
     }
@@ -1196,6 +1234,15 @@ impl<T: ExecutorProxyTrait> SyncCoordinator<T> {
             }
         };
 
+        let target_version = target
+            .version()
+            .unwrap_or_else(|| known_version.wrapping_add(1));
+        counters::set_version(counters::VersionType::Target, target_version);
+        let highest_version = self
+            .pending_ledger_infos
+            .highest_version()
+            .unwrap_or(target_version);
+        counters::set_version(counters::VersionType::Highest, highest_version);
         let req = GetChunkRequest::new(known_version, known_epoch, self.config.chunk_limit, target);
         self.request_manager.send_chunk_request(req)
     }

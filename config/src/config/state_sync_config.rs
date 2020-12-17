@@ -1,4 +1,4 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
 use serde::{Deserialize, Serialize};
@@ -30,7 +30,7 @@ pub struct StateSyncConfig {
 impl Default for StateSyncConfig {
     fn default() -> Self {
         Self {
-            chunk_limit: 250,
+            chunk_limit: 1000,
             long_poll_timeout_ms: 10_000,
             max_chunk_limit: 1000,
             max_pending_li_limit: 1000,

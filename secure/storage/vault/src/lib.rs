@@ -1,11 +1,11 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
 #![forbid(unsafe_code)]
 
 pub mod dev;
 
-use libra_crypto::{
+use diem_crypto::{
     ed25519::{Ed25519PrivateKey, Ed25519PublicKey, Ed25519Signature, ED25519_PRIVATE_KEY_LENGTH},
     PrivateKey,
 };
@@ -49,8 +49,8 @@ impl From<base64::DecodeError> for Error {
     }
 }
 
-impl From<libra_crypto::traits::CryptoMaterialError> for Error {
-    fn from(error: libra_crypto::traits::CryptoMaterialError) -> Self {
+impl From<diem_crypto::traits::CryptoMaterialError> for Error {
+    fn from(error: diem_crypto::traits::CryptoMaterialError) -> Self {
         Self::SerializationError(format!("{}", error))
     }
 }
@@ -695,7 +695,7 @@ pub fn process_unsealed_response(resp: Response) -> Result<bool, Error> {
 ///       "name":"local_owner_key__consensus",
 ///       "keys":{
 ///          "1":{
-///             "key":"C3R5O8uAfrgv7sJmCMSLEp1R2HmkZtwdfGT/xVvZVvgCGo6TkWga/ojplJFMM+i2805X3CV7IRyNLCSJcr4AqQ==",
+///             "key":"C3R5O8uAfrgv7sJmCMSLEp1R2HmkZtwdfGT/xVvZVvgCGo6TkWga/ojplJFMM+i2805X3CV7IRyNBCSJcr4AqQ==",
 ///             "hmac_key":null,
 ///             "time":"2020-05-29T06:27:38.1233515Z",
 ///             "ec_x":null,
