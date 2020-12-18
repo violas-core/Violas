@@ -9,12 +9,13 @@
 -  [Resource `Reserve`](#0x1_VLS_Reserve)
 -  [Struct `Receiver`](#0x1_VLS_Receiver)
 -  [Constants](#@Constants_0)
--  [Function `VIOLAS_ASSOCIATION_ADDRESS`](#0x1_VLS_VIOLAS_ASSOCIATION_ADDRESS)
 -  [Function `initialize`](#0x1_VLS_initialize)
 -  [Function `initialize_timestamp`](#0x1_VLS_initialize_timestamp)
 -  [Function `is_vls`](#0x1_VLS_is_vls)
 -  [Function `mint`](#0x1_VLS_mint)
 -  [Function `mine`](#0x1_VLS_mine)
+-  [Function `VLS_TRASH_ADDRESS`](#0x1_VLS_VLS_TRASH_ADDRESS)
+-  [Function `VIOLAS_ASSOCIATION_ADDRESS`](#0x1_VLS_VIOLAS_ASSOCIATION_ADDRESS)
 -  [Function `get_receivers`](#0x1_VLS_get_receivers)
 -  [Function `unpack_receiver`](#0x1_VLS_unpack_receiver)
 
@@ -226,31 +227,6 @@ The <code><a href="VLS.md#0x1_VLS_Reserve">Reserve</a></code> resource is in an 
 
 
 
-<a name="0x1_VLS_VIOLAS_ASSOCIATION_ADDRESS"></a>
-
-## Function `VIOLAS_ASSOCIATION_ADDRESS`
-
-The address of Violas association account
-
-
-<pre><code><b>public</b> <b>fun</b> <a href="VLS.md#0x1_VLS_VIOLAS_ASSOCIATION_ADDRESS">VIOLAS_ASSOCIATION_ADDRESS</a>(): address
-</code></pre>
-
-
-
-<details>
-<summary>Implementation</summary>
-
-
-<pre><code><b>public</b> <b>fun</b> <a href="VLS.md#0x1_VLS_VIOLAS_ASSOCIATION_ADDRESS">VIOLAS_ASSOCIATION_ADDRESS</a>(): address {
-    0x564C5302  //'V' 'L' 'S' 02
-}
-</code></pre>
-
-
-
-</details>
-
 <a name="0x1_VLS_initialize"></a>
 
 ## Function `initialize`
@@ -431,7 +407,7 @@ Returns true if CoinType is VLS.
 <b>modifies</b> <b>global</b>&lt;<a href="VLS.md#0x1_VLS_Reserve">Reserve</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_DIEM_ROOT_ADDRESS">CoreAddresses::DIEM_ROOT_ADDRESS</a>());
 <b>modifies</b> <b>global</b>&lt;<a href="Diem.md#0x1_Diem_CurrencyInfo">Diem::CurrencyInfo</a>&lt;<a href="VLS.md#0x1_VLS">VLS</a>&gt;&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_CURRENCY_INFO_ADDRESS">CoreAddresses::CURRENCY_INFO_ADDRESS</a>());
 <b>include</b> <a href="VLS.md#0x1_VLS_CreateAbortsIf">CreateAbortsIf</a>;
-<a name="0x1_VLS_reserve$10"></a>
+<a name="0x1_VLS_reserve$11"></a>
 <b>let</b> reserve = <b>global</b>&lt;<a href="VLS.md#0x1_VLS_Reserve">Reserve</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_DIEM_ROOT_ADDRESS">CoreAddresses::DIEM_ROOT_ADDRESS</a>());
 <b>ensures</b> <b>exists</b>&lt;<a href="VLS.md#0x1_VLS_Reserve">Reserve</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_DIEM_ROOT_ADDRESS">CoreAddresses::DIEM_ROOT_ADDRESS</a>());
 <b>include</b> <a href="Diem.md#0x1_Diem_MintEnsures">Diem::MintEnsures</a>&lt;<a href="VLS.md#0x1_VLS">VLS</a>&gt;{value: amount_vls};
@@ -445,7 +421,7 @@ Returns true if CoinType is VLS.
 
 <pre><code><b>schema</b> <a href="VLS.md#0x1_VLS_CreateAbortsIf">CreateAbortsIf</a> {
     amount_vls: u64;
-    <a name="0x1_VLS_reserve$9"></a>
+    <a name="0x1_VLS_reserve$10"></a>
     <b>let</b> reserve = <b>global</b>&lt;<a href="VLS.md#0x1_VLS_Reserve">Reserve</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_DIEM_ROOT_ADDRESS">CoreAddresses::DIEM_ROOT_ADDRESS</a>());
     <b>aborts_if</b> amount_vls == 0 <b>with</b> <a href="Errors.md#0x1_Errors_INVALID_ARGUMENT">Errors::INVALID_ARGUMENT</a>;
     <b>include</b> <a href="DiemTimestamp.md#0x1_DiemTimestamp_AbortsIfNotOperating">DiemTimestamp::AbortsIfNotOperating</a>;
@@ -515,6 +491,56 @@ mine VLS, total amount 100,000,000
 
 </details>
 
+<a name="0x1_VLS_VLS_TRASH_ADDRESS"></a>
+
+## Function `VLS_TRASH_ADDRESS`
+
+The address of Violas association account
+
+
+<pre><code><b>public</b> <b>fun</b> <a href="VLS.md#0x1_VLS_VLS_TRASH_ADDRESS">VLS_TRASH_ADDRESS</a>(): address
+</code></pre>
+
+
+
+<details>
+<summary>Implementation</summary>
+
+
+<pre><code><b>public</b> <b>fun</b> <a href="VLS.md#0x1_VLS_VLS_TRASH_ADDRESS">VLS_TRASH_ADDRESS</a>(): address {
+    0x564C5300  //'V' 'L' 'S' 00
+}
+</code></pre>
+
+
+
+</details>
+
+<a name="0x1_VLS_VIOLAS_ASSOCIATION_ADDRESS"></a>
+
+## Function `VIOLAS_ASSOCIATION_ADDRESS`
+
+The address of Violas association account
+
+
+<pre><code><b>public</b> <b>fun</b> <a href="VLS.md#0x1_VLS_VIOLAS_ASSOCIATION_ADDRESS">VIOLAS_ASSOCIATION_ADDRESS</a>(): address
+</code></pre>
+
+
+
+<details>
+<summary>Implementation</summary>
+
+
+<pre><code><b>public</b> <b>fun</b> <a href="VLS.md#0x1_VLS_VIOLAS_ASSOCIATION_ADDRESS">VIOLAS_ASSOCIATION_ADDRESS</a>(): address {
+    0x564C5302  //'V' 'L' 'S' 02
+}
+</code></pre>
+
+
+
+</details>
+
 <a name="0x1_VLS_get_receivers"></a>
 
 ## Function `get_receivers`
@@ -535,7 +561,7 @@ retrieve all receiver' address and distribution ratio
     <b>let</b> receivers = <a href="Vector.md#0x1_Vector_empty">Vector::empty</a>&lt;<a href="VLS.md#0x1_VLS_Receiver">Receiver</a>&gt;();
 
     <b>let</b> element1 = <a href="VLS.md#0x1_VLS_Receiver">Receiver</a> { addr: 0x564C5301, ratio: <a href="FixedPoint32.md#0x1_FixedPoint32_create_from_rational">FixedPoint32::create_from_rational</a>(71,100) };   //<a href="VLS.md#0x1_VLS">VLS</a>-COMM, 'V' 'L' 'S' 01
-    <b>let</b> element2 = <a href="VLS.md#0x1_VLS_Receiver">Receiver</a> { addr: <a href="VLS.md#0x1_VLS_VIOLAS_ASSOCIATION_ADDRESS">VIOLAS_ASSOCIATION_ADDRESS</a>(), ratio: <a href="FixedPoint32.md#0x1_FixedPoint32_create_from_rational">FixedPoint32::create_from_rational</a>(15,100) };   //<a href="VLS.md#0x1_VLS">VLS</a>-ASSOCA, 'V' 'L' 'S' 02
+    <b>let</b> element2 = <a href="VLS.md#0x1_VLS_Receiver">Receiver</a> { addr: 0x564C5302, ratio: <a href="FixedPoint32.md#0x1_FixedPoint32_create_from_rational">FixedPoint32::create_from_rational</a>(15,100) };   //<a href="VLS.md#0x1_VLS">VLS</a>-ASSOCA, 'V' 'L' 'S' 02
     <b>let</b> element3 = <a href="VLS.md#0x1_VLS_Receiver">Receiver</a> { addr: 0x564C5303, ratio: <a href="FixedPoint32.md#0x1_FixedPoint32_create_from_rational">FixedPoint32::create_from_rational</a>(12,100) };   //<a href="VLS.md#0x1_VLS">VLS</a>-TEAM, 'V' 'L' 'S' 03
     <b>let</b> element4 = <a href="VLS.md#0x1_VLS_Receiver">Receiver</a> { addr: 0x564C5304, ratio: <a href="FixedPoint32.md#0x1_FixedPoint32_create_from_rational">FixedPoint32::create_from_rational</a>(1,100)  };   //<a href="VLS.md#0x1_VLS">VLS</a>-ADVS, 'V' 'L' 'S' 04
     <b>let</b> element5 = <a href="VLS.md#0x1_VLS_Receiver">Receiver</a> { addr: 0x564C5305, ratio: <a href="FixedPoint32.md#0x1_FixedPoint32_create_from_rational">FixedPoint32::create_from_rational</a>(1,100)  };   //<a href="VLS.md#0x1_VLS">VLS</a>-OPEN, 'V' 'L' 'S' 05

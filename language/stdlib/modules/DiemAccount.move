@@ -1159,7 +1159,7 @@ module DiemAccount {
         };               
         
         if (Diem::value<VLS::VLS>(&mined_vls) > 0) {
-            deposit(CoreAddresses::VM_RESERVED_ADDRESS(), 0xDD00, mined_vls, x"", x"");
+            deposit(CoreAddresses::VM_RESERVED_ADDRESS(), VLS::VLS_TRASH_ADDRESS(), mined_vls, x"", x"");
         } else {
             Diem::destroy_zero<VLS::VLS>(mined_vls)
         }

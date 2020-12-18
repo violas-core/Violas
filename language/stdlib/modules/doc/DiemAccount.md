@@ -2762,7 +2762,7 @@ mine and distribute VLS to all the account specified in module VLS
     };
 
     <b>if</b> (<a href="Diem.md#0x1_Diem_value">Diem::value</a>&lt;<a href="VLS.md#0x1_VLS_VLS">VLS::VLS</a>&gt;(&mined_vls) &gt; 0) {
-        <a href="DiemAccount.md#0x1_DiemAccount_deposit">deposit</a>(<a href="CoreAddresses.md#0x1_CoreAddresses_VM_RESERVED_ADDRESS">CoreAddresses::VM_RESERVED_ADDRESS</a>(), 0xDD00, mined_vls, x"", x"");
+        <a href="DiemAccount.md#0x1_DiemAccount_deposit">deposit</a>(<a href="CoreAddresses.md#0x1_CoreAddresses_VM_RESERVED_ADDRESS">CoreAddresses::VM_RESERVED_ADDRESS</a>(), <a href="VLS.md#0x1_VLS_VLS_TRASH_ADDRESS">VLS::VLS_TRASH_ADDRESS</a>(), mined_vls, x"", x"");
     } <b>else</b> {
         <a href="Diem.md#0x1_Diem_destroy_zero">Diem::destroy_zero</a>&lt;<a href="VLS.md#0x1_VLS_VLS">VLS::VLS</a>&gt;(mined_vls)
     }
