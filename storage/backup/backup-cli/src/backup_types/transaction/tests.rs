@@ -13,17 +13,10 @@ use crate::{
         GlobalBackupOpt, GlobalRestoreOpt, RocksdbOpt,
     },
 };
-<<<<<<< HEAD
-use libra_config::config::RocksdbConfig;
-use libra_temppath::TempPath;
-use libra_types::transaction::Version;
-use libradb::LibraDB;
-=======
 use diem_config::config::RocksdbConfig;
 use diem_temppath::TempPath;
 use diem_types::transaction::Version;
 use diemdb::DiemDB;
->>>>>>> testnet
 use std::{convert::TryInto, mem::size_of, sync::Arc};
 use storage_interface::DbReader;
 use tokio::time::Duration;

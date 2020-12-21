@@ -13,15 +13,9 @@ use crate::{
     },
 };
 use backup_service::start_backup_service;
-<<<<<<< HEAD
-use libra_config::{config::RocksdbConfig, utils::get_available_port};
-use libra_temppath::TempPath;
-use libradb::LibraDB;
-=======
 use diem_config::{config::RocksdbConfig, utils::get_available_port};
 use diem_temppath::TempPath;
 use diemdb::DiemDB;
->>>>>>> testnet
 use std::{
     convert::TryInto,
     net::{IpAddr, Ipv4Addr, SocketAddr},

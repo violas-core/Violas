@@ -13,11 +13,6 @@ Please add the API change in the following format:
 
 ```
 
-<<<<<<< HEAD
-## 2020-10-15 Add `accumulator_root_hash` to `get_metadata` method response
-
-- [See PR #6536](https://github.com/libra/libra/pull/6536)
-=======
 # 2020-12-07 Add a `X-Diem-Chain-Id`, `X-Diem-Ledger-Version` and `X-Diem-Ledger-TimestampUsec` to http response header
 
 The added headers are same with JSON-RPC response json same name fields. They are added for client to know chain id and server's latest block version and timestamp without decoding body json.
@@ -36,7 +31,6 @@ This allows to create verifying clients that do not need to blindly trust the fu
 ## 2020-10-15 Add `accumulator_root_hash` to `get_metadata` method response
 
 - [See PR #6536](https://github.com/diem/diem/pull/6536)
->>>>>>> testnet
 
 
 ## 2020-10-05 Rename `upgradeevent` to `admintransaction` event

@@ -228,8 +228,7 @@ impl ClientProxy {
 
     /// Returns the account index that should be used by user to reference this account
     pub fn create_next_account(
-        &mut self,
-        //address: Option<AccountAddress>,
+        &mut self,        
         para: &str,
         sync_with_validator: bool,
     ) -> Result<AddressAndIndex> {
@@ -1689,7 +1688,7 @@ mod tests {
         )
         .unwrap();
         for _ in 0..count {
-            accounts.push(client_proxy.create_next_account(false).unwrap());
+            accounts.push(client_proxy.create_next_account("", false).unwrap());
         }
 
         (client_proxy, accounts)

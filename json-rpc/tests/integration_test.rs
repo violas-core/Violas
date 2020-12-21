@@ -8,17 +8,11 @@ use diem_crypto::hash::CryptoHash;
 use diem_types::{
     access_path::AccessPath,
     account_address::AccountAddress,
-<<<<<<< HEAD
-    account_config::coin1_tmp_tag,
-    ledger_info::LedgerInfoWithSignatures,
-    transaction::{ChangeSet, Transaction, TransactionPayload, WriteSetPayload},
-=======
     account_config::xus_tag,
     epoch_change::EpochChangeProof,
     ledger_info::LedgerInfoWithSignatures,
     proof::TransactionAccumulatorRangeProof,
     transaction::{ChangeSet, Transaction, TransactionInfo, TransactionPayload, WriteSetPayload},
->>>>>>> testnet
     write_set::{WriteOp, WriteSet, WriteSetMut},
 };
 use std::ops::Deref;
@@ -96,17 +90,6 @@ fn create_test_cases() -> Vec<Test> {
                 // for testing chain id, we init genesis with VMPublishingOption#open
                 assert_eq!(metadata["script_hash_allow_list"], json!([]));
                 assert_eq!(metadata["module_publishing_allowed"], true);
-<<<<<<< HEAD
-                assert_eq!(metadata["libra_version"], 1);
-                assert_ne!(resp.libra_ledger_timestampusec, 0);
-                assert_ne!(resp.libra_ledger_version, 0);
-
-                // prove the accumulator_root_hash
-                let sp_resp = env.send("get_state_proof", json!([resp.libra_ledger_version]));
-                let state_proof = sp_resp.result.unwrap();
-                let info_hex = state_proof["ledger_info_with_signatures"].as_str().unwrap();
-                let info:LedgerInfoWithSignatures = lcs::from_bytes(&hex::decode(&info_hex).unwrap()).unwrap();
-=======
                 assert_eq!(metadata["diem_version"], 1);
                 assert_eq!(metadata["dual_attestation_limit"], 1000000000);
                 assert_ne!(resp.diem_ledger_timestampusec, 0);
@@ -117,7 +100,6 @@ fn create_test_cases() -> Vec<Test> {
                 let state_proof = sp_resp.result.unwrap();
                 let info_hex = state_proof["ledger_info_with_signatures"].as_str().unwrap();
                 let info:LedgerInfoWithSignatures = bcs::from_bytes(&hex::decode(&info_hex).unwrap()).unwrap();
->>>>>>> testnet
                 let expected_hash = info.deref().ledger_info().transaction_accumulator_hash().to_hex();
                 assert_eq!(expected_hash, metadata["accumulator_root_hash"].as_str().unwrap());
             },
@@ -130,11 +112,7 @@ fn create_test_cases() -> Vec<Test> {
                 // no data provided for the following fields when requesting older version
                 assert_eq!(metadata["script_hash_allow_list"], json!(null));
                 assert_eq!(metadata["module_publishing_allowed"], json!(null));
-<<<<<<< HEAD
-                assert_eq!(metadata["libra_version"], json!(null));
-=======
                 assert_eq!(metadata["diem_version"], json!(null));
->>>>>>> testnet
             },
         },
         Test {

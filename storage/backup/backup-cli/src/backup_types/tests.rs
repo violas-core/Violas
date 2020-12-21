@@ -23,13 +23,6 @@ use diem_temppath::TempPath;
 use diem_types::transaction::Version;
 use diemdb::DiemDB;
 use executor_test_helpers::integration_test_impl::test_execution_with_storage_impl;
-<<<<<<< HEAD
-use libra_config::config::RocksdbConfig;
-use libra_temppath::TempPath;
-use libra_types::transaction::Version;
-use libradb::LibraDB;
-=======
->>>>>>> testnet
 use proptest::prelude::*;
 use std::{convert::TryInto, sync::Arc};
 use storage_interface::DbReader;

@@ -165,9 +165,9 @@ default-members = [
     "client/swiss-knife",
     "execution/db-bootstrapper",
     "execution/execution-correctness",
-    "language/compiler",
+    "language/compiler",                                                                    
     "language/move-prover",
-    "language/move-prover/diagen",
+    "language/move-prover/diagen",                                                                                  
     "language/stdlib",
     "language/move-lang",
     "language/tools/disassembler",
@@ -183,6 +183,8 @@ default-members = [
     "storage/backup/backup-cli",
     "storage/diemsum",
     "storage/inspector",
+    "testsuite/diem-swarm",
+    "testsuite/cli",
 ]
 
 [profile.release]

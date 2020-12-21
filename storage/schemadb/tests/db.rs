@@ -79,22 +79,14 @@ fn get_column_families() -> Vec<ColumnFamilyName> {
     ]
 }
 
-<<<<<<< HEAD
-fn open_db(dir: &libra_temppath::TempPath) -> DB {
-=======
 fn open_db(dir: &diem_temppath::TempPath) -> DB {
->>>>>>> testnet
     let mut db_opts = rocksdb::Options::default();
     db_opts.create_if_missing(true);
     db_opts.create_missing_column_families(true);
     DB::open(&dir.path(), "test", get_column_families(), &db_opts).expect("Failed to open DB.")
 }
 
-<<<<<<< HEAD
-fn open_db_read_only(dir: &libra_temppath::TempPath) -> DB {
-=======
 fn open_db_read_only(dir: &diem_temppath::TempPath) -> DB {
->>>>>>> testnet
     DB::open_readonly(
         &dir.path(),
         "test",
@@ -104,11 +96,7 @@ fn open_db_read_only(dir: &diem_temppath::TempPath) -> DB {
     .expect("Failed to open DB.")
 }
 
-<<<<<<< HEAD
-fn open_db_as_secondary(dir: &libra_temppath::TempPath, dir_sec: &libra_temppath::TempPath) -> DB {
-=======
 fn open_db_as_secondary(dir: &diem_temppath::TempPath, dir_sec: &diem_temppath::TempPath) -> DB {
->>>>>>> testnet
     DB::open_as_secondary(
         &dir.path(),
         &dir_sec.path(),
