@@ -64,7 +64,11 @@ fn main() {
         Some(
             DiemSwarm::configure_fn_swarm(
                 args.diem_node.as_ref(),
-                None, /* config dir */
+                if let Some(dir) = args.config_dir.clone() {
+                    Some(dir + "/full_nodes")
+                } else {
+                    None
+                }, /* config dir */
                 None,
                 &validator_swarm.config,
                 FullnodeType::ValidatorFullnode,

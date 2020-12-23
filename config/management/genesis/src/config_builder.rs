@@ -166,9 +166,11 @@ impl<T: AsRef<Path>> ValidatorBuilder<T> {
                             .push(Protocol::Tcp(port + 1)); // validator port + 1
 
                         // update configuration
+                        //validator_network.listen_address = validator_network_address.clone();
                         validator_network.listen_address =
                             NetworkAddress::from(Protocol::Ip4("0.0.0.0".parse().unwrap()))
                                 .push(Protocol::Tcp(port));
+                        //fullnode_network.listen_address = fullnode_network_address.clone();
                         fullnode_network.listen_address =
                             NetworkAddress::from(Protocol::Ip4("0.0.0.0".parse().unwrap()))
                                 .push(Protocol::Tcp(port + 1));
@@ -324,6 +326,7 @@ impl FullnodeBuilder {
                 n.network_id == NetworkId::Public && n.discovery_method != DiscoveryMethod::Onchain
             })
             .expect("vfn missing external public network in config");
+
         let v_vfn = &mut validator_config.full_node_networks[0];
         pfn.identity = v_vfn.identity.clone();
         let temp_listen = v_vfn.listen_address.clone();
@@ -332,7 +335,6 @@ impl FullnodeBuilder {
 
         // Now let's prepare the full nodes internal network to communicate with the validators
         // internal network
-
         let v_vfn_network_address = v_vfn.listen_address.clone();
         let v_vfn_pub_key = v_vfn.identity_key().public_key();
         let v_vfn_network_address =
