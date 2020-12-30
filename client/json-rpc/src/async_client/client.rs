@@ -171,6 +171,15 @@ impl<R: RetryStrategy> Client<R> {
         self.send(Request::get_events(key, start_seq, limit)).await
     }
 
+    pub async fn get_events_ex(
+        &self,
+        key: &str,
+        start_seq: u64,
+        limit: u64,
+    ) -> Result<Response<Vec<crate::views::EventView>>, Error> {
+        self.send(Request::get_events(key, start_seq, limit)).await
+    }
+
     pub async fn get_currencies(&self) -> Result<Response<Vec<jsonrpc::CurrencyInfo>>, Error> {
         self.send(Request::get_currencies()).await
     }
