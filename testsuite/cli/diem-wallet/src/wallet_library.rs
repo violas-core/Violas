@@ -155,12 +155,20 @@ impl WalletLibrary {
         Ok(ret)
     }
 
-    /// Returns privite key for a account index
+    /// Returns privite key by  a child number
     ///
     pub fn get_private_key_by_child_num(&self, child_number: ChildNumber) -> Result<Ed25519PrivateKey> {
         let child = self.key_factory.private_child(child_number)?;
         Ok(child.get_private_key())
     }
+    ///
+    /// Returns privite key by account index
+    ///
+    pub fn get_private_key_by_index(&self, index: u64) -> Result<Ed25519PrivateKey> {
+        let child = self.key_factory.private_child(ChildNumber::new(index))?;
+        Ok(child.get_private_key())
+    }
+
     ///
     /// Simple public function that allows to sign a Libra RawTransaction with the PrivateKey
     /// associated to a particular AccountAddress. If the PrivateKey associated to an

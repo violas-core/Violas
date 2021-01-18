@@ -228,7 +228,7 @@ impl ClientProxy {
 
     /// Returns the account index that should be used by user to reference this account
     pub fn create_next_account(
-        &mut self,        
+        &mut self,
         para: &str,
         sync_with_validator: bool,
     ) -> Result<AddressAndIndex> {
@@ -271,7 +271,7 @@ impl ClientProxy {
                     "User account index: {}, address: {}, private_key: {:?}, sequence number: {}, status: {:?}",
                     index,
                     hex::encode(&account.address),
-                    hex::encode(&self.wallet.get_private_key(&account.address).unwrap().to_bytes()),
+                    hex::encode(&self.wallet.get_private_key_by_index(*index as u64).unwrap().to_bytes()),
                     account.sequence_number,
                     account.status,
                 );
