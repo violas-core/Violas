@@ -7,7 +7,6 @@ use diem_config::config::NodeConfig;
 use diem_genesis_tool::config_builder::FullnodeType;
 use diem_swarm::{client, faucet, swarm::DiemSwarm};
 use diem_temppath::TempPath;
-use diem_types::chain_id::ChainId;
 use std::path::Path;
 use structopt::StructOpt;
 
@@ -88,6 +87,7 @@ fn main() {
     }
 
     let diem_root_key_path = &validator_swarm.config.diem_root_key_path;
+    let chain_id = validator_swarm.config.chain_id;
     let validator_config = NodeConfig::load(&validator_swarm.config.config_files[0]).unwrap();
     let waypoint = validator_config.base.waypoint.waypoint();
 
@@ -101,7 +101,7 @@ fn main() {
         ),
         diem_root_key_path,
         waypoint,
-        ChainId::test().id()
+        chain_id.id()
     );
 
     let ports = validator_swarm.config.config_files.iter().map(|config| {
@@ -147,7 +147,7 @@ fn main() {
             ),
             diem_root_key_path,
             waypoint,
-            ChainId::test().id(),
+            chain_id.id(),
         );
     }
 

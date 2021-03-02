@@ -4,23 +4,24 @@
 use anyhow::Result;
 use diem_config::config::NodeConfig;
 use diem_crypto::ed25519::Ed25519PrivateKey;
-use diem_types::waypoint::Waypoint;
+use diem_types::{chain_id::ChainId, waypoint::Waypoint};
 use std::{fs::File, io::Write, path::PathBuf};
 
 pub trait BuildSwarm {
     /// Generate the configs for a swarm
-    fn build_swarm(&self) -> Result<(Vec<NodeConfig>, Ed25519PrivateKey)>;
+    fn build_swarm(&self) -> Result<(Vec<NodeConfig>, Ed25519PrivateKey, ChainId)>;
 }
 
 pub struct SwarmConfig {
     pub config_files: Vec<PathBuf>,
     pub diem_root_key_path: PathBuf,
     pub waypoint: Waypoint,
+    pub chain_id: ChainId,
 }
 
 impl SwarmConfig {
     pub fn build<T: BuildSwarm>(config_builder: &T, output_dir: &PathBuf) -> Result<Self> {
-        let (mut configs, diem_root_key) = config_builder.build_swarm()?;
+        let (mut configs, diem_root_key, chain_id) = config_builder.build_swarm()?;
         let mut config_files = vec![];
 
         for (index, config) in configs.iter_mut().enumerate() {
@@ -42,6 +43,7 @@ impl SwarmConfig {
             config_files,
             diem_root_key_path,
             waypoint: configs[0].base.waypoint.waypoint(),
+            chain_id,
         })
     }
 }

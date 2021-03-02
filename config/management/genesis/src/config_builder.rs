@@ -1,7 +1,10 @@
 // Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::{layout::Layout, storage_helper::StorageHelper, swarm_config::BuildSwarm};
+use crate::{
+    layout::Layout, storage_helper::StorageHelper, swarm_config::BuildSwarm,
+    violas_config::read_violas_configuration,
+};
 use diem_config::{
     config::{
         DiscoveryMethod, Identity, NodeConfig, OnDiskStorageConfig, SafetyRulesService,
@@ -16,8 +19,6 @@ use diem_secure_storage::{CryptoStorage, KVStorage, Storage};
 use diem_temppath::TempPath;
 use diem_types::{chain_id::ChainId, waypoint::Waypoint};
 use std::{
-    fs::File,
-    io::{self, prelude::*},
     path::{Path, PathBuf},
     str::FromStr,
 };
@@ -130,7 +131,6 @@ impl<T: AsRef<Path>> ValidatorBuilder<T> {
         let operator_name = index.to_string() + OPERATOR_SHARED_NS;
         let _ = self.storage_helper.set_operator(&operator_name, &remote_ns);
     }
-
     /// Operators upload their validator_config to shared storage.
     fn initialize_validator_config(&self, index: usize) -> NodeConfig {
         let local_ns = index.to_string() + OPERATOR_NS;
@@ -148,37 +148,37 @@ impl<T: AsRef<Path>> ValidatorBuilder<T> {
         //
         // Read validator configuration with index from configuration file validators.conf
         //
-        if let Ok(file) = File::open("validators.conf") {
-            // Read all lines to vector
-            let lines: Vec<String> = io::BufReader::new(file)
-                .lines()
-                .map(|l| l.unwrap_or_default())
-                .collect();
+        let mut chain_id = ChainId::test();
 
-            if let Some(line) = lines.get(index) {
+        if let Ok(genesis_config) = read_violas_configuration("genesis.yaml") {
+            // Update chain_id
+            chain_id = ChainId::new(genesis_config.chain_id);
+            // update validators
+            if index < genesis_config.validators.len() {
+                let net_addr_str = genesis_config.validators[index].clone();
+
                 //address format is "/ip4/10.0.0.16/tcp/80"
-                if let Ok(addr) = NetworkAddress::from_str(line) {
+                if let Ok(addr) = NetworkAddress::from_str(net_addr_str.as_str()) {
                     let protocols: Vec<Protocol> = addr.clone().into_iter().collect();
 
                     if let Protocol::Tcp(port) = protocols[1] {
+                        //update validator and fullnode address in genesis blob
                         validator_network_address = addr.clone();
                         fullnode_network_address = NetworkAddress::from(protocols[0].clone())
                             .push(Protocol::Tcp(port + 1)); // validator port + 1
 
-                        // update configuration
-                        //validator_network.listen_address = validator_network_address.clone();
+                        // set listening address with "0.0.0.0:port"
                         validator_network.listen_address =
                             NetworkAddress::from(Protocol::Ip4("0.0.0.0".parse().unwrap()))
                                 .push(Protocol::Tcp(port));
-                        //fullnode_network.listen_address = fullnode_network_address.clone();
                         fullnode_network.listen_address =
                             NetworkAddress::from(Protocol::Ip4("0.0.0.0".parse().unwrap()))
                                 .push(Protocol::Tcp(port + 1));
                     }
 
                     println!(
-                        "validator address : {}, full node address : {} ",
-                        validator_network_address, fullnode_network_address
+                        "Chain Id : {}, validator address : {}, full node address : {} ",
+                        chain_id, validator_network_address, fullnode_network_address
                     );
                 }
             }
@@ -189,7 +189,7 @@ impl<T: AsRef<Path>> ValidatorBuilder<T> {
                 &(index.to_string() + OWNER_SHARED_NS),
                 validator_network_address,
                 fullnode_network_address,
-                ChainId::test(),
+                chain_id,
                 &local_ns,
                 &remote_ns,
             )
@@ -216,14 +216,20 @@ impl<T: AsRef<Path>> ValidatorBuilder<T> {
 
     /// Operators generate genesis from shared storage and verify against waypoint.
     /// Insert the genesis/waypoint into local config.
-    fn finish_validator_config(&self, index: usize, config: &mut NodeConfig, waypoint: Waypoint) {
+    fn finish_validator_config(
+        &self,
+        index: usize,
+        config: &mut NodeConfig,
+        waypoint: Waypoint,
+        chain_id: ChainId,
+    ) {
         let local_ns = index.to_string() + OPERATOR_NS;
 
         let genesis_path = TempPath::new();
         genesis_path.create_as_file().unwrap();
         let genesis = self
             .storage_helper
-            .genesis(ChainId::test(), genesis_path.path())
+            .genesis(chain_id, genesis_path.path())
             .unwrap();
 
         self.storage_helper
@@ -248,7 +254,7 @@ impl<T: AsRef<Path>> ValidatorBuilder<T> {
 }
 
 impl<T: AsRef<Path>> BuildSwarm for ValidatorBuilder<T> {
-    fn build_swarm(&self) -> anyhow::Result<(Vec<NodeConfig>, Ed25519PrivateKey)> {
+    fn build_swarm(&self) -> anyhow::Result<(Vec<NodeConfig>, Ed25519PrivateKey, ChainId)> {
         self.create_layout();
         self.create_root();
         let diem_root_key = self
@@ -271,16 +277,20 @@ impl<T: AsRef<Path>> BuildSwarm for ValidatorBuilder<T> {
             configs.push(config);
         }
 
-        let waypoint = self
-            .storage_helper
-            .create_waypoint(ChainId::test())
-            .unwrap();
-        // Create genesis and waypoint
-        for (i, config) in configs.iter_mut().enumerate() {
-            self.finish_validator_config(i, config, waypoint);
+        let mut chain_id = ChainId::test();
+
+        if let Ok(genesis_config) = read_violas_configuration("genesis.yaml") {
+            // Update chain_id
+            chain_id = ChainId::new(genesis_config.chain_id);
         }
 
-        Ok((configs, diem_root_key))
+        let waypoint = self.storage_helper.create_waypoint(chain_id).unwrap();
+        // Create genesis and waypoint
+        for (i, config) in configs.iter_mut().enumerate() {
+            self.finish_validator_config(i, config, waypoint, chain_id);
+        }
+
+        Ok((configs, diem_root_key, chain_id))
     }
 }
 
@@ -389,13 +399,13 @@ impl FullnodeBuilder {
 }
 
 impl BuildSwarm for FullnodeBuilder {
-    fn build_swarm(&self) -> anyhow::Result<(Vec<NodeConfig>, Ed25519PrivateKey)> {
+    fn build_swarm(&self) -> anyhow::Result<(Vec<NodeConfig>, Ed25519PrivateKey, ChainId)> {
         let configs = match self.build_type {
             FullnodeType::ValidatorFullnode => self.build_vfn(),
             FullnodeType::PublicFullnode(num_nodes) => self.build_public_fn(num_nodes),
         }?;
         let diem_root_key_path = generate_key::load_key(&self.diem_root_key_path);
-        Ok((configs, diem_root_key_path))
+        Ok((configs, diem_root_key_path, ChainId::test()))
     }
 }
 
@@ -403,7 +413,7 @@ pub fn test_config() -> (NodeConfig, Ed25519PrivateKey) {
     let path = TempPath::new();
     path.create_as_dir().unwrap();
     let builder = ValidatorBuilder::new(1, NodeConfig::default_for_validator(), path.path());
-    let (mut configs, key) = builder.build_swarm().unwrap();
+    let (mut configs, key, _) = builder.build_swarm().unwrap();
 
     let mut config = configs.swap_remove(0);
     config.set_data_dir(path.path().to_path_buf());

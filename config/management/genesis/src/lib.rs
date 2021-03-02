@@ -11,6 +11,7 @@ mod validator_config;
 mod validator_operator;
 mod verify;
 mod waypoint;
+mod violas_config;
 
 #[cfg(any(test, feature = "testing"))]
 pub mod config_builder;

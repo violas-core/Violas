@@ -1549,6 +1549,7 @@ dependencies = [
  "generate-key",
  "rand 0.7.3",
  "serde",
+ "serde_yaml",
  "storage-interface",
  "structopt 0.3.21",
  "thiserror",
