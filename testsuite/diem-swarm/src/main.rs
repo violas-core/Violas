@@ -181,6 +181,7 @@ fn main() {
                 port,
                 f.mint_url(),
                 waypoint,
+                chain_id,
             )
         } else {
             client::InteractiveClient::new_with_inherit_io(
@@ -189,6 +190,7 @@ fn main() {
                 Path::new(&diem_root_key_path),
                 &tmp_mnemonic_file.path(),
                 waypoint,
+                chain_id,
             )
         };
         println!("Loading client...");

@@ -43,6 +43,7 @@ impl InteractiveClient {
         diem_root_key_path: &Path,
         mnemonic_file_path: &Path,
         waypoint: Waypoint,
+        chain_id : ChainId,
     ) -> Self {
         // We need to call canonicalize on the path because we are running client from
         // workspace root and the function calling new_with_inherit_io isn't necessarily
@@ -72,7 +73,7 @@ impl InteractiveClient {
                     .arg("--waypoint")
                     .arg(waypoint.to_string())
                     .arg("-c")
-                    .arg(ChainId::test().id().to_string())
+                    .arg(chain_id.id().to_string())
                     .stdin(Stdio::inherit())
                     .stdout(Stdio::inherit())
                     .stderr(Stdio::inherit())
@@ -93,6 +94,7 @@ impl InteractiveClient {
         port: u16,
         faucet_url: String,
         waypoint: Waypoint,
+        chain_id : ChainId,
     ) -> Self {
         Self {
             client: Some(
@@ -104,7 +106,7 @@ impl InteractiveClient {
                     .arg("--waypoint")
                     .arg(waypoint.to_string())
                     .arg("-c")
-                    .arg(ChainId::test().id().to_string())
+                    .arg(chain_id.id().to_string())
                     .stdin(Stdio::inherit())
                     .stdout(Stdio::inherit())
                     .stderr(Stdio::inherit())
