@@ -51,7 +51,12 @@ function add_to_profile {
 function update_path_and_profile {
   touch "${HOME}"/.profile
   mkdir -p "${HOME}"/bin
-  add_to_profile "export PATH=\"${HOME}/bin:${HOME}/.cargo/bin:\$PATH\""
+  if [ -n "$CARGO_HOME" ]; then
+    add_to_profile "export CARGO_HOME=\"${CARGO_HOME}\""
+    add_to_profile "export PATH=\"${HOME}/bin:${CARGO_HOME}/bin:\$PATH\""
+  else
+    add_to_profile "export PATH=\"${HOME}/bin:${HOME}/.cargo/bin:\$PATH\""
+  fi
   if [[ "$INSTALL_PROVER" == "true" ]]; then
      add_to_profile "export DOTNET_ROOT=\$HOME/.dotnet"
      add_to_profile "export PATH=\"${HOME}/.dotnet/tools:\$PATH\""
@@ -547,6 +552,8 @@ fi
 if [[ "$PACKAGE_MANAGER" == "apt-get" ]]; then
 	[[ "$BATCH_MODE" == "false" ]] && echo "Updating apt-get......"
 	"${PRE_COMMAND[@]}" apt-get update
+  [[ "$BATCH_MODE" == "false" ]] && echo "Installing ca-certificates......"
+	"${PRE_COMMAND[@]}" install_pkg ca-certificates "$PACKAGE_MANAGER"
 fi
 
 [[ "$INSTALL_PROFILE" == "true" ]] && update_path_and_profile
@@ -581,6 +588,12 @@ if [[ "$OPERATIONS" == "true" ]]; then
   install_pkg yamllint "$PACKAGE_MANAGER"
   install_pkg python3 "$PACKAGE_MANAGER"
   install_pkg unzip "$PACKAGE_MANAGER"
+  install_pkg jq "$PACKAGE_MANAGER"
+  install_pkg git "$PACKAGE_MANAGER"
+  #for timeout
+  if [[ "$PACKAGE_MANAGER" == "apt-get" ]]; then
+    install_pkg coreutils "$PACKAGE_MANAGER"
+  fi
   install_shellcheck
   install_hadolint
   install_vault

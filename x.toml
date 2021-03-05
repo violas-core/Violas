@@ -14,7 +14,7 @@ prefix = "sccache/diem/"
 public = true
 region = "us-west-2"
 endpoint = "https://s3-us-west-2.amazonaws.com"
-required-cargo-home = "/opt/cargo"
+required-cargo-home = "/opt/cargo/"
 required-git-home = "/opt/git/diem"
 envs = [
    #To debug sccache uncomment the two lines below.
@@ -124,7 +124,6 @@ members = [
     "diem-retrier",
     "diem-smoke-test-attribute",
     "diem-swarm",
-    "diem-transaction-replay",
     "diem-wallet",
     "executor-benchmark",
     "executor-test-helpers",
