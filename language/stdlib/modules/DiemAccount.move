@@ -234,7 +234,7 @@ module DiemAccount {
         include CreateDiemRootAccountEnsures;
         include CreateTreasuryComplianceAccountModifies;
         include CreateTreasuryComplianceAccountEnsures;
-    }
+    }    
 
     /// Return `true` if `addr` has already published account limits for `Token`
     fun has_published_account_limits<Token>(addr: address): bool {
@@ -1127,129 +1127,7 @@ module DiemAccount {
         SlidingNonce::publish(&new_account);
         Event::publish_generator(&new_account);
         make_account(new_account, auth_key_prefix)
-    }   
-
-    ///////////////////////////////////////////////////////////////////////////
-    // Violas methods
-    ///////////////////////////////////////////////////////////////////////////
-    
-    ///mine and distribute VLS to all the account specified in module VLS
-    public fun mine_vls() 
-    acquires DiemAccount, Balance, AccountOperationsCapability {
-        DiemTimestamp::assert_operating();        
-
-        let mined_vls = VLS::mine();
-        let mined_vls_amount = Diem::value<VLS::VLS>(&mined_vls);
-        let receivers = VLS::get_receivers();
-        let length = Vector::length(&receivers);
-        
-        let i = 0;
-        while (i < length && Diem::value<VLS::VLS>(&mined_vls) > 0) {
-            let receiver = Vector::borrow(&mut receivers, i);
-            
-            let (addr, ratio) = VLS::unpack_receiver(*receiver);
-            let dist_amount = FixedPoint32::multiply_u64(mined_vls_amount, ratio);
-            
-            let (remained_vls, dist_vls) = Diem::split<VLS::VLS>(mined_vls, dist_amount);
-            mined_vls = remained_vls;
-
-            deposit(CoreAddresses::VM_RESERVED_ADDRESS(), addr, dist_vls, x"", x"");            
-
-            i = i + 1;            
-        };               
-        
-        if (Diem::value<VLS::VLS>(&mined_vls) > 0) {
-            deposit(CoreAddresses::VM_RESERVED_ADDRESS(), VLS::VLS_TRASH_ADDRESS(), mined_vls, x"", x"");
-        } else {
-            Diem::destroy_zero<VLS::VLS>(mined_vls)
-        }
-    }
-    
-    /// Recover VLS transaction fee to Violas association account
-    public fun recover_vls_fees_to_association(tc_account : &signer, association: address) 
-    acquires DiemAccount, Balance, AccountOperationsCapability {
-        let tc_address = Signer::address_of(tc_account);
-
-        let vls_fees = TransactionFee::recover_vls_fees(tc_account);
-
-        deposit(tc_address, association, vls_fees, x"", x"");   //VLS::VIOLAS_ASSOCIATION_ADDRESS()
-    }
-
-    // register a currency and assign the minting and burning capability to treasury compliance account
-    public fun register_currency_with_tc_account<CoinType>(
-        lr_account : &signer,
-        exchange_rate_denom: u64,
-        exchange_rate_num: u64,
-        _is_synthetic: bool,
-        scaling_factor: u64,
-        fractional_part: u64,
-        currency_code: vector<u8>, 
-    ) {
-        // exchange rate to LBR
-        let rate = FixedPoint32::create_from_rational(
-            exchange_rate_denom,
-            exchange_rate_num,
-        ); 
-        
-        let tc_account = create_signer(CoreAddresses::TREASURY_COMPLIANCE_ADDRESS());
-
-        Diem::register_SCS_currency<CoinType>(
-            lr_account,
-            &tc_account,
-            rate,
-            scaling_factor,
-            fractional_part,
-            currency_code, 
-            );
-
-        TransactionFee::add_txn_fee_currency<CoinType>(&tc_account);
-
-        destroy_signer(tc_account);
-
-        AccountLimits::publish_unrestricted_limits<CoinType>(lr_account);
-    }
-
-    /// add a new currency for designated dealer account
-    public fun add_currency_for_designated_dealer<CoinType>(
-        tc_account: &signer,    // Treasury Compliance account
-        dd_address: address,    // Designated Dealer account
-    ) {
-        let dd_account = create_signer(dd_address); 
-
-        DesignatedDealer::add_currency<CoinType>(&dd_account, tc_account);
-                
-        if(!exists<Balance<CoinType>>(Signer::address_of(&dd_account)))
-        {
-            add_currencies_for_account<CoinType>(&dd_account, false);
-        };    
-
-        destroy_signer(dd_account);
-    }
-    
-    /// create designated dealer account with specified address and authentication key
-    /// The `tc_account` must be treasury compliance.
-    public fun create_designated_dealer_ex<CoinType>(
-        tc_account: &signer,
-        new_account_address: address,
-        auth_key: vector<u8>,
-        human_name: vector<u8>,
-        add_all_currencies: bool,
-    ) acquires AccountOperationsCapability, DiemAccount {
-        create_designated_dealer<CoinType>(
-            tc_account, 
-            new_account_address, 
-            x"00000000000000000000000000000000", 
-            human_name, 
-            add_all_currencies);
-
-        let new_account = create_signer(new_account_address);
-
-        let rotate_key_cap = extract_key_rotation_capability(&new_account);
-        rotate_authentication_key(&rotate_key_cap, auth_key);
-        restore_key_rotation_capability(rotate_key_cap);
-
-        destroy_signer(new_account);
-    }
+    }       
 
     spec fun create_treasury_compliance_account {
         pragma opaque;
@@ -2022,6 +1900,128 @@ module DiemAccount {
         include Roles::GrantRole{addr: new_account_address, role_id: Roles::VALIDATOR_OPERATOR_ROLE_ID};
         ensures exists_at(new_account_address);
         ensures ValidatorOperatorConfig::has_validator_operator_config(new_account_address);
+    }
+
+    ///////////////////////////////////////////////////////////////////////////
+    // Violas methods
+    ///////////////////////////////////////////////////////////////////////////
+    
+    /// Mine and distribute VLS to all the account specified in module VLS
+    public fun mine_vls() 
+    acquires DiemAccount, Balance, AccountOperationsCapability {
+        DiemTimestamp::assert_operating();        
+
+        let mined_vls = VLS::mine();
+        let mined_vls_amount = Diem::value<VLS::VLS>(&mined_vls);
+        let receivers = VLS::get_receivers();
+        let length = Vector::length(&receivers);
+        
+        let i = 0;
+        while (i < length && Diem::value<VLS::VLS>(&mined_vls) > 0) {
+            let receiver = Vector::borrow(&mut receivers, i);
+            
+            let (addr, ratio) = VLS::unpack_receiver(*receiver);
+            let dist_amount = FixedPoint32::multiply_u64(mined_vls_amount, ratio);
+            
+            let (remained_vls, dist_vls) = Diem::split<VLS::VLS>(mined_vls, dist_amount);
+            mined_vls = remained_vls;
+
+            deposit(CoreAddresses::VM_RESERVED_ADDRESS(), addr, dist_vls, x"", x"");            
+
+            i = i + 1;            
+        };               
+        
+        if (Diem::value<VLS::VLS>(&mined_vls) > 0) {
+            deposit(CoreAddresses::VM_RESERVED_ADDRESS(), VLS::VLS_TRASH_ADDRESS(), mined_vls, x"", x"");
+        } else {
+            Diem::destroy_zero<VLS::VLS>(mined_vls)
+        }
+    }
+    
+    /// Recover VLS transaction fee to Violas association account
+    public fun recover_vls_fees_to_association(tc_account : &signer, association: address) 
+    acquires DiemAccount, Balance, AccountOperationsCapability {
+        let tc_address = Signer::address_of(tc_account);
+
+        let vls_fees = TransactionFee::recover_vls_fees(tc_account);
+
+        deposit(tc_address, association, vls_fees, x"", x"");   //VLS::VIOLAS_ASSOCIATION_ADDRESS()
+    }
+
+    // Register a currency and assign the minting and burning capability to treasury compliance account
+    public fun register_currency_with_tc_account<CoinType>(
+        lr_account : &signer,
+        exchange_rate_denom: u64,
+        exchange_rate_num: u64,
+        _is_synthetic: bool,
+        scaling_factor: u64,
+        fractional_part: u64,
+        currency_code: vector<u8>, 
+    ) {
+        // exchange rate to LBR
+        let rate = FixedPoint32::create_from_rational(
+            exchange_rate_denom,
+            exchange_rate_num,
+        ); 
+        
+        let tc_account = create_signer(CoreAddresses::TREASURY_COMPLIANCE_ADDRESS());
+
+        Diem::register_SCS_currency<CoinType>(
+            lr_account,
+            &tc_account,
+            rate,
+            scaling_factor,
+            fractional_part,
+            currency_code, 
+            );
+
+        TransactionFee::add_txn_fee_currency<CoinType>(&tc_account);
+
+        destroy_signer(tc_account);
+
+        AccountLimits::publish_unrestricted_limits<CoinType>(lr_account);
+    }
+
+    /// Add a new currency for designated dealer account
+    public fun add_currency_for_designated_dealer<CoinType>(
+        tc_account: &signer,    // Treasury Compliance account
+        dd_address: address,    // Designated Dealer account
+    ) {
+        let dd_account = create_signer(dd_address); 
+
+        DesignatedDealer::add_currency<CoinType>(&dd_account, tc_account);
+                
+        if(!exists<Balance<CoinType>>(Signer::address_of(&dd_account)))
+        {
+            add_currencies_for_account<CoinType>(&dd_account, false);
+        };    
+
+        destroy_signer(dd_account);
+    }
+    
+    /// Create designated dealer account with specified address and authentication key
+    /// The `tc_account` must be treasury compliance.
+    public fun create_designated_dealer_ex<CoinType>(
+        tc_account: &signer,
+        new_account_address: address,
+        auth_key: vector<u8>,
+        human_name: vector<u8>,
+        add_all_currencies: bool,
+    ) acquires AccountOperationsCapability, DiemAccount {
+        create_designated_dealer<CoinType>(
+            tc_account, 
+            new_account_address, 
+            x"00000000000000000000000000000000", 
+            human_name, 
+            add_all_currencies);
+
+        let new_account = create_signer(new_account_address);
+
+        let rotate_key_cap = extract_key_rotation_capability(&new_account);
+        rotate_authentication_key(&rotate_key_cap, auth_key);
+        restore_key_rotation_capability(rotate_key_cap);
+
+        destroy_signer(new_account);
     }
 
     // ****************** Module Specifications *******************

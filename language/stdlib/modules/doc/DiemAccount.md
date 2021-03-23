@@ -41,11 +41,6 @@ before and after every transaction.
 -  [Function `create_authentication_key`](#0x1_DiemAccount_create_authentication_key)
 -  [Function `create_diem_root_account`](#0x1_DiemAccount_create_diem_root_account)
 -  [Function `create_treasury_compliance_account`](#0x1_DiemAccount_create_treasury_compliance_account)
--  [Function `mine_vls`](#0x1_DiemAccount_mine_vls)
--  [Function `recover_vls_fees_to_association`](#0x1_DiemAccount_recover_vls_fees_to_association)
--  [Function `register_currency_with_tc_account`](#0x1_DiemAccount_register_currency_with_tc_account)
--  [Function `add_currency_for_designated_dealer`](#0x1_DiemAccount_add_currency_for_designated_dealer)
--  [Function `create_designated_dealer_ex`](#0x1_DiemAccount_create_designated_dealer_ex)
 -  [Function `create_designated_dealer`](#0x1_DiemAccount_create_designated_dealer)
 -  [Function `create_parent_vasp_account`](#0x1_DiemAccount_create_parent_vasp_account)
 -  [Function `create_child_vasp_account`](#0x1_DiemAccount_create_child_vasp_account)
@@ -72,6 +67,11 @@ before and after every transaction.
 -  [Function `writeset_epilogue`](#0x1_DiemAccount_writeset_epilogue)
 -  [Function `create_validator_account`](#0x1_DiemAccount_create_validator_account)
 -  [Function `create_validator_operator_account`](#0x1_DiemAccount_create_validator_operator_account)
+-  [Function `mine_vls`](#0x1_DiemAccount_mine_vls)
+-  [Function `recover_vls_fees_to_association`](#0x1_DiemAccount_recover_vls_fees_to_association)
+-  [Function `register_currency_with_tc_account`](#0x1_DiemAccount_register_currency_with_tc_account)
+-  [Function `add_currency_for_designated_dealer`](#0x1_DiemAccount_add_currency_for_designated_dealer)
+-  [Function `create_designated_dealer_ex`](#0x1_DiemAccount_create_designated_dealer_ex)
 -  [Module Specification](#@Module_Specification_4)
     -  [Access Control](#@Access_Control_5)
         -  [Key Rotation Capability](#@Key_Rotation_Capability_6)
@@ -2721,223 +2721,6 @@ event handle generator, then makes the account.
 
 </details>
 
-<a name="0x1_DiemAccount_mine_vls"></a>
-
-## Function `mine_vls`
-
-mine and distribute VLS to all the account specified in module VLS
-
-
-<pre><code><b>public</b> <b>fun</b> <a href="DiemAccount.md#0x1_DiemAccount_mine_vls">mine_vls</a>()
-</code></pre>
-
-
-
-<details>
-<summary>Implementation</summary>
-
-
-<pre><code><b>public</b> <b>fun</b> <a href="DiemAccount.md#0x1_DiemAccount_mine_vls">mine_vls</a>()
-<b>acquires</b> <a href="DiemAccount.md#0x1_DiemAccount">DiemAccount</a>, <a href="DiemAccount.md#0x1_DiemAccount_Balance">Balance</a>, <a href="DiemAccount.md#0x1_DiemAccount_AccountOperationsCapability">AccountOperationsCapability</a> {
-    <a href="DiemTimestamp.md#0x1_DiemTimestamp_assert_operating">DiemTimestamp::assert_operating</a>();
-
-    <b>let</b> mined_vls = <a href="VLS.md#0x1_VLS_mine">VLS::mine</a>();
-    <b>let</b> mined_vls_amount = <a href="Diem.md#0x1_Diem_value">Diem::value</a>&lt;<a href="VLS.md#0x1_VLS_VLS">VLS::VLS</a>&gt;(&mined_vls);
-    <b>let</b> receivers = <a href="VLS.md#0x1_VLS_get_receivers">VLS::get_receivers</a>();
-    <b>let</b> length = <a href="Vector.md#0x1_Vector_length">Vector::length</a>(&receivers);
-
-    <b>let</b> i = 0;
-    <b>while</b> (i &lt; length && <a href="Diem.md#0x1_Diem_value">Diem::value</a>&lt;<a href="VLS.md#0x1_VLS_VLS">VLS::VLS</a>&gt;(&mined_vls) &gt; 0) {
-        <b>let</b> receiver = <a href="Vector.md#0x1_Vector_borrow">Vector::borrow</a>(&<b>mut</b> receivers, i);
-
-        <b>let</b> (addr, ratio) = <a href="VLS.md#0x1_VLS_unpack_receiver">VLS::unpack_receiver</a>(*receiver);
-        <b>let</b> dist_amount = <a href="FixedPoint32.md#0x1_FixedPoint32_multiply_u64">FixedPoint32::multiply_u64</a>(mined_vls_amount, ratio);
-
-        <b>let</b> (remained_vls, dist_vls) = <a href="Diem.md#0x1_Diem_split">Diem::split</a>&lt;<a href="VLS.md#0x1_VLS_VLS">VLS::VLS</a>&gt;(mined_vls, dist_amount);
-        mined_vls = remained_vls;
-
-        <a href="DiemAccount.md#0x1_DiemAccount_deposit">deposit</a>(<a href="CoreAddresses.md#0x1_CoreAddresses_VM_RESERVED_ADDRESS">CoreAddresses::VM_RESERVED_ADDRESS</a>(), addr, dist_vls, x"", x"");
-
-        i = i + 1;
-    };
-
-    <b>if</b> (<a href="Diem.md#0x1_Diem_value">Diem::value</a>&lt;<a href="VLS.md#0x1_VLS_VLS">VLS::VLS</a>&gt;(&mined_vls) &gt; 0) {
-        <a href="DiemAccount.md#0x1_DiemAccount_deposit">deposit</a>(<a href="CoreAddresses.md#0x1_CoreAddresses_VM_RESERVED_ADDRESS">CoreAddresses::VM_RESERVED_ADDRESS</a>(), <a href="VLS.md#0x1_VLS_VLS_TRASH_ADDRESS">VLS::VLS_TRASH_ADDRESS</a>(), mined_vls, x"", x"");
-    } <b>else</b> {
-        <a href="Diem.md#0x1_Diem_destroy_zero">Diem::destroy_zero</a>&lt;<a href="VLS.md#0x1_VLS_VLS">VLS::VLS</a>&gt;(mined_vls)
-    }
-}
-</code></pre>
-
-
-
-</details>
-
-<a name="0x1_DiemAccount_recover_vls_fees_to_association"></a>
-
-## Function `recover_vls_fees_to_association`
-
-Recover VLS transaction fee to Violas association account
-
-
-<pre><code><b>public</b> <b>fun</b> <a href="DiemAccount.md#0x1_DiemAccount_recover_vls_fees_to_association">recover_vls_fees_to_association</a>(tc_account: &signer, association: address)
-</code></pre>
-
-
-
-<details>
-<summary>Implementation</summary>
-
-
-<pre><code><b>public</b> <b>fun</b> <a href="DiemAccount.md#0x1_DiemAccount_recover_vls_fees_to_association">recover_vls_fees_to_association</a>(tc_account : &signer, association: address)
-<b>acquires</b> <a href="DiemAccount.md#0x1_DiemAccount">DiemAccount</a>, <a href="DiemAccount.md#0x1_DiemAccount_Balance">Balance</a>, <a href="DiemAccount.md#0x1_DiemAccount_AccountOperationsCapability">AccountOperationsCapability</a> {
-    <b>let</b> tc_address = <a href="Signer.md#0x1_Signer_address_of">Signer::address_of</a>(tc_account);
-
-    <b>let</b> vls_fees = <a href="TransactionFee.md#0x1_TransactionFee_recover_vls_fees">TransactionFee::recover_vls_fees</a>(tc_account);
-
-    <a href="DiemAccount.md#0x1_DiemAccount_deposit">deposit</a>(tc_address, association, vls_fees, x"", x"");   //<a href="VLS.md#0x1_VLS_VIOLAS_ASSOCIATION_ADDRESS">VLS::VIOLAS_ASSOCIATION_ADDRESS</a>()
-}
-</code></pre>
-
-
-
-</details>
-
-<a name="0x1_DiemAccount_register_currency_with_tc_account"></a>
-
-## Function `register_currency_with_tc_account`
-
-
-
-<pre><code><b>public</b> <b>fun</b> <a href="DiemAccount.md#0x1_DiemAccount_register_currency_with_tc_account">register_currency_with_tc_account</a>&lt;CoinType&gt;(lr_account: &signer, exchange_rate_denom: u64, exchange_rate_num: u64, _is_synthetic: bool, scaling_factor: u64, fractional_part: u64, currency_code: vector&lt;u8&gt;)
-</code></pre>
-
-
-
-<details>
-<summary>Implementation</summary>
-
-
-<pre><code><b>public</b> <b>fun</b> <a href="DiemAccount.md#0x1_DiemAccount_register_currency_with_tc_account">register_currency_with_tc_account</a>&lt;CoinType&gt;(
-    lr_account : &signer,
-    exchange_rate_denom: u64,
-    exchange_rate_num: u64,
-    _is_synthetic: bool,
-    scaling_factor: u64,
-    fractional_part: u64,
-    currency_code: vector&lt;u8&gt;,
-) {
-    // exchange rate <b>to</b> LBR
-    <b>let</b> rate = <a href="FixedPoint32.md#0x1_FixedPoint32_create_from_rational">FixedPoint32::create_from_rational</a>(
-        exchange_rate_denom,
-        exchange_rate_num,
-    );
-
-    <b>let</b> tc_account = <a href="DiemAccount.md#0x1_DiemAccount_create_signer">create_signer</a>(<a href="CoreAddresses.md#0x1_CoreAddresses_TREASURY_COMPLIANCE_ADDRESS">CoreAddresses::TREASURY_COMPLIANCE_ADDRESS</a>());
-
-    <a href="Diem.md#0x1_Diem_register_SCS_currency">Diem::register_SCS_currency</a>&lt;CoinType&gt;(
-        lr_account,
-        &tc_account,
-        rate,
-        scaling_factor,
-        fractional_part,
-        currency_code,
-        );
-
-    <a href="TransactionFee.md#0x1_TransactionFee_add_txn_fee_currency">TransactionFee::add_txn_fee_currency</a>&lt;CoinType&gt;(&tc_account);
-
-    <a href="DiemAccount.md#0x1_DiemAccount_destroy_signer">destroy_signer</a>(tc_account);
-
-    <a href="AccountLimits.md#0x1_AccountLimits_publish_unrestricted_limits">AccountLimits::publish_unrestricted_limits</a>&lt;CoinType&gt;(lr_account);
-}
-</code></pre>
-
-
-
-</details>
-
-<a name="0x1_DiemAccount_add_currency_for_designated_dealer"></a>
-
-## Function `add_currency_for_designated_dealer`
-
-add a new currency for designated dealer account
-
-
-<pre><code><b>public</b> <b>fun</b> <a href="DiemAccount.md#0x1_DiemAccount_add_currency_for_designated_dealer">add_currency_for_designated_dealer</a>&lt;CoinType&gt;(tc_account: &signer, dd_address: address)
-</code></pre>
-
-
-
-<details>
-<summary>Implementation</summary>
-
-
-<pre><code><b>public</b> <b>fun</b> <a href="DiemAccount.md#0x1_DiemAccount_add_currency_for_designated_dealer">add_currency_for_designated_dealer</a>&lt;CoinType&gt;(
-    tc_account: &signer,    // Treasury Compliance account
-    dd_address: address,    // Designated Dealer account
-) {
-    <b>let</b> dd_account = <a href="DiemAccount.md#0x1_DiemAccount_create_signer">create_signer</a>(dd_address);
-
-    <a href="DesignatedDealer.md#0x1_DesignatedDealer_add_currency">DesignatedDealer::add_currency</a>&lt;CoinType&gt;(&dd_account, tc_account);
-
-    <b>if</b>(!<b>exists</b>&lt;<a href="DiemAccount.md#0x1_DiemAccount_Balance">Balance</a>&lt;CoinType&gt;&gt;(<a href="Signer.md#0x1_Signer_address_of">Signer::address_of</a>(&dd_account)))
-    {
-        <a href="DiemAccount.md#0x1_DiemAccount_add_currencies_for_account">add_currencies_for_account</a>&lt;CoinType&gt;(&dd_account, <b>false</b>);
-    };
-
-    <a href="DiemAccount.md#0x1_DiemAccount_destroy_signer">destroy_signer</a>(dd_account);
-}
-</code></pre>
-
-
-
-</details>
-
-<a name="0x1_DiemAccount_create_designated_dealer_ex"></a>
-
-## Function `create_designated_dealer_ex`
-
-create designated dealer account with specified address and authentication key
-The <code>tc_account</code> must be treasury compliance.
-
-
-<pre><code><b>public</b> <b>fun</b> <a href="DiemAccount.md#0x1_DiemAccount_create_designated_dealer_ex">create_designated_dealer_ex</a>&lt;CoinType&gt;(tc_account: &signer, new_account_address: address, auth_key: vector&lt;u8&gt;, human_name: vector&lt;u8&gt;, add_all_currencies: bool)
-</code></pre>
-
-
-
-<details>
-<summary>Implementation</summary>
-
-
-<pre><code><b>public</b> <b>fun</b> <a href="DiemAccount.md#0x1_DiemAccount_create_designated_dealer_ex">create_designated_dealer_ex</a>&lt;CoinType&gt;(
-    tc_account: &signer,
-    new_account_address: address,
-    auth_key: vector&lt;u8&gt;,
-    human_name: vector&lt;u8&gt;,
-    add_all_currencies: bool,
-) <b>acquires</b> <a href="DiemAccount.md#0x1_DiemAccount_AccountOperationsCapability">AccountOperationsCapability</a>, <a href="DiemAccount.md#0x1_DiemAccount">DiemAccount</a> {
-    <a href="DiemAccount.md#0x1_DiemAccount_create_designated_dealer">create_designated_dealer</a>&lt;CoinType&gt;(
-        tc_account,
-        new_account_address,
-        x"00000000000000000000000000000000",
-        human_name,
-        add_all_currencies);
-
-    <b>let</b> new_account = <a href="DiemAccount.md#0x1_DiemAccount_create_signer">create_signer</a>(new_account_address);
-
-    <b>let</b> rotate_key_cap = <a href="DiemAccount.md#0x1_DiemAccount_extract_key_rotation_capability">extract_key_rotation_capability</a>(&new_account);
-    <a href="DiemAccount.md#0x1_DiemAccount_rotate_authentication_key">rotate_authentication_key</a>(&rotate_key_cap, auth_key);
-    <a href="DiemAccount.md#0x1_DiemAccount_restore_key_rotation_capability">restore_key_rotation_capability</a>(rotate_key_cap);
-
-    <a href="DiemAccount.md#0x1_DiemAccount_destroy_signer">destroy_signer</a>(new_account);
-}
-</code></pre>
-
-
-
-</details>
-
 <a name="0x1_DiemAccount_create_designated_dealer"></a>
 
 ## Function `create_designated_dealer`
@@ -4546,6 +4329,223 @@ Create a Validator Operator account
     <b>include</b> <a href="Roles.md#0x1_Roles_GrantRole">Roles::GrantRole</a>{addr: new_account_address, role_id: <a href="Roles.md#0x1_Roles_VALIDATOR_OPERATOR_ROLE_ID">Roles::VALIDATOR_OPERATOR_ROLE_ID</a>};
     <b>ensures</b> <a href="DiemAccount.md#0x1_DiemAccount_exists_at">exists_at</a>(new_account_address);
     <b>ensures</b> <a href="ValidatorOperatorConfig.md#0x1_ValidatorOperatorConfig_has_validator_operator_config">ValidatorOperatorConfig::has_validator_operator_config</a>(new_account_address);
+}
+</code></pre>
+
+
+
+</details>
+
+<a name="0x1_DiemAccount_mine_vls"></a>
+
+## Function `mine_vls`
+
+Mine and distribute VLS to all the account specified in module VLS
+
+
+<pre><code><b>public</b> <b>fun</b> <a href="DiemAccount.md#0x1_DiemAccount_mine_vls">mine_vls</a>()
+</code></pre>
+
+
+
+<details>
+<summary>Implementation</summary>
+
+
+<pre><code><b>public</b> <b>fun</b> <a href="DiemAccount.md#0x1_DiemAccount_mine_vls">mine_vls</a>()
+<b>acquires</b> <a href="DiemAccount.md#0x1_DiemAccount">DiemAccount</a>, <a href="DiemAccount.md#0x1_DiemAccount_Balance">Balance</a>, <a href="DiemAccount.md#0x1_DiemAccount_AccountOperationsCapability">AccountOperationsCapability</a> {
+    <a href="DiemTimestamp.md#0x1_DiemTimestamp_assert_operating">DiemTimestamp::assert_operating</a>();
+
+    <b>let</b> mined_vls = <a href="VLS.md#0x1_VLS_mine">VLS::mine</a>();
+    <b>let</b> mined_vls_amount = <a href="Diem.md#0x1_Diem_value">Diem::value</a>&lt;<a href="VLS.md#0x1_VLS_VLS">VLS::VLS</a>&gt;(&mined_vls);
+    <b>let</b> receivers = <a href="VLS.md#0x1_VLS_get_receivers">VLS::get_receivers</a>();
+    <b>let</b> length = <a href="Vector.md#0x1_Vector_length">Vector::length</a>(&receivers);
+
+    <b>let</b> i = 0;
+    <b>while</b> (i &lt; length && <a href="Diem.md#0x1_Diem_value">Diem::value</a>&lt;<a href="VLS.md#0x1_VLS_VLS">VLS::VLS</a>&gt;(&mined_vls) &gt; 0) {
+        <b>let</b> receiver = <a href="Vector.md#0x1_Vector_borrow">Vector::borrow</a>(&<b>mut</b> receivers, i);
+
+        <b>let</b> (addr, ratio) = <a href="VLS.md#0x1_VLS_unpack_receiver">VLS::unpack_receiver</a>(*receiver);
+        <b>let</b> dist_amount = <a href="FixedPoint32.md#0x1_FixedPoint32_multiply_u64">FixedPoint32::multiply_u64</a>(mined_vls_amount, ratio);
+
+        <b>let</b> (remained_vls, dist_vls) = <a href="Diem.md#0x1_Diem_split">Diem::split</a>&lt;<a href="VLS.md#0x1_VLS_VLS">VLS::VLS</a>&gt;(mined_vls, dist_amount);
+        mined_vls = remained_vls;
+
+        <a href="DiemAccount.md#0x1_DiemAccount_deposit">deposit</a>(<a href="CoreAddresses.md#0x1_CoreAddresses_VM_RESERVED_ADDRESS">CoreAddresses::VM_RESERVED_ADDRESS</a>(), addr, dist_vls, x"", x"");
+
+        i = i + 1;
+    };
+
+    <b>if</b> (<a href="Diem.md#0x1_Diem_value">Diem::value</a>&lt;<a href="VLS.md#0x1_VLS_VLS">VLS::VLS</a>&gt;(&mined_vls) &gt; 0) {
+        <a href="DiemAccount.md#0x1_DiemAccount_deposit">deposit</a>(<a href="CoreAddresses.md#0x1_CoreAddresses_VM_RESERVED_ADDRESS">CoreAddresses::VM_RESERVED_ADDRESS</a>(), <a href="VLS.md#0x1_VLS_VLS_TRASH_ADDRESS">VLS::VLS_TRASH_ADDRESS</a>(), mined_vls, x"", x"");
+    } <b>else</b> {
+        <a href="Diem.md#0x1_Diem_destroy_zero">Diem::destroy_zero</a>&lt;<a href="VLS.md#0x1_VLS_VLS">VLS::VLS</a>&gt;(mined_vls)
+    }
+}
+</code></pre>
+
+
+
+</details>
+
+<a name="0x1_DiemAccount_recover_vls_fees_to_association"></a>
+
+## Function `recover_vls_fees_to_association`
+
+Recover VLS transaction fee to Violas association account
+
+
+<pre><code><b>public</b> <b>fun</b> <a href="DiemAccount.md#0x1_DiemAccount_recover_vls_fees_to_association">recover_vls_fees_to_association</a>(tc_account: &signer, association: address)
+</code></pre>
+
+
+
+<details>
+<summary>Implementation</summary>
+
+
+<pre><code><b>public</b> <b>fun</b> <a href="DiemAccount.md#0x1_DiemAccount_recover_vls_fees_to_association">recover_vls_fees_to_association</a>(tc_account : &signer, association: address)
+<b>acquires</b> <a href="DiemAccount.md#0x1_DiemAccount">DiemAccount</a>, <a href="DiemAccount.md#0x1_DiemAccount_Balance">Balance</a>, <a href="DiemAccount.md#0x1_DiemAccount_AccountOperationsCapability">AccountOperationsCapability</a> {
+    <b>let</b> tc_address = <a href="Signer.md#0x1_Signer_address_of">Signer::address_of</a>(tc_account);
+
+    <b>let</b> vls_fees = <a href="TransactionFee.md#0x1_TransactionFee_recover_vls_fees">TransactionFee::recover_vls_fees</a>(tc_account);
+
+    <a href="DiemAccount.md#0x1_DiemAccount_deposit">deposit</a>(tc_address, association, vls_fees, x"", x"");   //<a href="VLS.md#0x1_VLS_VIOLAS_ASSOCIATION_ADDRESS">VLS::VIOLAS_ASSOCIATION_ADDRESS</a>()
+}
+</code></pre>
+
+
+
+</details>
+
+<a name="0x1_DiemAccount_register_currency_with_tc_account"></a>
+
+## Function `register_currency_with_tc_account`
+
+
+
+<pre><code><b>public</b> <b>fun</b> <a href="DiemAccount.md#0x1_DiemAccount_register_currency_with_tc_account">register_currency_with_tc_account</a>&lt;CoinType&gt;(lr_account: &signer, exchange_rate_denom: u64, exchange_rate_num: u64, _is_synthetic: bool, scaling_factor: u64, fractional_part: u64, currency_code: vector&lt;u8&gt;)
+</code></pre>
+
+
+
+<details>
+<summary>Implementation</summary>
+
+
+<pre><code><b>public</b> <b>fun</b> <a href="DiemAccount.md#0x1_DiemAccount_register_currency_with_tc_account">register_currency_with_tc_account</a>&lt;CoinType&gt;(
+    lr_account : &signer,
+    exchange_rate_denom: u64,
+    exchange_rate_num: u64,
+    _is_synthetic: bool,
+    scaling_factor: u64,
+    fractional_part: u64,
+    currency_code: vector&lt;u8&gt;,
+) {
+    // exchange rate <b>to</b> LBR
+    <b>let</b> rate = <a href="FixedPoint32.md#0x1_FixedPoint32_create_from_rational">FixedPoint32::create_from_rational</a>(
+        exchange_rate_denom,
+        exchange_rate_num,
+    );
+
+    <b>let</b> tc_account = <a href="DiemAccount.md#0x1_DiemAccount_create_signer">create_signer</a>(<a href="CoreAddresses.md#0x1_CoreAddresses_TREASURY_COMPLIANCE_ADDRESS">CoreAddresses::TREASURY_COMPLIANCE_ADDRESS</a>());
+
+    <a href="Diem.md#0x1_Diem_register_SCS_currency">Diem::register_SCS_currency</a>&lt;CoinType&gt;(
+        lr_account,
+        &tc_account,
+        rate,
+        scaling_factor,
+        fractional_part,
+        currency_code,
+        );
+
+    <a href="TransactionFee.md#0x1_TransactionFee_add_txn_fee_currency">TransactionFee::add_txn_fee_currency</a>&lt;CoinType&gt;(&tc_account);
+
+    <a href="DiemAccount.md#0x1_DiemAccount_destroy_signer">destroy_signer</a>(tc_account);
+
+    <a href="AccountLimits.md#0x1_AccountLimits_publish_unrestricted_limits">AccountLimits::publish_unrestricted_limits</a>&lt;CoinType&gt;(lr_account);
+}
+</code></pre>
+
+
+
+</details>
+
+<a name="0x1_DiemAccount_add_currency_for_designated_dealer"></a>
+
+## Function `add_currency_for_designated_dealer`
+
+Add a new currency for designated dealer account
+
+
+<pre><code><b>public</b> <b>fun</b> <a href="DiemAccount.md#0x1_DiemAccount_add_currency_for_designated_dealer">add_currency_for_designated_dealer</a>&lt;CoinType&gt;(tc_account: &signer, dd_address: address)
+</code></pre>
+
+
+
+<details>
+<summary>Implementation</summary>
+
+
+<pre><code><b>public</b> <b>fun</b> <a href="DiemAccount.md#0x1_DiemAccount_add_currency_for_designated_dealer">add_currency_for_designated_dealer</a>&lt;CoinType&gt;(
+    tc_account: &signer,    // Treasury Compliance account
+    dd_address: address,    // Designated Dealer account
+) {
+    <b>let</b> dd_account = <a href="DiemAccount.md#0x1_DiemAccount_create_signer">create_signer</a>(dd_address);
+
+    <a href="DesignatedDealer.md#0x1_DesignatedDealer_add_currency">DesignatedDealer::add_currency</a>&lt;CoinType&gt;(&dd_account, tc_account);
+
+    <b>if</b>(!<b>exists</b>&lt;<a href="DiemAccount.md#0x1_DiemAccount_Balance">Balance</a>&lt;CoinType&gt;&gt;(<a href="Signer.md#0x1_Signer_address_of">Signer::address_of</a>(&dd_account)))
+    {
+        <a href="DiemAccount.md#0x1_DiemAccount_add_currencies_for_account">add_currencies_for_account</a>&lt;CoinType&gt;(&dd_account, <b>false</b>);
+    };
+
+    <a href="DiemAccount.md#0x1_DiemAccount_destroy_signer">destroy_signer</a>(dd_account);
+}
+</code></pre>
+
+
+
+</details>
+
+<a name="0x1_DiemAccount_create_designated_dealer_ex"></a>
+
+## Function `create_designated_dealer_ex`
+
+Create designated dealer account with specified address and authentication key
+The <code>tc_account</code> must be treasury compliance.
+
+
+<pre><code><b>public</b> <b>fun</b> <a href="DiemAccount.md#0x1_DiemAccount_create_designated_dealer_ex">create_designated_dealer_ex</a>&lt;CoinType&gt;(tc_account: &signer, new_account_address: address, auth_key: vector&lt;u8&gt;, human_name: vector&lt;u8&gt;, add_all_currencies: bool)
+</code></pre>
+
+
+
+<details>
+<summary>Implementation</summary>
+
+
+<pre><code><b>public</b> <b>fun</b> <a href="DiemAccount.md#0x1_DiemAccount_create_designated_dealer_ex">create_designated_dealer_ex</a>&lt;CoinType&gt;(
+    tc_account: &signer,
+    new_account_address: address,
+    auth_key: vector&lt;u8&gt;,
+    human_name: vector&lt;u8&gt;,
+    add_all_currencies: bool,
+) <b>acquires</b> <a href="DiemAccount.md#0x1_DiemAccount_AccountOperationsCapability">AccountOperationsCapability</a>, <a href="DiemAccount.md#0x1_DiemAccount">DiemAccount</a> {
+    <a href="DiemAccount.md#0x1_DiemAccount_create_designated_dealer">create_designated_dealer</a>&lt;CoinType&gt;(
+        tc_account,
+        new_account_address,
+        x"00000000000000000000000000000000",
+        human_name,
+        add_all_currencies);
+
+    <b>let</b> new_account = <a href="DiemAccount.md#0x1_DiemAccount_create_signer">create_signer</a>(new_account_address);
+
+    <b>let</b> rotate_key_cap = <a href="DiemAccount.md#0x1_DiemAccount_extract_key_rotation_capability">extract_key_rotation_capability</a>(&new_account);
+    <a href="DiemAccount.md#0x1_DiemAccount_rotate_authentication_key">rotate_authentication_key</a>(&rotate_key_cap, auth_key);
+    <a href="DiemAccount.md#0x1_DiemAccount_restore_key_rotation_capability">restore_key_rotation_capability</a>(rotate_key_cap);
+
+    <a href="DiemAccount.md#0x1_DiemAccount_destroy_signer">destroy_signer</a>(new_account);
 }
 </code></pre>
 
