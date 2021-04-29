@@ -21,8 +21,10 @@ mod diff_summary;
 mod fix;
 mod fmt;
 mod generate_summaries;
+mod generate_workspace_hack;
 mod installer;
 mod lint;
+mod nextest;
 mod playground;
 mod test;
 mod tools;
@@ -67,6 +69,9 @@ enum Command {
     #[structopt(name = "test")]
     /// Run tests
     Test(test::Args),
+    #[structopt(name = "nextest")]
+    /// Run tests with new test runner
+    Nextest(nextest::Args),
     #[structopt(name = "tools")]
     /// Run tests
     Tools(tools::Args),
@@ -81,6 +86,9 @@ enum Command {
     #[structopt(name = "diff-summary")]
     /// Diff build summaries for important subsets
     DiffSummary(diff_summary::Args),
+    #[structopt(name = "generate-workspace-hack")]
+    /// Update workspace-hack contents
+    GenerateWorkspaceHack(generate_workspace_hack::Args),
 }
 
 fn main() -> Result<()> {
@@ -111,6 +119,7 @@ fn main() -> Result<()> {
     match args.cmd {
         Command::Tools(args) => tools::run(args, xctx),
         Command::Test(args) => test::run(args, xctx),
+        Command::Nextest(args) => nextest::run(args, xctx),
         Command::Build(args) => build::run(args, xctx),
         Command::ChangedSince(args) => changed_since::run(args, xctx),
         Command::Check(args) => check::run(args, xctx),
@@ -122,5 +131,6 @@ fn main() -> Result<()> {
         Command::Playground(args) => playground::run(args, xctx),
         Command::GenerateSummaries(args) => generate_summaries::run(args, xctx),
         Command::DiffSummary(args) => diff_summary::run(args, xctx),
+        Command::GenerateWorkspaceHack(args) => generate_workspace_hack::run(args, xctx),
     }
 }

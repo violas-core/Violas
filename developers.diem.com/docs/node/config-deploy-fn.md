@@ -15,7 +15,7 @@ This tutorial details how to configure a public FullNode to connect to *testnet*
 #### Prerequisites
 Before you get started with this tutorial, we recommend you familiarize yourself with the following:
 * [Diem node concepts](/core/nodes.md)
-* [JSON-RPC specifications](https://github.com/diem/diem/blob/master/json-rpc/json-rpc-spec.md)
+* [JSON-RPC specifications](https://github.com/diem/diem/blob/main/json-rpc/json-rpc-spec.md)
 * [CLI reference](/core/diem-cli.md)
 
 
@@ -37,13 +37,13 @@ You can configure a public FullNode in two ways: using the Diem Core source code
 
      * Copy `config/src/config/test_data/public_full_node.yaml` to your current working directory.
 
-     * Download [genesis](https://testnet.libra.org/genesis.blob) and [waypoint](https://testnet.libra.org/waypoint.txt) files for testnet.
+     * Download [genesis](https://testnet.diem.com/genesis.blob) and [waypoint](https://testnet.diem.com/waypoint.txt) files for testnet.
 
      * Update the public_full_node.yaml file in your current working directory by:
 
        * Specifying the directory where you want testnet to store its database next to `base:data_dir`; for example, `./data`.
 
-       * Copying and pasting the contents of the waypoint file linked in step 2 next to `waypoint` field.
+       * Copying and pasting the contents of the waypoint file to the `waypoint` field.
 
        * Adding the path where your Genesis file is located to `genesis_file_location`.
 
@@ -51,9 +51,11 @@ You can configure a public FullNode in two ways: using the Diem Core source code
 
           ```
           	seed_addrs:
-              4223dd0eeb0b0d78720a8990700955e1:
-             "/dns4/fn.testnet.libra.org/tcp/6182/ln-noise-ik/b6fd31624af370085cc3f872437bb4d9384b31a11b33b9591ddfaaed5a28b613/ln-handshake/0"
+                D4C4FB4956D899E55289083F45AC5D84:
+                    - "/dns4/fn.testnet.diem.com/tcp/6182/ln-noise-ik/d29d01bed8ab6c30921b327823f7e92c63f8371456fb110256e8c0e8911f4938/ln-handshake/0"
           ```
+
+       * Disable on-chain discovery for the `discovery_method: "none"` (this is not required but it will limit log spew)
 
        * Reading through the config and making any other desired changes. You can see what configurations the `public_full_node.yaml` file should have by checking the following file as an example: `docker/compose/public_full_node/public_full_node.yaml`
 4. Run the libra-node using `cargo run -p diem-node -- -f ./public_full_node.yaml`
@@ -68,8 +70,8 @@ You can also use Docker to configure and run your PublicFullNode.
 
 1. Install Docker and Docker-Compose.
 2. Create a directory for your public FullNode composition.
-3. Download the public FullNode [docker compose](https://github.com/libra/libra/tree/master/docker/compose/public_full_node/docker-compose.yaml) and [libra](https://github.com/libra/libra/tree/master/docker/compose/public_full_node/public_full_node.yaml) configuration files into the directory created in step 2.
-4. Download [genesis](https://testnet.libra.org/genesis.blob) and [waypoint](https://testnet.libra.org/waypoint.txt) files for testnet into that directory.
+3. Download the public FullNode [docker compose](https://github.com/diem/diem/tree/main/docker/compose/public_full_node/docker-compose.yaml) and [diem](https://github.com/diem/diem/tree/main/docker/compose/public_full_node/public_full_node.yaml) configuration files into this directory.
+4. Download [genesis](https://testnet.diem.com/genesis.blob) and [waypoint](https://testnet.diem.com/waypoint.txt) files for testnet into that directory.
 5. Run docker-compose: `docker-compose up`.
 
 

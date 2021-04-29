@@ -7,17 +7,21 @@ use crate::{
 };
 use diem_config::{
     config::{
-        DiscoveryMethod, Identity, NodeConfig, OnDiskStorageConfig, SafetyRulesService,
-        SecureBackend, SeedAddresses, WaypointConfig, HANDSHAKE_VERSION,
+        Identity, NodeConfig, OnDiskStorageConfig, PeerRole, SafetyRulesService, SecureBackend,
+        WaypointConfig,
     },
+    generator::build_seed_for_network,
     network_id::NetworkId,
 };
 use diem_crypto::ed25519::Ed25519PrivateKey;
 use diem_management::constants::{COMMON_NS, LAYOUT};
-use diem_network_address::{NetworkAddress, Protocol};
 use diem_secure_storage::{CryptoStorage, KVStorage, Storage};
 use diem_temppath::TempPath;
-use diem_types::{chain_id::ChainId, waypoint::Waypoint};
+use diem_types::{
+    chain_id::ChainId,
+    network_address::{NetworkAddress, Protocol},
+    waypoint::Waypoint,
+};
 use std::{
     path::{Path, PathBuf},
     str::FromStr,
@@ -70,15 +74,16 @@ impl<T: AsRef<Path>> ValidatorBuilder<T> {
 
     /// Association uploads the validator layout to shared storage.
     fn create_layout(&self) {
-        let mut layout = Layout::default();
-        layout.diem_root = DIEM_ROOT_SHARED_NS.into();
-        layout.treasury_compliance = DIEM_ROOT_SHARED_NS.into();
-        layout.owners = (0..self.num_validators)
-            .map(|i| (i.to_string() + OWNER_SHARED_NS))
-            .collect();
-        layout.operators = (0..self.num_validators)
-            .map(|i| (i.to_string() + OPERATOR_SHARED_NS))
-            .collect();
+        let layout = Layout {
+            owners: (0..self.num_validators)
+                .map(|i| (i.to_string() + OWNER_SHARED_NS))
+                .collect(),
+            operators: (0..self.num_validators)
+                .map(|i| (i.to_string() + OPERATOR_SHARED_NS))
+                .collect(),
+            diem_root: DIEM_ROOT_SHARED_NS.into(),
+            treasury_compliance: DIEM_ROOT_SHARED_NS.into(),
+        };
 
         let mut common_storage = self.storage_helper.storage(COMMON_NS.into());
         let layout_value = layout.to_toml().unwrap();
@@ -332,9 +337,7 @@ impl FullnodeBuilder {
         let pfn = &mut full_node_config
             .full_node_networks
             .iter_mut()
-            .find(|n| {
-                n.network_id == NetworkId::Public && n.discovery_method != DiscoveryMethod::Onchain
-            })
+            .find(|n| n.network_id == NetworkId::Public)
             .expect("vfn missing external public network in config");
 
         let v_vfn = &mut validator_config.full_node_networks[0];
@@ -345,20 +348,14 @@ impl FullnodeBuilder {
 
         // Now let's prepare the full nodes internal network to communicate with the validators
         // internal network
-        let v_vfn_network_address = v_vfn.listen_address.clone();
-        let v_vfn_pub_key = v_vfn.identity_key().public_key();
-        let v_vfn_network_address =
-            v_vfn_network_address.append_prod_protos(v_vfn_pub_key, HANDSHAKE_VERSION);
-        let v_vfn_id = v_vfn.peer_id();
-        let mut seed_addrs = SeedAddresses::default();
-        seed_addrs.insert(v_vfn_id, vec![v_vfn_network_address]);
+        let seeds = build_seed_for_network(v_vfn, PeerRole::Validator);
 
         let fn_vfn = &mut full_node_config
             .full_node_networks
             .iter_mut()
-            .find(|n| matches!(n.network_id, NetworkId::Private(_)))
+            .find(|n| n.network_id.is_vfn_network())
             .expect("vfn missing vfn full node network in config");
-        fn_vfn.seed_addrs = seed_addrs;
+        fn_vfn.seeds = seeds;
 
         Self::insert_waypoint_and_genesis(&mut full_node_config, &validator_config);
         full_node_config

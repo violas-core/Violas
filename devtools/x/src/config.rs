@@ -7,11 +7,24 @@ use determinator::rules::DeterminatorRules;
 use guppy::graph::summaries::CargoOptionsSummary;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
 };
+use x_core::core_config::XCoreConfig;
 
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub struct XConfig {
+    /// Core configuration.
+    #[serde(flatten)]
+    pub core: XCoreConfig,
+    /// X configuration.
+    #[serde(flatten)]
+    pub config: Config,
+}
+
+// TODO: probably split up lints and their configs into their own crate and section
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
@@ -114,8 +127,8 @@ pub struct WorkspaceConfig {
     pub test_only: TestOnlyConfig,
     /// Exceptions to whitespace linters
     pub whitespace_exceptions: Vec<String>,
-    /// Subsets of this workspace
-    pub subsets: BTreeMap<String, SubsetConfig>,
+    /// Move to Diem dependencies
+    pub move_to_diem_deps: MoveToDiemDepsConfig,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
@@ -137,6 +150,13 @@ pub struct BannedDepsConfig {
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
+pub struct MoveToDiemDepsConfig {
+    pub diem_crates_in_language: HashSet<String>,
+    pub existing_deps: HashSet<(String, String)>,
+    pub exclude: HashSet<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub struct OverlayConfig {
     /// A list of overlay feature names
@@ -147,13 +167,6 @@ pub struct OverlayConfig {
 #[serde(rename_all = "kebab-case")]
 pub struct TestOnlyConfig {
     /// A list of test-only workspace names
-    pub members: Vec<String>,
-}
-
-#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-pub struct SubsetConfig {
-    /// The members in this subset
     pub members: Vec<String>,
 }
 
@@ -171,12 +184,10 @@ pub struct Fix {}
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub struct CargoConfig {
-    pub toolchain: String,
-    pub flags: Option<String>,
     pub sccache: Option<Sccache>,
 }
 
-impl Config {
+impl XConfig {
     pub fn from_file(f: impl AsRef<Path>) -> Result<Self> {
         let f = f.as_ref();
         let contents =
@@ -192,7 +203,9 @@ impl Config {
     pub fn from_project_root() -> Result<Self> {
         Self::from_file(project_root().join("x.toml"))
     }
+}
 
+impl Config {
     pub fn cargo_config(&self) -> &CargoConfig {
         &self.cargo
     }

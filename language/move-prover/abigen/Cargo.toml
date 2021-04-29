@@ -8,24 +8,25 @@ license = "Apache-2.0"
 
 [dependencies]
 # diem dependencies
-spec-lang = { path = "../spec-lang", version = "0.1.0" }
-diem-workspace-hack = { path = "../../../common/workspace-hack", version = "0.1.0" }
-diem-types = { path = "../../../types", version = "0.1.0" }
-move-core-types = { path = "../../move-core/types", version = "0.1.0" }
-bcs = "0.1.1"
+move-model = { path = "../../move-model" }
+diem-workspace-hack = { path = "../../../common/workspace-hack" }
+diem-types = { path = "../../../types" }
+move-core-types = { path = "../../move-core/types" }
+bytecode-verifier = { path = "../../bytecode-verifier" }
+bcs = "0.1.2"
 
 # external dependencies
-log = "0.4.11"
-anyhow = "1.0.34"
-heck = "0.3.1"
-serde = { version = "1.0.117", features = ["derive"] }
+log = "0.4.14"
+anyhow = "1.0.38"
+heck = "0.3.2"
+serde = { version = "1.0.124", features = ["derive"] }
 
 [dev-dependencies]
 codespan-reporting = "0.8.0"
-move-prover = { path = "..", version = "0.1.0" }
-datatest-stable = { path = "../../../common/datatest-stable", version = "0.1.0" }
-move-prover-test-utils = { path = "../test-utils", version = "0.1.0" }
-diem-temppath = { path = "../../../common/temppath", version = "0.1.0" }
+move-prover = { path = ".." }
+datatest-stable = { path = "../../../common/datatest-stable" }
+move-prover-test-utils = { path = "../test-utils" }
+diem-temppath = { path = "../../../common/temppath" }
 
 [[test]]
 name = "testsuite"

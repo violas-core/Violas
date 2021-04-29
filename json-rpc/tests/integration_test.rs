@@ -3,20 +3,23 @@
 
 use serde_json::json;
 
-use compiled_stdlib::transaction_scripts::StdlibScript;
 use diem_crypto::hash::CryptoHash;
+use diem_transaction_builder::stdlib;
 use diem_types::{
     access_path::AccessPath,
     account_address::AccountAddress,
     account_config::xus_tag,
+    contract_event::EventWithProof,
     epoch_change::EpochChangeProof,
     ledger_info::LedgerInfoWithSignatures,
+    on_chain_config::DIEM_MAX_KNOWN_VERSION,
     proof::TransactionAccumulatorRangeProof,
     transaction::{ChangeSet, Transaction, TransactionInfo, TransactionPayload, WriteSetPayload},
     write_set::{WriteOp, WriteSet, WriteSetMut},
 };
-use std::ops::Deref;
-use transaction_builder_generated::stdlib;
+use std::{convert::TryInto, ops::Deref};
+
+use diem_json_rpc_types::views::EventView;
 
 mod node;
 mod testing;
@@ -81,23 +84,41 @@ fn create_test_cases() -> Vec<Test> {
         Test {
             name: "block metadata",
             run: |env: &mut testing::Env| {
-                let resp = env.send("get_metadata", json!([]));
-                let metadata = resp.result.unwrap();
-                assert_eq!(metadata["chain_id"], resp.diem_chain_id);
-                assert_eq!(metadata["timestamp"], resp.diem_ledger_timestampusec);
-                assert_eq!(metadata["version"], resp.diem_ledger_version);
+                // batch request
+                let resp = env.send_request(json!([
+                    {"jsonrpc": "2.0", "method": "get_metadata", "params": [], "id": 1},
+                    {"jsonrpc": "2.0", "method": "get_state_proof", "params": [0], "id": 2}
+                ]));
+
+                // extract both responses
+                let resps: Vec<serde_json::Value> = serde_json::from_value(resp).expect("should be valid serde_json::Value");
+                let metadata = &resps.iter().find(|g| g["id"] == 1).unwrap()["result"];
+                let state_proof = &resps.iter().find(|g| g["id"] == 2).unwrap()["result"];
+
+                // extract header and ensure they match in both responses
+                let diem_chain_id = &resps[0]["diem_chain_id"];
+                let diem_ledger_timestampusec = &resps[0]["diem_ledger_timestampusec"];
+                let diem_ledger_version = &resps[0]["diem_ledger_version"];
+
+                assert_eq!(diem_chain_id, &resps[1]["diem_chain_id"]);
+                assert_eq!(diem_ledger_timestampusec, &resps[1]["diem_ledger_timestampusec"]);
+                assert_eq!(diem_ledger_version, &resps[1]["diem_ledger_version"]);
+
+                // parse metadata
+                assert_eq!(&metadata["chain_id"], diem_chain_id);
+                assert_eq!(&metadata["timestamp"], diem_ledger_timestampusec);
+                assert_eq!(&metadata["version"], diem_ledger_version);
                 assert_eq!(metadata["chain_id"], 4);
-                // for testing chain id, we init genesis with VMPublishingOption#open
-                assert_eq!(metadata["script_hash_allow_list"], json!([]));
-                assert_eq!(metadata["module_publishing_allowed"], true);
-                assert_eq!(metadata["diem_version"], 1);
+                // All genesis's start with closed publishing so this should be populated with a
+                // list of allowed scripts and publishing off
+                assert_ne!(metadata["script_hash_allow_list"], json!([]));
+                assert_eq!(metadata["module_publishing_allowed"], false);
+                assert_eq!(metadata["diem_version"], 2);
                 assert_eq!(metadata["dual_attestation_limit"], 1000000000);
-                assert_ne!(resp.diem_ledger_timestampusec, 0);
-                assert_ne!(resp.diem_ledger_version, 0);
+                assert_ne!(diem_ledger_timestampusec, 0);
+                assert_ne!(diem_ledger_version, 0);
 
                 // prove the accumulator_root_hash
-                let sp_resp = env.send("get_state_proof", json!([resp.diem_ledger_version]));
-                let state_proof = sp_resp.result.unwrap();
                 let info_hex = state_proof["ledger_info_with_signatures"].as_str().unwrap();
                 let info:LedgerInfoWithSignatures = bcs::from_bytes(&hex::decode(&info_hex).unwrap()).unwrap();
                 let expected_hash = info.deref().ledger_info().transaction_accumulator_hash().to_hex();
@@ -125,7 +146,7 @@ fn create_test_cases() -> Vec<Test> {
         Test {
             name: "unknown role type account",
             run: |env: &mut testing::Env| {
-                let address = format!("{:#x}", diem_types::account_config::diem_root_address());
+                let address = format!("{:x}", diem_types::account_config::diem_root_address());
                 let resp = env.send("get_account", json!([address]));
                 let mut result = resp.result.unwrap();
                 // as we generate account auth key, ignore it in assertion
@@ -143,16 +164,17 @@ fn create_test_cases() -> Vec<Test> {
                         "received_events_key": "02000000000000000000000000000000000000000a550c18",
                         "role": { "type": "unknown" },
                         "sent_events_key": "03000000000000000000000000000000000000000a550c18",
-                        "sequence_number": 1
+                        "sequence_number": 1,
+                        "version": resp.diem_ledger_version,
                     }),
                 );
             },
         },
         Test {
-            name: "designated_dealer role type account",
+            name: "designated_dealer role type account no preburns",
             run: |env: &mut testing::Env| {
                 let address = format!(
-                    "{:#x}",
+                    "{:x}",
                     diem_types::account_config::testnet_dd_account_address()
                 );
                 let resp = env.send("get_account", json!([address]));
@@ -167,11 +189,11 @@ fn create_test_cases() -> Vec<Test> {
                         "authentication_key": null,
                         "balances": [
                             {
-                                "amount": 0 as u64,
+                                "amount": 0_u64,
                                 "currency": "XDX"
                             },
                             {
-                                "amount": 9223370036854775807 as u64,
+                                "amount": 9223370036854775807_u64,
                                 "currency": "XUS"
                             },
                         ],
@@ -183,20 +205,116 @@ fn create_test_cases() -> Vec<Test> {
                             "type": "designated_dealer",
                             "base_url": "",
                             "compliance_key": "",
-                            "expiration_time": 18446744073709551615 as u64,
+                            "expiration_time": 18446744073709551615_u64,
                             "human_name": "moneybags",
                             "preburn_balances": [
                                 {
-                                    "amount": 0,
+                                    "amount": 0_u64,
                                     "currency": "XUS"
-                                },
+                                }
+                            ],
+                            "preburn_queues": [
+                                {
+                                    "preburns": [],
+                                    "currency": "XUS",
+                                }
                             ],
                             "received_mint_events_key": "0000000000000000000000000000000000000000000000dd",
                             "compliance_key_rotation_events_key": "0100000000000000000000000000000000000000000000dd",
                             "base_url_rotation_events_key": "0200000000000000000000000000000000000000000000dd",
                         },
                         "sent_events_key": "0400000000000000000000000000000000000000000000dd",
-                        "sequence_number": 2
+                        "sequence_number": 2,
+                        "version": resp.diem_ledger_version,
+                    }),
+                );
+            },
+        },
+        Test {
+            name: "designated_dealer role type account with preburns",
+            run: |env: &mut testing::Env| {
+                let address =
+                    diem_types::account_config::testnet_dd_account_address().to_hex();
+                env.submit_and_wait(
+                    env.create_txn(&env.dd, stdlib::encode_preburn_script(xus_tag(), 100))
+                );
+                env.submit_and_wait(
+                    env.create_txn(&env.dd, stdlib::encode_preburn_script(xus_tag(), 50))
+                );
+                env.submit_and_wait(
+                    env.create_txn(&env.dd, stdlib::encode_preburn_script(xus_tag(), 60))
+                );
+                let resp = env.send("get_account", json!([address]));
+                let mut result = resp.result.unwrap();
+                // as we generate account auth key, ignore it in assertion
+                assert_ne!(result["authentication_key"].as_str().unwrap(), "");
+                result["authentication_key"] = json!(null);
+                assert_eq!(
+                    result,
+                    json!({
+                        "address": address,
+                        "authentication_key": null,
+                        "balances": [
+                            {
+                                "amount": 0_u64,
+                                "currency": "XDX"
+                            },
+                            {
+                                "amount": 9223370036854775597_u64,
+                                "currency": "XUS"
+                            },
+                        ],
+                        "delegated_key_rotation_capability": false,
+                        "delegated_withdrawal_capability": false,
+                        "is_frozen": false,
+                        "received_events_key": "0300000000000000000000000000000000000000000000dd",
+                        "role": {
+                            "type": "designated_dealer",
+                            "base_url": "",
+                            "compliance_key": "",
+                            "expiration_time": 18446744073709551615_u64,
+                            "human_name": "moneybags",
+                            "preburn_balances": [
+                                {
+                                    "amount": 210_u64,
+                                    "currency": "XUS"
+                                }
+                            ],
+                            "preburn_queues": [
+                                {
+                                    "currency": "XUS",
+                                    "preburns": [
+                                        {
+                                            "preburn": {
+                                                "amount": 100_u64,
+                                                "currency": "XUS",
+                                            },
+                                            "metadata": "",
+                                        },
+                                        {
+                                            "preburn": {
+                                                "amount": 50_u64,
+                                                "currency": "XUS"
+                                            },
+                                            "metadata": "",
+                                        },
+                                        {
+                                            "preburn": {
+                                                "amount": 60_u64,
+                                                "currency": "XUS"
+                                            },
+                                            "metadata": "",
+                                        },
+                                    ],
+                                }
+                            ],
+                            "received_mint_events_key": "0000000000000000000000000000000000000000000000dd",
+                            "compliance_key_rotation_events_key": "0100000000000000000000000000000000000000000000dd",
+                            "base_url_rotation_events_key": "0200000000000000000000000000000000000000000000dd",
+                        },
+                        "sent_events_key": "0400000000000000000000000000000000000000000000dd",
+                        "sequence_number": 5,
+                        "version": resp.diem_ledger_version,
                     }),
                 );
             },
@@ -205,7 +323,7 @@ fn create_test_cases() -> Vec<Test> {
             name: "parent vasp role type account",
             run: |env: &mut testing::Env| {
                 let account = &env.vasps[0];
-                let address = format!("{:#x}", &account.address);
+                let address = format!("{:x}", &account.address);
                 let resp = env.send("get_account", json!([address]));
                 let result = resp.result.unwrap();
                 assert_eq!(
@@ -213,7 +331,7 @@ fn create_test_cases() -> Vec<Test> {
                     json!({
                         "address": address,
                         "authentication_key": account.auth_key().to_string(),
-                        "balances": [{"amount": 997000000000 as u64, "currency": "XUS"}],
+                        "balances": [{"amount": 997000000000_u64, "currency": "XUS"}],
                         "delegated_key_rotation_capability": false,
                         "delegated_withdrawal_capability": false,
                         "is_frozen": false,
@@ -223,13 +341,54 @@ fn create_test_cases() -> Vec<Test> {
                             "base_url_rotation_events_key": format!("0100000000000000{}", address),
                             "compliance_key": "",
                             "compliance_key_rotation_events_key": format!("0000000000000000{}", address),
-                            "expiration_time": 18446744073709551615 as u64,
+                            "expiration_time": 18446744073709551615_u64,
                             "human_name": "Novi 0",
                             "num_children": 1,
                             "type": "parent_vasp"
                         },
                         "sent_events_key": format!("0300000000000000{}", address),
-                        "sequence_number": 1
+                        "sequence_number": 1,
+                        "version": resp.diem_ledger_version,
+                    }),
+                );
+            },
+        },
+        Test {
+            name: "get account by version",
+            run: |env: &mut testing::Env| {
+                let account = &env.vasps[0];
+                let address = format!("{:x}", &account.address);
+                // The account txn is creating child VASP.
+                let account_sequence = 0;
+
+                let resp = env.send("get_account_transaction", json!([address, account_sequence, false]));
+                let result = resp.result.unwrap();
+                let prev_version: u64 = result["version"].as_u64().unwrap() - 1;
+                let resp = env.send("get_account", json!([address, prev_version]));
+                let result = resp.result.unwrap();
+                assert_eq!(
+                    result,
+                    json!({
+                        "address": address,
+                        "authentication_key": account.auth_key().to_string(),
+                        "balances": [{"amount": 1000000000000_u64, "currency": "XUS"}],
+                        "delegated_key_rotation_capability": false,
+                        "delegated_withdrawal_capability": false,
+                        "is_frozen": false,
+                        "received_events_key": format!("0200000000000000{}", address),
+                        "role": {
+                            "base_url": "",
+                            "base_url_rotation_events_key": format!("0100000000000000{}", address),
+                            "compliance_key": "",
+                            "compliance_key_rotation_events_key": format!("0000000000000000{}", address),
+                            "expiration_time": 18446744073709551615_u64,
+                            "human_name": "Novi 0",
+                            "num_children": 0,
+                            "type": "parent_vasp"
+                        },
+                        "sent_events_key": format!("0300000000000000{}", address),
+                        "sequence_number": 0,
+                        "version": prev_version,
                     }),
                 );
             },
@@ -239,7 +398,7 @@ fn create_test_cases() -> Vec<Test> {
             run: |env: &mut testing::Env| {
                 let parent = &env.vasps[0];
                 let account = &env.vasps[0].children[0];
-                let address = format!("{:#x}", &account.address);
+                let address = format!("{:x}", &account.address);
                 let resp = env.send("get_account", json!([address]));
                 let result = resp.result.unwrap();
                 assert_eq!(
@@ -247,17 +406,18 @@ fn create_test_cases() -> Vec<Test> {
                     json!({
                         "address": address,
                         "authentication_key": account.auth_key().to_string(),
-                        "balances": [{"amount": 3000000000 as u64, "currency": "XUS"}],
+                        "balances": [{"amount": 3000000000_u64, "currency": "XUS"}],
                         "delegated_key_rotation_capability": false,
                         "delegated_withdrawal_capability": false,
                         "is_frozen": false,
                         "received_events_key": format!("0000000000000000{}", address),
                         "role": {
                             "type": "child_vasp",
-                            "parent_vasp_address": format!("{:#x}", &parent.address),
+                            "parent_vasp_address": format!("{:x}", &parent.address),
                         },
                         "sent_events_key": format!("0100000000000000{}", address),
-                        "sequence_number": 0
+                        "sequence_number": 0,
+                        "version": resp.diem_ledger_version,
                     }),
                 );
             },
@@ -302,25 +462,25 @@ fn create_test_cases() -> Vec<Test> {
                         "events": [
                             {
                                 "data": {
-                                    "amount": {"amount": 200000 as u64, "currency": "XUS"},
+                                    "amount": {"amount": 200000_u64, "currency": "XUS"},
                                     "metadata": "",
-                                    "receiver": format!("{:#x}", &receiver.address),
-                                    "sender": format!("{:#x}", &sender.address),
+                                    "receiver": format!("{:x}", &receiver.address),
+                                    "sender": format!("{:x}", &sender.address),
                                     "type": "sentpayment"
                                 },
-                                "key": format!("0100000000000000{:#x}", &sender.address),
+                                "key": format!("0100000000000000{:x}", &sender.address),
                                 "sequence_number": 0,
                                 "transaction_version": version,
                             },
                             {
                                 "data": {
-                                    "amount": {"amount": 200000 as u64, "currency": "XUS"},
+                                    "amount": {"amount": 200000_u64, "currency": "XUS"},
                                     "metadata": "",
-                                    "receiver": format!("{:#x}", &receiver.address),
-                                    "sender": format!("{:#x}", &sender.address),
+                                    "receiver": format!("{:x}", &receiver.address),
+                                    "sender": format!("{:x}", &sender.address),
                                     "type": "receivedpayment"
                                 },
-                                "key": format!("0000000000000000{:#x}", &receiver.address),
+                                "key": format!("0000000000000000{:x}", &receiver.address),
                                 "sequence_number": 1,
                                 "transaction_version": version
                             }
@@ -350,11 +510,11 @@ fn create_test_cases() -> Vec<Test> {
                                 "currency": "XUS",
                                 "metadata": "",
                                 "metadata_signature": "",
-                                "receiver": format!("{:#x}", &receiver.address),
+                                "receiver": format!("{:x}", &receiver.address),
                             },
                             "script_bytes": script_bytes,
                             "script_hash": script_hash,
-                            "sender": format!("{:#x}", &sender.address),
+                            "sender": format!("{:x}", &sender.address),
                             "sequence_number": 0,
                             "signature": hex::encode(txn.authenticator().signature_bytes()),
                             "signature_scheme": "Scheme::Ed25519",
@@ -434,7 +594,7 @@ fn create_test_cases() -> Vec<Test> {
                     let txn1 = {
                         let account1 = env.get_account(0, 0);
                         let account2 = env.get_account(1, 0);
-                        let script = transaction_builder_generated::stdlib::encode_peer_to_peer_with_metadata_script(
+                        let script = stdlib::encode_peer_to_peer_with_metadata_script(
                             xus_tag(),
                             account2.address,
                             100,
@@ -465,6 +625,17 @@ fn create_test_cases() -> Vec<Test> {
             },
         },
         Test {
+            name: "Upgrade diem version",
+            run: |env: &mut testing::Env| {
+                let script = stdlib::encode_update_diem_version_script(
+                    0,
+                    DIEM_MAX_KNOWN_VERSION.major + 1,
+                );
+                let txn = env.create_txn(&env.root, script);
+                env.submit_and_wait(txn);
+            },
+        },
+        Test {
             name: "preburn & burn events",
             run: |env: &mut testing::Env| {
                 let script = stdlib::encode_preburn_script(xus_tag(), 100);
@@ -484,7 +655,7 @@ fn create_test_cases() -> Vec<Test> {
                                 "type": "sentpayment"
                             },
                             "key": "0400000000000000000000000000000000000000000000dd",
-                            "sequence_number": 2,
+                            "sequence_number": 5,
                             "transaction_version": version
                         },
                         {
@@ -494,7 +665,7 @@ fn create_test_cases() -> Vec<Test> {
                                 "type": "preburn"
                             },
                             "key": "07000000000000000000000000000000000000000a550c18",
-                            "sequence_number": 0,
+                            "sequence_number": 3,
                             "transaction_version": version
                         }
                     ]),
@@ -517,8 +688,13 @@ fn create_test_cases() -> Vec<Test> {
                     result["transaction"]
                 );
 
-                let script = stdlib::encode_burn_script(xus_tag(), 0, env.dd.address);
-                let burn_txn = env.create_txn(&env.tc, script.clone());
+                let script = stdlib::encode_burn_with_amount_script_function(
+                    xus_tag(), 0, env.dd.address, 100
+                );
+                let burn_txn = env.create_txn_by_payload(
+                    &env.tc,
+                    script,
+                );
                 let result = env.submit_and_wait(burn_txn);
                 let version = result["version"].as_u64().unwrap();
                 assert_eq!(
@@ -542,12 +718,15 @@ fn create_test_cases() -> Vec<Test> {
                         "type_arguments": [
                             "XUS"
                         ],
-                        "arguments": [
-                            "{U64: 0}",
-                            "{ADDRESS: 000000000000000000000000000000DD}"
+                        "arguments_bcs": [
+                            "0000000000000000",
+                            "000000000000000000000000000000dd",
+                            "6400000000000000",
                         ],
-                        "code": hex::encode(script.code()),
-                        "type": "burn"
+                        "type": "script_function",
+                        "module_address":"00000000000000000000000000000001",
+                        "module_name":"TreasuryComplianceScripts",
+                        "function_name":"burn_with_amount",
                     }),
                     "{}",
                     result["transaction"]
@@ -561,8 +740,11 @@ fn create_test_cases() -> Vec<Test> {
                     env.create_txn(&env.dd, stdlib::encode_preburn_script(xus_tag(), 100));
                 env.submit_and_wait(txn);
 
-                let script = stdlib::encode_cancel_burn_script(xus_tag(), env.dd.address);
-                let cancel_burn_txn = env.create_txn(&env.tc, script.clone());
+                let script = stdlib::encode_cancel_burn_with_amount_script_function(xus_tag(), env.dd.address, 100);
+                let cancel_burn_txn = env.create_txn_by_payload(
+                    &env.tc,
+                    script,
+                );
                 let result = env.submit_and_wait(cancel_burn_txn);
                 let version = result["version"].as_u64().unwrap();
                 assert_eq!(
@@ -600,11 +782,14 @@ fn create_test_cases() -> Vec<Test> {
                         "type_arguments": [
                             "XUS"
                         ],
-                        "arguments": [
-                            "{ADDRESS: 000000000000000000000000000000DD}",
+                        "arguments_bcs": [
+                            "000000000000000000000000000000dd",
+                            "6400000000000000",
                         ],
-                        "code": hex::encode(script.code()),
-                        "type": "cancel_burn"
+                        "type": "script_function",
+                        "module_address":"00000000000000000000000000000001",
+                        "module_name":"TreasuryComplianceScripts",
+                        "function_name":"cancel_burn_with_amount",
                     }),
                     "{}",
                     result["transaction"]
@@ -749,7 +934,7 @@ fn create_test_cases() -> Vec<Test> {
                                 "time_rotated_seconds": rotated_seconds,
                                 "type":"baseurlrotation"
                             },
-                            "key": format!("0100000000000000{:#x}", &env.vasps[0].address),
+                            "key": format!("0100000000000000{:x}", &env.vasps[0].address),
                             "sequence_number":0,
                             "transaction_version":version
                         },
@@ -759,7 +944,7 @@ fn create_test_cases() -> Vec<Test> {
                                 "time_rotated_seconds": rotated_seconds,
                                 "type":"compliancekeyrotation"
                             },
-                            "key": format!("0000000000000000{:#x}", &env.vasps[0].address),
+                            "key": format!("0000000000000000{:x}", &env.vasps[0].address),
                             "sequence_number":0,
                             "transaction_version":version
                         }
@@ -797,11 +982,11 @@ fn create_test_cases() -> Vec<Test> {
                         },
                         {
                             "data":{
-                                "epoch": 2,
+                                "epoch": 3,
                                 "type": "newepoch"
                             },
                             "key": "04000000000000000000000000000000000000000a550c18",
-                            "sequence_number": 1,
+                            "sequence_number": 2,
                             "transaction_version": version
                         }
                     ]),
@@ -871,6 +1056,35 @@ fn create_test_cases() -> Vec<Test> {
             },
         },
         Test {
+            name: "get_account_transactions without event",
+            run: |env: &mut testing::Env| {
+                let sender = &env.vasps[0].children[0];
+                let response = env.send(
+                    "get_account_transactions",
+                    json!([sender.address.to_string(), 0, 1000, false]),
+                );
+                let txns = response.result.unwrap();
+                assert!(!txns.as_array().unwrap().is_empty());
+
+                for txn in txns.as_array().unwrap() {
+                    assert_eq!(txn["events"], json!([]));
+                }
+            },
+        },
+        Test {
+            name: "no unknown events so far",
+            run: |env: &mut testing::Env| {
+                let response = env.send("get_transactions", json!([0, 1000, true]));
+                let txns = response.result.unwrap();
+                for txn in txns.as_array().unwrap() {
+                    for event in txn["events"].as_array().unwrap() {
+                        let event_type = event["data"]["type"].as_str().unwrap();
+                        assert_ne!(event_type, "unknown", "{}", event);
+                    }
+                }
+            },
+        },
+        Test {
             name: "get_transactions_with_proofs",
             run: |env: &mut testing::Env| {
                 let resp = env.send("get_metadata", json!([]));
@@ -881,7 +1095,7 @@ fn create_test_cases() -> Vec<Test> {
                 //      1. base_version + limit > resp.diem_ledger_version
                 //      2. base_version + limit < resp.diem_ledger_version
                 for base_version in &[resp.diem_ledger_version, 0] {
-                   // let response = env.send("get_transactions_with_proofs", json!([*base_version, limit]));
+                   // We use a batched call to ensure we get an answer using the same latest server ledger_info for both
                     let responses = env.send_request(json!([
                         {"jsonrpc": "2.0", "method": "get_state_proof", "params": json!([0]), "id": 1},
                         {"jsonrpc": "2.0", "method": "get_transactions_with_proofs", "params": json!([*base_version, limit]), "id": 2}
@@ -900,8 +1114,9 @@ fn create_test_cases() -> Vec<Test> {
                     let epoch_proofs:EpochChangeProof = bcs::from_bytes(&hex::decode(&ep_cp).unwrap()).unwrap();
                     let some_li:Vec<_> = epoch_proofs.ledger_info_with_sigs;
                     assert!(!some_li.is_empty());
-                    // Let's use the first one since the validator set does not change in the tests.
-                    let validator_set = &some_li.first().unwrap().ledger_info().next_epoch_state().unwrap().verifier;
+                    // We use the last one (but the validator set does not change in the tests and
+                    // in practice the epoch change proofs should be verified).
+                    let validator_set = &some_li.last().unwrap().ledger_info().next_epoch_state().unwrap().verifier;
 
                     // The actual proofs
                     let raw_hex_li = proofs["ledger_info_to_transaction_infos_proof"].as_str().unwrap();
@@ -913,10 +1128,11 @@ fn create_test_cases() -> Vec<Test> {
                     .iter()
                     .map(CryptoHash::hash)
                     .collect();
-                    assert!(!hashes.is_empty());
 
-                    // We make sure we have either 10 or 1 txs since we test these 2 cases
-                    assert!(hashes.len() == 10 || hashes.len() == 1);
+                    // We make sure we have between 1 and 10 txs
+                    if hashes.len() > 10 || hashes.is_empty() {
+                        panic!("Unexpected hash len returned at {} by get_transactions_with_proofs: {}", base_version, hashes.len());
+                    }
 
                     // We must check the transactions we got correspond to the hashes in the proofs
                     let raw_blobs = data["serialized_transactions"].as_array().unwrap();
@@ -954,48 +1170,49 @@ fn create_test_cases() -> Vec<Test> {
             },
         },
         Test {
-            name: "get_account_transactions without event",
+            name: "get_events_with_proofs",
             run: |env: &mut testing::Env| {
-                let sender = &env.vasps[0].children[0];
-                let response = env.send(
-                    "get_account_transactions",
-                    json!([sender.address.to_string(), 0, 1000, false]),
-                );
-                let txns = response.result.unwrap();
-                assert!(!txns.as_array().unwrap().is_empty());
+                let responses = env.send_request(json!([
+                    {"jsonrpc": "2.0", "method": "get_state_proof", "params": json!([0]), "id": 1},
+                    {"jsonrpc": "2.0", "method": "get_events_with_proofs", "params": json!(["00000000000000000000000000000000000000000a550c18", 0, 3]), "id": 2}
+                ]));
 
-                for txn in txns.as_array().unwrap() {
-                    assert_eq!(txn["events"], json!([]));
-                }
-            },
-        },
-        Test {
-            name: "no unknown events so far",
-            run: |env: &mut testing::Env| {
-                let response = env.send("get_transactions", json!([0, 1000, true]));
-                let txns = response.result.unwrap();
-                for txn in txns.as_array().unwrap() {
-                    for event in txn["events"].as_array().unwrap() {
-                        let event_type = event["data"]["type"].as_str().unwrap();
-                        assert_ne!(event_type, "unknown", "{}", event);
-                    }
-                }
-            },
-        },
-        Test {
-            name: "block metadata returns script_hash_allow_list",
-            run: |env: &mut testing::Env| {
-                let hash = StdlibScript::AddCurrencyToAccount.compiled_bytes().hash();
-                let txn = env.create_txn(
-                    &env.root,
-                    stdlib::encode_add_to_script_allow_list_script(hash.to_vec(), 0),
-                );
-                env.submit_and_wait(txn);
+                let resps:Vec<serde_json::Value> = serde_json::from_value(responses).expect("should be valid serde_json::Value");
 
-                let resp = env.send("get_metadata", json!([]));
-                let metadata = resp.result.unwrap();
-                assert_eq!(metadata["script_hash_allow_list"], json!([hash.to_hex()]));
-                assert_eq!(metadata["module_publishing_allowed"], true);
+                // we need te get the current ledger_info in order to verify the events
+                let ledger_info_view = &resps.iter().find(|g| g["id"] == 1).unwrap()["result"];
+                let li_raw = ledger_info_view["ledger_info_with_signatures"].as_str().unwrap();
+                let li:LedgerInfoWithSignatures = bcs::from_bytes(&hex::decode(&li_raw).unwrap()).unwrap();
+                // We want to verify the signatures of the LedgerInfo to be sure it's valid, but
+                // since we don't have a local state with the set of validators unlike an actual client,
+                // we need to get the validator set from the batched get_state_proof call.
+                let ep_cp = ledger_info_view["epoch_change_proof"].as_str().unwrap();
+                let epoch_proofs:EpochChangeProof = bcs::from_bytes(&hex::decode(&ep_cp).unwrap()).unwrap();
+                let some_li:Vec<_> = epoch_proofs.ledger_info_with_sigs;
+                assert!(!some_li.is_empty());
+                // We use the last one (but the validator set does not change in the tests and
+                // in practice the epoch change proofs should be verified).
+                let validator_set = &some_li.last().unwrap().ledger_info().next_epoch_state().unwrap().verifier;
+                // And we verify the signature
+                assert!(li.verify_signatures(&validator_set).is_ok());
+
+                // We now need to verify the events using this verified ledger_info:
+                let ledger_info = li.ledger_info();
+                let data = &resps.iter().find(|g| g["id"] == 2).unwrap()["result"].as_array().unwrap();
+                let mut events:Vec<EventView> = vec![];
+                for d in  data.iter() {
+                    let bcs_data = d["event_with_proof"].as_str().unwrap();
+                    let event:EventWithProof = bcs::from_bytes(&hex::decode(&bcs_data).unwrap()).unwrap();
+                    let hash = event.event.hash();
+
+                    // We verify the proof of the event
+                    assert!(event.proof.verify(ledger_info, hash, event.transaction_version, event.event_index).is_ok());
+
+                    // We can now use our verified events
+                    events.push((event.transaction_version, event.event).try_into().unwrap());
+                }
+
+                assert_eq!(events.len(),3);
             },
         },
         // no test after this one, as your scripts may not in allow list.

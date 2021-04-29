@@ -50,6 +50,10 @@ impl Request {
         Self::new("get_events", json!([key, start_seq, limit]))
     }
 
+    pub fn get_events_with_proofs(key: &str, start_seq: u64, limit: u64) -> Self {
+        Self::new("get_events_with_proofs", json!([key, start_seq, limit]))
+    }
+
     pub fn get_transactions(start_seq: u64, limit: u64, include_events: bool) -> Self {
         Self::new(
             "get_transactions",

@@ -11,7 +11,6 @@ use crate::{
     workspace_builder,
 };
 use diem_config::config::NodeConfig;
-use diem_crypto::HashValue;
 use diem_types::waypoint::Waypoint;
 use std::{fs, path::PathBuf};
 
@@ -252,6 +251,9 @@ fn test_state_sync_multichunk_epoch() {
     let mut env = SmokeTestEnvironment::new_with_chunk_limit(4, 5);
     env.validator_swarm.launch();
     let mut client = env.get_validator_client(0, None);
+    client
+        .enable_custom_script(&["enable_custom_script"], false, true)
+        .unwrap();
     // we bring this validator back up with waypoint s.t. the waypoint sync spans multiple epochs,
     // and each epoch spanning multiple chunks
     env.validator_swarm.kill_node(3);
@@ -275,9 +277,15 @@ fn test_state_sync_multichunk_epoch() {
     let script_path = workspace_builder::workspace_root()
         .join("testsuite/smoke-test/src/dev_modules/test_script.move");
     let unwrapped_script_path = script_path.to_str().unwrap();
-    let stdlib_source_dir = workspace_builder::workspace_root().join("language/stdlib/modules");
-    let unwrapped_stdlib_dir = stdlib_source_dir.to_str().unwrap();
-    let script_params = &["compile", "0", unwrapped_script_path, unwrapped_stdlib_dir];
+    let move_stdlib_dir = move_stdlib::move_stdlib_modules_full_path();
+    let diem_framework_dir = diem_framework::diem_stdlib_modules_full_path();
+    let script_params = &[
+        "compile",
+        "0",
+        unwrapped_script_path,
+        move_stdlib_dir.as_str(),
+        diem_framework_dir.as_str(),
+    ];
     let mut script_compiled_paths = client.compile_program(script_params).unwrap();
     let script_compiled_path = if script_compiled_paths.len() != 1 {
         panic!("compiler output has more than one file")
@@ -290,12 +298,11 @@ fn test_state_sync_multichunk_epoch() {
         .execute_script(&["execute", "0", &script_compiled_path[..], "10", "0x0"])
         .unwrap();
 
-    // Bump epoch by trigger a reconfig by modifying allow list for multiple epochs
-    for curr_epoch in 1..=2 {
+    // Bump epoch by trigger a reconfig for multiple epochs
+    for curr_epoch in 2..=3 {
         // bumps epoch from curr_epoch -> curr_epoch + 1
-        let hash = hex::encode(&HashValue::random().to_vec());
         client
-            .add_to_script_allow_list(&["add_to_script_allow_list", hash.as_str()], true)
+            .enable_custom_script(&["enable_custom_script"], false, true)
             .unwrap();
         assert_eq!(
             client

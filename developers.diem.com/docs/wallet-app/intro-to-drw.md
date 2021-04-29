@@ -14,9 +14,6 @@ The Reference Wallet and Public Demo Wallet include various references to transa
 > **Note:** Custodial wallet services like holding Diem Coins for customers, exchanging one type of Diem Coin for another, transferring customer Diem Coins to other users (whether in the same wallet or others), and exchanging Diem Coins for cash all potentially money transmission or money services business activities, depending on the state/federal jurisdictions involved.
 >
 > The functions described in this document may require the service provider to be licensed in the jurisdictions in which it operates and, to operate on the Diem Payment Network, it will need to be a Regulated VASP reviewed and onboarded by Diem Networks.
->
-> *Visit the [Prospective VASPs](reference/prospective-vasps.md) page to learn more.*
-
 
 ### The Lifecycle of a transaction
 
@@ -25,7 +22,7 @@ Before you get started with the Reference Wallet, get familiar with how transact
 When you submit a transaction to the Diem Payment Network, you are cryptographically signing a transaction script and then waiting (by listening to the event stream) for consensus from validators. The diagram below shows the flow of a transaction once it’s been submitted. Learn more about this flow [here](core/life-of-a-transaction.md).
 
 
-![](/img/docs/validator.svg)
+![Figure 1.0 Lifecycle of a transaction](/img/docs/validator.svg)
 
 ## Wallet Architecture
 
@@ -92,3 +89,4 @@ The use cases handled by the Reference Wallet service are:
 3. Convert: This simulates a conversion between the different Diem Coins.
 
 In the Add Funds use case, the user’s simulated credit card or bank account is charged the fiat currency amount to simulate the purchase. In the Withdraw Funds use case, the user’s simulated credit card or the bank account is credited to simulate the withdrawal.
+

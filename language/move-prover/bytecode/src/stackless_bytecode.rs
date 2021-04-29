@@ -3,15 +3,15 @@
 
 use crate::function_target::FunctionTarget;
 use itertools::Itertools;
-use num::BigUint;
-use spec_lang::{
-    env::{FunId, ModuleId, StructId},
+use move_model::{
+    ast::{Exp, MemoryLabel, TempIndex},
+    exp_rewriter::{ExpRewriter, RewriteTarget},
+    model::{FunId, ModuleId, NodeId, QualifiedId, SpecVarId, StructId},
     ty::{Type, TypeDisplayContext},
 };
-use std::{collections::BTreeMap, fmt, fmt::Formatter, rc::Rc};
+use num::BigUint;
+use std::{collections::BTreeMap, fmt, fmt::Formatter};
 use vm::file_format::CodeOffset;
-
-pub type TempIndex = usize;
 
 /// A label for a branch destination.
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
@@ -111,9 +111,10 @@ pub enum Operation {
     ReadRef,
     WriteRef,
     FreezeRef,
+    Havoc,
 
     // Memory model
-    WriteBack(BorrowNode),
+    WriteBack(BorrowNode, BorrowEdge),
     Splice(BTreeMap<usize, TempIndex>),
     UnpackRef,
     PackRef,
@@ -145,17 +146,80 @@ pub enum Operation {
     And,
     Eq,
     Neq,
+
+    // Debugging
+    TraceLocal(TempIndex),
+    TraceReturn(usize),
+    TraceAbort,
+    TraceExp(NodeId),
+
+    // Event
+    EmitEvent,
+    EventStoreDiverge,
 }
 
-#[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd)]
-pub struct StructDecl {
-    pub module_id: ModuleId,
-    pub struct_id: StructId,
+impl Operation {
+    /// Returns true of the operation can cause abort.
+    pub fn can_abort(&self) -> bool {
+        match self {
+            Operation::Function(_, _, _) => true,
+            Operation::Pack(_, _, _) => false,
+            Operation::Unpack(_, _, _) => false,
+            Operation::MoveTo(_, _, _) => true,
+            Operation::MoveFrom(_, _, _) => true,
+            Operation::Exists(_, _, _) => false,
+            Operation::BorrowLoc => false,
+            Operation::BorrowField(_, _, _, _) => false,
+            Operation::BorrowGlobal(_, _, _) => true,
+            Operation::GetField(_, _, _, _) => false,
+            Operation::GetGlobal(_, _, _) => true,
+            Operation::Destroy => false,
+            Operation::ReadRef => false,
+            Operation::WriteRef => false,
+            Operation::FreezeRef => false,
+            Operation::Havoc => false,
+            Operation::WriteBack(_, _) => false,
+            Operation::Splice(_) => false,
+            Operation::UnpackRef => false,
+            Operation::PackRef => false,
+            Operation::UnpackRefDeep => false,
+            Operation::PackRefDeep => false,
+            Operation::CastU8 => true,
+            Operation::CastU64 => true,
+            Operation::CastU128 => true,
+            Operation::Not => false,
+            Operation::Add => true,
+            Operation::Sub => true,
+            Operation::Mul => true,
+            Operation::Div => true,
+            Operation::Mod => true,
+            Operation::BitOr => false,
+            Operation::BitAnd => false,
+            Operation::Xor => false,
+            Operation::Shl => false,
+            Operation::Shr => false,
+            Operation::Lt => false,
+            Operation::Gt => false,
+            Operation::Le => false,
+            Operation::Ge => false,
+            Operation::Or => false,
+            Operation::And => false,
+            Operation::Eq => false,
+            Operation::Neq => false,
+            Operation::TraceLocal(..) => false,
+            Operation::TraceAbort => false,
+            Operation::TraceReturn(..) => false,
+            Operation::TraceExp(..) => false,
+            Operation::EmitEvent => false,
+            Operation::EventStoreDiverge => false,
+        }
+    }
 }
 
+/// A borrow node -- used in memory operations.
 #[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd)]
 pub enum BorrowNode {
-    GlobalRoot(StructDecl),
+    GlobalRoot(QualifiedId<StructId>),
     LocalRoot(TempIndex),
     Reference(TempIndex),
 }
@@ -170,67 +234,52 @@ impl BorrowNode {
     }
 }
 
-/// A display object for a borrow node.
-pub struct BorrowNodeDisplay<'env> {
-    node: &'env BorrowNode,
-    func_target: &'env FunctionTarget<'env>,
+/// A borrow with a path length of 0 or 1 -- used in memory operations
+/// A `Direct` edge is a borrow edge with length 0
+/// A `Field(usize)` edge has length 1 and the path in known
+/// A FieldUnknown has length 1 but the path is unknown
+#[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd)]
+pub enum StrongEdge {
+    Direct,
+    Field(usize),
+    FieldUnknown,
 }
 
-impl BorrowNode {
-    /// Creates a format object for a borrow node in context of a function target.
-    pub fn display<'env>(
-        &'env self,
-        func_target: &'env FunctionTarget<'env>,
-    ) -> BorrowNodeDisplay<'env> {
-        BorrowNodeDisplay {
-            node: self,
-            func_target,
-        }
-    }
+/// A borrow edge -- used in memory operations
+#[derive(Eq, PartialEq, Debug, Clone)]
+pub enum BorrowEdge {
+    Weak,
+    Strong(StrongEdge),
 }
 
-impl<'env> fmt::Display for BorrowNodeDisplay<'env> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        use BorrowNode::*;
-        match self.node {
-            GlobalRoot(s) => {
-                let ty = Type::Struct(s.module_id, s.struct_id, vec![]);
-                let tctx = TypeDisplayContext::WithEnv {
-                    env: self.func_target.global_env(),
-                    type_param_names: None,
-                };
-                write!(f, "{}", ty.display(&tctx))?;
-            }
-            LocalRoot(idx) => {
-                write!(
-                    f,
-                    "LocalRoot({})",
-                    self.func_target
-                        .get_local_name(*idx)
-                        .display(self.func_target.symbol_pool())
-                )?;
-            }
-            Reference(idx) => {
-                write!(
-                    f,
-                    "Reference({})",
-                    self.func_target
-                        .get_local_name(*idx)
-                        .display(self.func_target.symbol_pool())
-                )?;
-            }
-        }
-        Ok(())
-    }
+/// A specification property kind.
+#[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+pub enum PropKind {
+    Assert,
+    Assume,
+    Modifies,
 }
 
+/// Information about the action to take on abort. The label represents the
+/// destination to jump to, and the temporary where to store the abort code before
+/// jump.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AbortAction(pub Label, pub TempIndex);
+
+/// The stackless bytecode.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Bytecode {
-    SpecBlock(AttrId, SpecBlockId),
+    SpecBlock(AttrId, SpecBlockId), // deprecated, to be replaced by Prop(..)
 
     Assign(AttrId, TempIndex, TempIndex, AssignKind),
 
-    Call(AttrId, Vec<TempIndex>, Operation, Vec<TempIndex>),
+    Call(
+        AttrId,
+        Vec<TempIndex>,
+        Operation,
+        Vec<TempIndex>,
+        Option<AbortAction>,
+    ),
     Ret(AttrId, Vec<TempIndex>),
 
     Load(AttrId, TempIndex, Constant),
@@ -239,6 +288,10 @@ pub enum Bytecode {
     Label(AttrId, Label),
     Abort(AttrId, TempIndex),
     Nop(AttrId),
+
+    SaveMem(AttrId, MemoryLabel, QualifiedId<StructId>),
+    SaveSpecVar(AttrId, MemoryLabel, QualifiedId<SpecVarId>),
+    Prop(AttrId, PropKind, Exp),
 }
 
 impl Bytecode {
@@ -254,7 +307,10 @@ impl Bytecode {
             | Jump(id, ..)
             | Label(id, ..)
             | Abort(id, ..)
-            | Nop(id) => *id,
+            | Nop(id)
+            | SaveMem(id, ..)
+            | SaveSpecVar(id, ..)
+            | Prop(id, ..) => *id,
         }
     }
 
@@ -274,7 +330,10 @@ impl Bytecode {
     }
 
     pub fn is_conditional_branch(&self) -> bool {
-        matches!(self, Bytecode::Branch(..))
+        matches!(
+            self,
+            Bytecode::Branch(..) | Bytecode::Call(_, _, _, _, Some(_))
+        )
     }
 
     pub fn is_branch(&self) -> bool {
@@ -285,7 +344,9 @@ impl Bytecode {
     pub fn branch_dests(&self) -> Vec<Label> {
         match self {
             Bytecode::Branch(_, then_label, else_label, _) => vec![*then_label, *else_label],
-            Bytecode::Jump(_, label) => vec![*label],
+            Bytecode::Jump(_, label) | Bytecode::Call(_, _, _, _, Some(AbortAction(label, _))) => {
+                vec![*label]
+            }
             _ => vec![],
         }
     }
@@ -309,10 +370,18 @@ impl Bytecode {
         label_offsets: &BTreeMap<Label, CodeOffset>,
     ) -> Vec<CodeOffset> {
         let bytecode = &code[pc as usize];
-        assert!(bytecode.is_branch(), "{:?} at {}", bytecode, pc);
         let mut v = vec![];
-        for label in bytecode.branch_dests() {
-            v.push(*label_offsets.get(&label).expect("label defined"));
+        if !bytecode.is_branch() {
+            // Fall through situation, just return the next pc.
+            v.push(pc + 1);
+        } else {
+            for label in bytecode.branch_dests() {
+                v.push(*label_offsets.get(&label).expect("label defined"));
+            }
+            if matches!(bytecode, Bytecode::Call(_, _, _, _, Some(_))) {
+                // Falls through.
+                v.push(pc + 1);
+            }
         }
         // always give successors in ascending order
         if v.len() > 1 && v[0] > v[1] {
@@ -331,49 +400,128 @@ impl Bytecode {
     }
 
     /// Remaps variables in the instruction.
-    pub fn remap_vars<F>(self, f: &mut F) -> Self
+    pub fn remap_all_vars<F>(self, func_target: &FunctionTarget<'_>, f: &mut F) -> Self
     where
         F: FnMut(TempIndex) -> TempIndex,
+    {
+        self.remap_vars_internal(func_target, &mut |_, idx| f(idx))
+    }
+
+    /// Remaps variables in source position in the instruction.
+    pub fn remap_src_vars<F>(self, func_target: &FunctionTarget<'_>, f: &mut F) -> Self
+    where
+        F: FnMut(TempIndex) -> TempIndex,
+    {
+        self.remap_vars_internal(func_target, &mut |is_src, idx| {
+            if is_src {
+                f(idx)
+            } else {
+                idx
+            }
+        })
+    }
+
+    fn remap_vars_internal<F>(self, func_target: &FunctionTarget<'_>, f: &mut F) -> Self
+    where
+        F: FnMut(bool, TempIndex) -> TempIndex,
     {
         use BorrowNode::*;
         use Bytecode::*;
         use Operation::*;
-        let map = |f: &mut F, v: Vec<TempIndex>| -> Vec<TempIndex> {
-            v.into_iter().map(|i| f(i)).collect()
+        let map = |is_src: bool, f: &mut F, v: Vec<TempIndex>| -> Vec<TempIndex> {
+            v.into_iter().map(|i| f(is_src, i)).collect()
+        };
+        let map_abort = |f: &mut F, aa: Option<AbortAction>| {
+            aa.map(|AbortAction(l, code)| AbortAction(l, f(false, code)))
         };
         match self {
-            Load(attr, dst, cons) => Load(attr, f(dst), cons),
-            Assign(attr, dest, src, kind) => Assign(attr, f(dest), f(src), kind),
-            Call(attr, _, WriteBack(LocalRoot(dest)), srcs) => {
-                Call(attr, vec![], WriteBack(LocalRoot(f(dest))), map(f, srcs))
+            Load(attr, dst, cons) => Load(attr, f(false, dst), cons),
+            Assign(attr, dest, src, kind) => Assign(attr, f(false, dest), f(true, src), kind),
+            Call(attr, _, WriteBack(LocalRoot(dest), edge), srcs, aa) => Call(
+                attr,
+                vec![],
+                WriteBack(LocalRoot(f(true, dest)), edge),
+                map(true, f, srcs),
+                map_abort(f, aa),
+            ),
+            Call(attr, _, WriteBack(Reference(dest), edge), srcs, aa) => Call(
+                attr,
+                vec![],
+                WriteBack(Reference(f(true, dest)), edge),
+                map(true, f, srcs),
+                map_abort(f, aa),
+            ),
+            Call(attr, dests, Splice(m), srcs, aa) => {
+                let m = m.into_iter().map(|(p, t)| (p, f(true, t))).collect();
+                Call(
+                    attr,
+                    map(false, f, dests),
+                    Splice(m),
+                    map(true, f, srcs),
+                    map_abort(f, aa),
+                )
             }
-            Call(attr, _, WriteBack(Reference(dest)), srcs) => {
-                Call(attr, vec![], WriteBack(Reference(f(dest))), map(f, srcs))
+            Call(attr, dests, op, srcs, aa) => Call(
+                attr,
+                map(false, f, dests),
+                op,
+                map(true, f, srcs),
+                map_abort(f, aa),
+            ),
+            Ret(attr, rets) => Ret(attr, map(true, f, rets)),
+            Branch(attr, if_label, else_label, cond) => {
+                Branch(attr, if_label, else_label, f(true, cond))
             }
-            Call(attr, dests, Splice(m), srcs) => {
-                let m = m.into_iter().map(|(p, t)| (p, f(t))).collect();
-                Call(attr, map(f, dests), Splice(m), map(f, srcs))
+            Abort(attr, cond) => Abort(attr, f(true, cond)),
+            Prop(attr, kind, exp) => {
+                let new_exp = Bytecode::remap_exp(func_target, &mut |idx| f(true, idx), exp);
+                Prop(attr, kind, new_exp)
             }
-            Call(attr, dests, op, srcs) => Call(attr, map(f, dests), op, map(f, srcs)),
-            Ret(attr, rets) => Ret(attr, map(f, rets)),
-            Branch(attr, if_label, else_label, cond) => Branch(attr, if_label, else_label, f(cond)),
-            Abort(attr, cond) => Abort(attr, f(cond)),
             _ => self,
         }
     }
 
-    /// Return the temporaries this instruction modifies.
-    pub fn modifies(&self) -> Vec<TempIndex> {
+    fn remap_exp<F>(func_target: &FunctionTarget<'_>, f: &mut F, exp: Exp) -> Exp
+    where
+        F: FnMut(TempIndex) -> TempIndex,
+    {
+        let mut replacer = |node_id: NodeId, target: RewriteTarget| {
+            if let RewriteTarget::Temporary(idx) = target {
+                Some(Exp::Temporary(node_id, f(idx)))
+            } else {
+                None
+            }
+        };
+        ExpRewriter::new(func_target.global_env(), &mut replacer).rewrite(&exp)
+    }
+
+    /// Return the temporaries this instruction modifies. This includes references where the
+    /// instruction can have effect on.
+    pub fn modifies(&self, fun_target: &FunctionTarget<'_>) -> Vec<TempIndex> {
         use BorrowNode::*;
         use Bytecode::*;
         use Operation::*;
+        let add_abort = |mut res: Vec<TempIndex>, aa: &Option<AbortAction>| {
+            if let Some(AbortAction(_, dest)) = aa {
+                res.push(*dest)
+            }
+            res
+        };
         match self {
-            Assign(_, dest, ..)
-            | Load(_, dest, ..)
-            | Call(_, _, WriteBack(LocalRoot(dest)), ..)
-            | Call(_, _, WriteBack(Reference(dest)), ..) => vec![*dest],
-            Call(_, _, WriteRef, srcs) => vec![srcs[0]],
-            Call(_, dests, ..) => dests.clone(),
+            Assign(_, dest, ..) | Load(_, dest, ..) => vec![*dest],
+            Call(_, _, WriteBack(LocalRoot(dest), _), _, aa)
+            | Call(_, _, WriteBack(Reference(dest), _), _, aa) => add_abort(vec![*dest], aa),
+            Call(_, _, WriteRef, srcs, aa) => add_abort(vec![srcs[0]], aa),
+            Call(_, dests, Function(..), srcs, aa) => {
+                let mut res = dests.clone();
+                for src in srcs {
+                    if fun_target.get_local_type(*src).is_mutable_reference() {
+                        res.push(*src);
+                    }
+                }
+                add_abort(res, aa)
+            }
+            Call(_, dests, _, _, aa) => add_abort(dests.clone(), aa),
             _ => vec![],
         }
     }
@@ -387,10 +535,31 @@ impl Bytecode {
     pub fn display<'env>(
         &'env self,
         func_target: &'env FunctionTarget<'env>,
+        label_offsets: &'env BTreeMap<Label, CodeOffset>,
     ) -> BytecodeDisplay<'env> {
         BytecodeDisplay {
             bytecode: self,
             func_target,
+            label_offsets,
+        }
+    }
+}
+
+impl std::fmt::Display for BorrowEdge {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BorrowEdge::Weak => write!(f, "*"),
+            BorrowEdge::Strong(se) => write!(f, "{}", se),
+        }
+    }
+}
+
+impl std::fmt::Display for StrongEdge {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StrongEdge::Field(field) => write!(f, "{}", field),
+            StrongEdge::FieldUnknown => write!(f, "U"),
+            StrongEdge::Direct => write!(f, "D"),
         }
     }
 }
@@ -399,6 +568,7 @@ impl Bytecode {
 pub struct BytecodeDisplay<'env> {
     bytecode: &'env Bytecode,
     func_target: &'env FunctionTarget<'env>,
+    label_offsets: &'env BTreeMap<Label, CodeOffset>,
 }
 
 impl<'env> fmt::Display for BytecodeDisplay<'env> {
@@ -421,13 +591,21 @@ impl<'env> fmt::Display for BytecodeDisplay<'env> {
             Assign(_, dst, src, AssignKind::Store) => {
                 write!(f, "{} := {}", self.lstr(*dst), self.lstr(*src))?
             }
-            Call(_, dsts, oper, args) => {
+            Call(_, dsts, oper, args, aa) => {
                 if !dsts.is_empty() {
                     self.fmt_locals(f, dsts, false)?;
                     write!(f, " := ")?;
                 }
                 write!(f, "{}", oper.display(self.func_target))?;
                 self.fmt_locals(f, args, true)?;
+                if let Some(AbortAction(label, code)) = aa {
+                    write!(
+                        f,
+                        " on_abort goto {} with {}",
+                        self.label_str(*label),
+                        self.lstr(*code)
+                    )?;
+                }
             }
             Ret(_, srcs) => {
                 write!(f, "return ")?;
@@ -439,23 +617,54 @@ impl<'env> fmt::Display for BytecodeDisplay<'env> {
             Branch(_, then_label, else_label, src) => {
                 write!(
                     f,
-                    "if ({}) goto L{} else goto L{}",
+                    "if ({}) goto {} else goto {}",
                     self.lstr(*src),
-                    then_label.as_usize(),
-                    else_label.as_usize()
+                    self.label_str(*then_label),
+                    self.label_str(*else_label),
                 )?;
             }
             Jump(_, label) => {
-                write!(f, "goto L{}", label.as_usize())?;
+                write!(f, "goto {}", self.label_str(*label))?;
             }
             Label(_, label) => {
-                write!(f, "L{}:", label.as_usize(),)?;
+                write!(f, "label L{}", label.as_usize())?;
             }
             Abort(_, src) => {
                 write!(f, "abort({})", self.lstr(*src))?;
             }
             Nop(_) => {
                 write!(f, "nop")?;
+            }
+            SaveMem(_, label, qid) => {
+                let env = self.func_target.global_env();
+                let struct_env = env.get_module(qid.module_id).into_struct(qid.id);
+                write!(
+                    f,
+                    "@{} := save_mem({}::{})",
+                    label.as_usize(),
+                    struct_env.module_env.get_name().display(env.symbol_pool()),
+                    struct_env.get_name().display(env.symbol_pool())
+                )?;
+            }
+            SaveSpecVar(_, label, qid) => {
+                let env = self.func_target.global_env();
+                let module_env = env.get_module(qid.module_id);
+                let spec_var = module_env.get_spec_var(qid.id);
+                write!(
+                    f,
+                    "@{} := save_spec_var({}::{})",
+                    label.as_usize(),
+                    module_env.get_name().display(env.symbol_pool()),
+                    spec_var.name.display(env.symbol_pool())
+                )?;
+            }
+            Prop(_, kind, exp) => {
+                let exp_display = exp.display(self.func_target.func_env.module_env.env);
+                match kind {
+                    PropKind::Assume => write!(f, "assume {}", exp_display)?,
+                    PropKind::Assert => write!(f, "assert {}", exp_display)?,
+                    PropKind::Modifies => write!(f, "modifies {}", exp_display)?,
+                }
             }
         }
         Ok(())
@@ -484,10 +693,15 @@ impl<'env> BytecodeDisplay<'env> {
         Ok(())
     }
 
-    fn lstr(&self, idx: TempIndex) -> Rc<String> {
-        self.func_target
-            .symbol_pool()
-            .string(self.func_target.get_local_name(idx))
+    fn lstr(&self, idx: TempIndex) -> String {
+        format!("$t{}", idx)
+    }
+
+    fn label_str(&self, label: Label) -> String {
+        self.label_offsets
+            .get(&label)
+            .map(|offs| offs.to_string())
+            .unwrap_or_else(|| format!("L{}", label.as_usize()))
     }
 }
 
@@ -618,21 +832,19 @@ impl<'env> fmt::Display for OperationDisplay<'env> {
             UnpackRefDeep => {
                 write!(f, "unpack_ref_deep")?;
             }
-            WriteBack(node) => write!(f, "write_back[{}]", node.display(self.func_target))?,
+            WriteBack(node, edge) => {
+                write!(f, "write_back[{}.{}]", node.display(self.func_target), edge)?
+            }
             Splice(map) => write!(
                 f,
                 "splice[{}]",
                 map.iter()
-                    .map(|(idx, local)| format!(
-                        "{} -> {}",
-                        idx,
-                        self.func_target
-                            .symbol_pool()
-                            .string(self.func_target.get_local_name(*local))
-                    ))
+                    .map(|(idx, local)| format!("{} -> $t{}", idx, *local))
                     .join(", ")
             )?,
-
+            Havoc => {
+                write!(f, "havoc")?;
+            }
             // Unary
             CastU8 => write!(f, "(u8)")?,
             CastU64 => write!(f, "(u64)")?,
@@ -658,6 +870,28 @@ impl<'env> fmt::Display for OperationDisplay<'env> {
             And => write!(f, "&&")?,
             Eq => write!(f, "==")?,
             Neq => write!(f, "!=")?,
+
+            // Debugging
+            TraceLocal(l) => {
+                let name = self.func_target.get_local_name(*l);
+                write!(
+                    f,
+                    "trace_local[{}]",
+                    name.display(self.func_target.symbol_pool())
+                )?
+            }
+            TraceAbort => write!(f, "trace_abort")?,
+            TraceReturn(r) => write!(f, "trace_return[{}]", r)?,
+            TraceExp(node_id) => {
+                let loc = self.func_target.global_env().get_node_loc(*node_id);
+                write!(
+                    f,
+                    "trace_exp[{}]",
+                    loc.display(self.func_target.global_env())
+                )?
+            }
+            EmitEvent => write!(f, "emit_event")?,
+            EventStoreDiverge => write!(f, "event_store_diverge")?,
         }
         Ok(())
     }
@@ -702,6 +936,48 @@ impl fmt::Display for Constant {
             U128(x) => write!(f, "{}", x)?,
             Address(x) => write!(f, "0x{}", x.to_str_radix(16))?,
             ByteArray(x) => write!(f, "{:?}", x)?,
+        }
+        Ok(())
+    }
+}
+
+/// A display object for a borrow node.
+pub struct BorrowNodeDisplay<'env> {
+    node: &'env BorrowNode,
+    func_target: &'env FunctionTarget<'env>,
+}
+
+impl BorrowNode {
+    /// Creates a format object for a borrow node in context of a function target.
+    pub fn display<'env>(
+        &'env self,
+        func_target: &'env FunctionTarget<'env>,
+    ) -> BorrowNodeDisplay<'env> {
+        BorrowNodeDisplay {
+            node: self,
+            func_target,
+        }
+    }
+}
+
+impl<'env> fmt::Display for BorrowNodeDisplay<'env> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        use BorrowNode::*;
+        match self.node {
+            GlobalRoot(s) => {
+                let ty = Type::Struct(s.module_id, s.id, vec![]);
+                let tctx = TypeDisplayContext::WithEnv {
+                    env: self.func_target.global_env(),
+                    type_param_names: None,
+                };
+                write!(f, "{}", ty.display(&tctx))?;
+            }
+            LocalRoot(idx) => {
+                write!(f, "LocalRoot($t{})", idx)?;
+            }
+            Reference(idx) => {
+                write!(f, "Reference($t{})", idx)?;
+            }
         }
         Ok(())
     }

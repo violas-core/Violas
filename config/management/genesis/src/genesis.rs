@@ -5,6 +5,7 @@ use crate::layout::Layout;
 use diem_crypto::ed25519::Ed25519PublicKey;
 use diem_global_constants::{DIEM_ROOT_KEY, OPERATOR_KEY, OWNER_KEY};
 use diem_management::{config::ConfigPath, constants, error::Error, secure_backend::SharedBackend};
+use diem_transaction_builder::stdlib as transaction_builder;
 use diem_types::{
     account_address,
     chain_id::ChainId,
@@ -44,11 +45,8 @@ impl Genesis {
         let operator_registrations = self.operator_registrations(&layout)?;
 
         let chain_id = self.config()?.chain_id;
-        let script_policy = if chain_id == ChainId::test() {
-            Some(diem_types::on_chain_config::VMPublishingOption::open())
-        } else {
-            None // allowlist containing only stdlib scripts
-        };
+        // Only have an allowlist of stdlib scripts
+        let script_policy = None;
 
         let genesis = vm_genesis::encode_genesis_transaction(
             diem_root_key,
@@ -105,10 +103,12 @@ impl Genesis {
             let operator_key = operator_storage.ed25519_key(OPERATOR_KEY)?;
             let operator_account = account_address::from_public_key(&operator_key);
 
-            let set_operator_script = transaction_builder::encode_set_validator_operator_script(
-                operator_name.as_bytes().to_vec(),
-                operator_account,
-            );
+            let set_operator_script =
+                transaction_builder::encode_set_validator_operator_script_function(
+                    operator_name.as_bytes().to_vec(),
+                    operator_account,
+                )
+                .into_script_function();
 
             let owner_name_vec = owner.as_bytes().to_vec();
             operator_assignments.push((owner_key, owner_name_vec, set_operator_script));
@@ -131,8 +131,8 @@ impl Genesis {
             let validator_config_tx = operator_storage.transaction(constants::VALIDATOR_CONFIG)?;
             let validator_config_tx = validator_config_tx.as_signed_user_txn().unwrap().payload();
             let validator_config_tx =
-                if let TransactionPayload::Script(script) = validator_config_tx {
-                    script.clone()
+                if let TransactionPayload::ScriptFunction(script_function) = validator_config_tx {
+                    script_function.clone()
                 } else {
                     return Err(Error::UnexpectedError("Found invalid registration".into()));
                 };

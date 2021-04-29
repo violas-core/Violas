@@ -6,27 +6,27 @@ use log::{debug, info, warn};
 
 use codespan::{ByteIndex, Span};
 use itertools::Itertools;
-use num::BigUint;
-use once_cell::sync::Lazy;
-use regex::Regex;
-use serde::{Deserialize, Serialize};
-use spec_lang::{
+use move_model::{
     ast::{ModuleName, SpecBlockInfo, SpecBlockTarget},
     code_writer::{CodeWriter, CodeWriterLabel},
     emit, emitln,
-    env::{
+    model::{
         FunId, FunctionEnv, GlobalEnv, Loc, ModuleEnv, ModuleId, NamedConstantEnv, Parameter,
         QualifiedId, StructEnv, TypeConstraint, TypeParameter,
     },
     symbol::Symbol,
     ty::TypeDisplayContext,
 };
+use num::BigUint;
+use once_cell::sync::Lazy;
+use regex::Regex;
+use serde::{Deserialize, Serialize};
 use std::{
     cell::RefCell,
     collections::{BTreeMap, BTreeSet, VecDeque},
     fs::{self, File},
     io::{Read, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Command, Stdio},
     rc::Rc,
 };
@@ -50,6 +50,7 @@ const KEYWORDS: &[&str] = &[
     "move",
     "native",
     "public",
+    "friend",
     "resource",
     "return",
     "spec",
@@ -88,6 +89,9 @@ const WEAK_KEYWORDS: &[&str] = &[
     "with",
     "where",
 ];
+
+/// The maximum number of subheadings that are allowed
+const MAX_SUBSECTIONS: usize = 6;
 
 /// Options passed into the documentation generator.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -284,7 +288,7 @@ impl<'env> Docgen<'env> {
         // Generate documentation for standalone modules which are not included in the templates.
         for (id, info) in self.infos.clone() {
             let m = self.env.get_module(id);
-            if !info.is_included && !m.is_dependency() {
+            if !info.is_included && m.is_target() {
                 self.gen_module(&m, &info);
                 let mut path = PathBuf::from(&self.options.output_directory);
                 path.push(info.target_file);
@@ -444,7 +448,7 @@ impl<'env> Docgen<'env> {
                 m.get_name().display_full(m.symbol_pool()),
                 out_dir,
                 i.target_file,
-                if m.is_dependency() {
+                if !m.is_target() {
                     "exists"
                 } else {
                     "will be generated"
@@ -509,7 +513,7 @@ impl<'env> Docgen<'env> {
             .file_name()
             .expect("file name")
             .to_os_string();
-        if module_env.is_dependency() {
+        if !module_env.is_target() {
             // Try to locate the file in the provided search path.
             self.options.doc_path.iter().find_map(|dir| {
                 let mut path = PathBuf::from(dir);
@@ -538,9 +542,9 @@ impl<'env> Docgen<'env> {
     }
 
     /// Make path relative to other path.
-    fn path_relative_to(&self, path: &PathBuf, to: &PathBuf) -> PathBuf {
+    fn path_relative_to(&self, path: &Path, to: &Path) -> PathBuf {
         if path.is_absolute() || to.is_absolute() {
-            path.clone()
+            path.to_path_buf()
         } else {
             let mut result = PathBuf::new();
             for _ in to.components() {
@@ -657,7 +661,7 @@ impl<'env> Docgen<'env> {
 
         let funs = module_env
             .get_functions()
-            .filter(|f| self.options.include_private_fun || f.is_public())
+            .filter(|f| self.options.include_private_fun || f.is_exposed())
             .sorted_by(|a, b| Ord::cmp(&a.get_loc(), &b.get_loc()))
             .collect_vec();
         if !funs.is_empty() {
@@ -802,7 +806,7 @@ impl<'env> Docgen<'env> {
     }
 
     /// Execute the external tool "dot" with doc_src as input to generate a .svg image file.
-    fn gen_svg_file(&self, out_file_path: &PathBuf, dot_src: &str) {
+    fn gen_svg_file(&self, out_file_path: &Path, dot_src: &str) {
         if let Err(e) = fs::create_dir_all(out_file_path.parent().unwrap()) {
             self.env.error(
                 &self.env.unknown_loc(),
@@ -851,7 +855,6 @@ impl<'env> Docgen<'env> {
                             dot_src
                         ),
                     );
-                    return;
                 }
             }
             Err(e) => {
@@ -1081,7 +1084,6 @@ impl<'env> Docgen<'env> {
     /// Generates documentation for a function signature.
     fn function_header_display(&self, func_env: &FunctionEnv<'_>) -> String {
         let name = self.name_string(func_env.get_name());
-        let visibility = if func_env.is_public() { "public " } else { "" };
         let tctx = &self.type_display_context_for_fun(&func_env);
         let params = func_env
             .get_parameters()
@@ -1099,7 +1101,7 @@ impl<'env> Docgen<'env> {
         };
         format!(
             "{}fun {}{}({}){}",
-            visibility,
+            func_env.visibility_str(),
             name,
             self.type_parameter_list_display(&func_env.get_named_type_parameters()),
             params,
@@ -1353,6 +1355,9 @@ impl<'env> Docgen<'env> {
     /// Creates a new section header and inserts a table-of-contents entry into the generator.
     fn section_header(&self, s: &str, label: &str) {
         let level = *self.section_nest.borrow();
+        if usize::saturating_add(self.options.section_level_start, level) > MAX_SUBSECTIONS {
+            panic!("Maximum number of subheadings exceeded with heading: {}", s)
+        }
         if !label.is_empty() {
             self.label(label);
             let entry = TocEntry {
@@ -1452,28 +1457,36 @@ impl<'env> Docgen<'env> {
     }
 
     /// Decorates documentation text, identifying code fragments and decorating them
-    /// as code.
+    /// as code. Code blocks in comments are untouched.
     fn decorate_text(&self, text: &str) -> String {
-        static REX: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?m)`[^`]+`").unwrap());
-        let mut r = String::new();
-        let mut at = 0;
-        while let Some(m) = REX.find(&text[at..]) {
-            // If this is ``` skip it.
-            let end = at + m.end();
-            if text[end..].starts_with('`') {
-                r += &text[at..end];
-                at = end;
-                continue;
+        let mut decorated_text = String::new();
+        let mut chars = text.chars();
+        let non_code_filter = |chr: &char| *chr != '`';
+
+        while let Some(chr) = chars.next() {
+            if chr == '`' {
+                // See if this is the start of a code block.
+                let is_start_of_code_block = chars.take_while_ref(|chr| *chr == '`').count() > 0;
+                if is_start_of_code_block {
+                    // Code block -- don't create a <code>text</code> for this.
+                    decorated_text += "```";
+                } else {
+                    // inside inline code section. Eagerly consume/match this '`'
+                    let code = chars.take_while_ref(non_code_filter).collect::<String>();
+                    // consume the remaining '`'. Report an error if we find an unmatched '`'.
+                    assert!(
+                                            chars.next() == Some('`'),
+                                            "Missing backtick found in {} while generating documentation for the following text: \"{}\"",
+                                            self.current_module.as_ref().unwrap().get_name().display_full(self.env.symbol_pool()), text,
+                                        );
+                    decorated_text += &format!("<code>{}</code>", self.decorate_code(&code));
+                }
+            } else {
+                decorated_text.push(chr);
+                decorated_text.extend(chars.take_while_ref(non_code_filter))
             }
-            r += &text[at..at + m.start()];
-            r += &format!(
-                "<code>{}</code>",
-                &self.decorate_code(&m.as_str()[1..&m.as_str().len() - 1])
-            );
-            at += m.end();
         }
-        r += &text[at..];
-        r
+        decorated_text
     }
 
     /// Begins a code block. This uses html, not markdown code blocks, so we are able to

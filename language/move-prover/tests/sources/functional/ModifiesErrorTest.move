@@ -1,9 +1,9 @@
 address 0x0 {
 module A {
-    resource struct S {
+
+    struct S has key {
         x: u64
     }
-
     public fun read_at(addr: address): u64 acquires S {
         let s = borrow_global<S>(addr);
         s.x
@@ -29,7 +29,7 @@ module A {
 module B {
     use 0x0::A;
 
-    resource struct T {
+    struct T has key {
         x: u64
     }
 

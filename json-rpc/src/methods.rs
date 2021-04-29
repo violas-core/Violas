@@ -4,16 +4,17 @@
 //! Module contains RPC method handlers for Full Node JSON-RPC interface
 use crate::{
     errors::JsonRpcError,
+    util::{transaction_data_view_from_transaction, vm_status_view_from_kept_vm_status},
     views::{
         AccountStateWithProofView, AccountView, BytesView, CurrencyInfoView, EventView,
-        MetadataView, StateProofView, TransactionView, TransactionsProofsView,
+        EventWithProofView, MetadataView, StateProofView, TransactionView, TransactionsProofsView,
         TransactionsWithProofsView,
     },
 };
 use anyhow::{ensure, format_err, Error, Result};
 use core::future::Future;
 use diem_config::config::RoleType;
-use diem_crypto::hash::CryptoHash;
+use diem_crypto::{hash::CryptoHash, HashValue};
 use diem_mempool::MempoolClientSender;
 use diem_trace::prelude::*;
 use diem_types::{
@@ -168,7 +169,7 @@ impl JsonRpcRequest {
         T: TryFrom<String>,
     {
         let raw_str: String = self.parse_param(index, name)?;
-        Ok(T::try_from(raw_str).map_err(|_| invalid_param(index, name))?)
+        T::try_from(raw_str).map_err(|_| invalid_param(index, name))
     }
 
     /// Return native type of params[index] deserialized by from json value.
@@ -178,10 +179,7 @@ impl JsonRpcRequest {
     where
         T: DeserializeOwned,
     {
-        Ok(
-            serde_json::from_value(self.get_param(index))
-                .map_err(|_| invalid_param(index, name))?,
-        )
+        serde_json::from_value(self.get_param(index)).map_err(|_| invalid_param(index, name))
     }
 
     fn parse_version_param(&self, index: usize, name: &str) -> Result<u64, JsonRpcError> {
@@ -204,15 +202,13 @@ impl JsonRpcRequest {
         index: usize,
         name: &str,
     ) -> Result<SignedTransaction, JsonRpcError> {
-        Ok(self
-            ._parse_signed_transaction(self.get_param(index))
-            .map_err(|_| invalid_param(index, name))?)
+        self._parse_signed_transaction(self.get_param(index))
+            .map_err(|_| invalid_param(index, name))
     }
 
     fn parse_event_key(&self, index: usize, name: &str) -> Result<EventKey, JsonRpcError> {
-        Ok(self
-            ._parse_event_key(self.get_param(index))
-            .map_err(|_| invalid_param(index, name))?)
+        self._parse_event_key(self.get_param(index))
+            .map_err(|_| invalid_param(index, name))
     }
 
     // the following methods should not be called directly as they return error causes internal error
@@ -237,7 +233,9 @@ async fn submit(mut service: JsonRpcService, request: JsonRpcRequest) -> Result<
     let (req_sender, callback) = oneshot::channel();
 
     fail_point!("jsonrpc::method::submit::mempool_sender", |_| {
-        Err(anyhow::anyhow!("Injected error for mempool_sender call error").into())
+        Err(anyhow::anyhow!(
+            "Injected error for mempool_sender call error"
+        ))
     });
 
     service
@@ -261,8 +259,9 @@ async fn get_account(
     request: JsonRpcRequest,
 ) -> Result<Option<AccountView>> {
     let account_address: AccountAddress = request.parse_account_address(0)?;
+    let version: u64 = request.parse_version_param(1, "version")?;
 
-    let account_state = match service.get_account_state(account_address, request.version())? {
+    let account_state = match service.get_account_state(account_address, version)? {
         Some(val) => val,
         None => return Ok(None),
     };
@@ -286,11 +285,12 @@ async fn get_account(
     let balances = account_state.get_balance_resources(&currencies)?;
 
     Ok(Some(AccountView::new(
-        &account_address,
+        account_address,
         &account_resource,
         balances,
         account_role,
         freezing_bit,
+        version,
     )))
 }
 
@@ -299,26 +299,16 @@ async fn get_account(
 /// Can be used to verify that target Full Node is up-to-date
 async fn get_metadata(service: JsonRpcService, request: JsonRpcRequest) -> Result<MetadataView> {
     let chain_id = service.chain_id().id();
-    let version = if !request.params.is_empty() {
-        request.parse_version_param(0, "version")?
-    } else {
-        request.version()
-    };
+    let version = request.parse_version_param(0, "version")?;
 
-    let mut script_hash_allow_list: Option<Vec<BytesView>> = None;
+    let mut script_hash_allow_list: Option<Vec<HashValue>> = None;
     let mut module_publishing_allowed: Option<bool> = None;
     let mut diem_version: Option<u64> = None;
     let mut dual_attestation_limit: Option<u64> = None;
     if version == request.version() {
         if let Some(account) = service.get_account_state(diem_root_address(), version)? {
             if let Some(vm_publishing_option) = account.get_vm_publishing_option()? {
-                script_hash_allow_list = Some(
-                    vm_publishing_option
-                        .script_allow_list
-                        .iter()
-                        .map(|v| BytesView::from(v.to_vec()))
-                        .collect(),
-                );
+                script_hash_allow_list = Some(vm_publishing_option.script_allow_list);
 
                 module_publishing_allowed = Some(vm_publishing_option.is_open_module);
             }
@@ -332,7 +322,7 @@ async fn get_metadata(service: JsonRpcService, request: JsonRpcRequest) -> Resul
     }
     Ok(MetadataView {
         version,
-        accumulator_root_hash: service.db.get_accumulator_root_hash(version)?.into(),
+        accumulator_root_hash: service.db.get_accumulator_root_hash(version)?,
         timestamp: service.db.get_block_timestamp(version)?,
         chain_id,
         script_hash_allow_list,
@@ -391,11 +381,11 @@ async fn get_transactions(
 
         result.push(TransactionView {
             version: start_version + v as u64,
-            hash: tx.hash().into(),
+            hash: tx.hash(),
             bytes: bcs::to_bytes(&tx)?.into(),
-            transaction: tx.into(),
+            transaction: transaction_data_view_from_transaction(tx),
             events,
-            vm_status: info.status().into(),
+            vm_status: vm_status_view_from_kept_vm_status(info.status()),
             gas_used: info.gas_used(),
         });
     }
@@ -410,17 +400,19 @@ async fn get_transactions_with_proofs(
     let start_version: u64 = request.parse_param(0, "start_version")?;
     let limit: u64 = request.parse_param(1, "limit")?;
 
+    let req_version: u64 = request.version();
+
     // Notice limit is a u16 normally, but some APIs require u64 below
     service.validate_page_size_limit(limit as usize)?;
 
-    if start_version > request.version() {
+    if start_version > req_version {
         return Ok(None);
     }
 
     // We do not fetch events since they don't come with proofs.
     let txs = service
         .db
-        .get_transactions(start_version, limit, request.version(), false)?;
+        .get_transactions(start_version, limit, req_version, false)?;
 
     let mut blobs = vec![];
     for t in txs.transactions.iter() {
@@ -433,8 +425,8 @@ async fn get_transactions_with_proofs(
     Ok(Some(TransactionsWithProofsView {
         serialized_transactions: blobs,
         proofs: TransactionsProofsView {
-            ledger_info_to_transaction_infos_proof: BytesView::from(&bcs::to_bytes(&proofs)?),
-            transaction_infos: BytesView::from(&bcs::to_bytes(&tx_info)?),
+            ledger_info_to_transaction_infos_proof: BytesView::from(bcs::to_bytes(&proofs)?),
+            transaction_infos: BytesView::from(bcs::to_bytes(&tx_info)?),
         },
     }))
 }
@@ -470,11 +462,11 @@ async fn get_account_transaction(
 
         Ok(Some(TransactionView {
             version: tx_version,
-            hash: tx.transaction.hash().into(),
+            hash: tx.transaction.hash(),
             bytes: bcs::to_bytes(&tx.transaction)?.into(),
-            transaction: tx.transaction.into(),
+            transaction: transaction_data_view_from_transaction(tx.transaction),
             events,
-            vm_status: tx.proof.transaction_info().status().into(),
+            vm_status: vm_status_view_from_kept_vm_status(tx.proof.transaction_info().status()),
             gas_used: tx.proof.transaction_info().gas_used(),
         }))
     } else {
@@ -491,17 +483,53 @@ async fn get_events(service: JsonRpcService, request: JsonRpcRequest) -> Result<
 
     service.validate_page_size_limit(limit as usize)?;
 
-    let events_with_proof = service
+    let events_raw = service
         .db
         .get_events(&event_key, start, Order::Ascending, limit)?;
 
     let req_version = request.version();
-    let events = events_with_proof
+    let events = events_raw
         .into_iter()
         .filter(|(version, _event)| version <= &req_version)
         .map(|event| event.try_into())
         .collect::<Result<Vec<EventView>>>()?;
     Ok(events)
+}
+
+/// Returns events by given access path along with their proofs
+async fn get_events_with_proofs(
+    service: JsonRpcService,
+    request: JsonRpcRequest,
+) -> Result<Vec<EventWithProofView>> {
+    let event_key = request.parse_event_key(0, "event key")?;
+
+    let start: u64 = request.parse_param(1, "start")?;
+    let limit: u64 = request.parse_param(2, "limit")?;
+
+    let req_version = request.version();
+
+    service.validate_page_size_limit(limit as usize)?;
+
+    let events_with_proofs = service.db.get_events_with_proofs(
+        &event_key,
+        start,
+        Order::Ascending,
+        limit,
+        Some(req_version),
+    )?;
+
+    let mut results = vec![];
+
+    for event in events_with_proofs
+        .into_iter()
+        .filter(|e| e.transaction_version <= req_version)
+    {
+        results.push(EventWithProofView {
+            event_with_proof: bcs::to_bytes(&event)?.into(),
+        });
+    }
+
+    Ok(results)
 }
 
 /// Returns meta information about supported currencies
@@ -580,11 +608,11 @@ async fn get_account_transactions(
 
         all_txs.push(TransactionView {
             version: tx.version,
-            hash: tx.transaction.hash().into(),
+            hash: tx.transaction.hash(),
             bytes: bcs::to_bytes(&tx.transaction)?.into(),
-            transaction: tx.transaction.into(),
+            transaction: transaction_data_view_from_transaction(tx.transaction),
             events,
-            vm_status: tx.proof.transaction_info().status().into(),
+            vm_status: vm_status_view_from_kept_vm_status(tx.proof.transaction_info().status()),
             gas_used: tx.proof.transaction_info().gas_used(),
         });
     }
@@ -648,7 +676,7 @@ pub(crate) fn build_registry() -> RpcRegistry {
     let mut registry = RpcRegistry::new();
     register_rpc_method!(registry, "submit", submit, 1, 0);
     register_rpc_method!(registry, "get_metadata", get_metadata, 0, 1);
-    register_rpc_method!(registry, "get_account", get_account, 1, 0);
+    register_rpc_method!(registry, "get_account", get_account, 1, 1);
     register_rpc_method!(registry, "get_transactions", get_transactions, 3, 0);
     register_rpc_method!(
         registry,
@@ -682,6 +710,13 @@ pub(crate) fn build_registry() -> RpcRegistry {
         "get_transactions_with_proofs",
         get_transactions_with_proofs,
         2,
+        0
+    );
+    register_rpc_method!(
+        registry,
+        "get_events_with_proofs",
+        get_events_with_proofs,
+        3,
         0
     );
 

@@ -4,8 +4,8 @@
 //! Support for encoding transactions for common situations.
 
 use crate::account::Account;
-use compiled_stdlib::transaction_scripts::StdlibScript;
 use compiler::Compiler;
+use diem_framework_releases::legacy::transaction_scripts::LegacyStdlibScript;
 use diem_types::{
     account_config,
     transaction::{RawTransaction, Script, SignedTransaction, TransactionArgument},
@@ -18,20 +18,20 @@ pub static CREATE_ACCOUNT_SCRIPT: Lazy<Vec<u8>> = Lazy::new(|| {
     import 0x1.Diem;
     import 0x1.DiemAccount;
 
-    main<Token>(account: &signer, fresh_address: address, auth_key_prefix: vector<u8>, initial_amount: u64) {
+    main<Token: store>(account: signer, fresh_address: address, auth_key_prefix: vector<u8>, initial_amount: u64) {
       let with_cap: DiemAccount.WithdrawCapability;
       let name: vector<u8>;
       name = h\"\";
 
       DiemAccount.create_parent_vasp_account<Token>(
-        copy(account),
+        &account,
         copy(fresh_address),
         move(auth_key_prefix),
         move(name),
         false
       );
       if (copy(initial_amount) > 0) {
-         with_cap = DiemAccount.extract_withdraw_capability(copy(account));
+         with_cap = DiemAccount.extract_withdraw_capability(&account);
          DiemAccount.pay_from<Token>(
            &with_cap,
            move(fresh_address),
@@ -47,8 +47,8 @@ pub static CREATE_ACCOUNT_SCRIPT: Lazy<Vec<u8>> = Lazy::new(|| {
 
     let compiler = Compiler {
         address: account_config::CORE_CODE_ADDRESS,
+        skip_stdlib_deps: false,
         extra_deps: vec![],
-        ..Compiler::default()
     };
     compiler
         .into_script_blob("file_name", code)
@@ -57,15 +57,15 @@ pub static CREATE_ACCOUNT_SCRIPT: Lazy<Vec<u8>> = Lazy::new(|| {
 
 pub static EMPTY_SCRIPT: Lazy<Vec<u8>> = Lazy::new(|| {
     let code = "
-    main<Token>(account: &signer) {
+    main<Token>(account: signer) {
       return;
     }
 ";
 
     let compiler = Compiler {
         address: account_config::CORE_CODE_ADDRESS,
+        skip_stdlib_deps: false,
         extra_deps: vec![],
-        ..Compiler::default()
     };
     compiler
         .into_script_blob("file_name", code)
@@ -131,7 +131,7 @@ pub fn peer_to_peer_txn(
     sender
         .transaction()
         .script(Script::new(
-            StdlibScript::PeerToPeerWithMetadata
+            LegacyStdlibScript::PeerToPeerWithMetadata
                 .compiled_bytes()
                 .into_vec(),
             vec![account_config::xus_tag()],
@@ -147,7 +147,7 @@ pub fn rotate_key_txn(sender: &Account, new_key_hash: Vec<u8>, seq_num: u64) -> 
     sender
         .transaction()
         .script(Script::new(
-            StdlibScript::RotateAuthenticationKey
+            LegacyStdlibScript::RotateAuthenticationKey
                 .compiled_bytes()
                 .into_vec(),
             vec![],
@@ -163,7 +163,7 @@ pub fn raw_rotate_key_txn(sender: &Account, new_key_hash: Vec<u8>, seq_num: u64)
     sender
         .transaction()
         .script(Script::new(
-            StdlibScript::RotateAuthenticationKey
+            LegacyStdlibScript::RotateAuthenticationKey
                 .compiled_bytes()
                 .into_vec(),
             vec![],

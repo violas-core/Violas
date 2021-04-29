@@ -4,7 +4,7 @@ on:
   push:
     branches: [auto, canary]
   pull_request:
-    branches: [main, master, release-*, gha-test-*]
+    branches: [main, release-*, gha-test-*]
 
 defaults:
   run:
@@ -19,12 +19,19 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       changes-target-branch: ${{ steps.changes.outputs.changes-target-branch }}
+      changes-base-git-rev: ${{ steps.changes.outputs.changes-base-git-rev }}
       changes-base-githash: ${{ steps.changes.outputs.changes-base-githash }}
       changes-pull-request-number: ${{ steps.changes.outputs.changes-pull-request-number }}
+      build-images: ${{ steps.need-build-images.outputs.changes-found }}
+      need-base-images: ${{ steps.need-base-images.outputs.need-extra }}
+      test-land-blocking: ${{ steps.need-land-blocking-test.outputs.need-lbt }}
+      test-rust-environment: ${{ steps.environment.outputs.name }}
       test-rust: ${{ steps.rust-changes.outputs.changes-found }}
+      test-helm: ${{ steps.helm-changes.outputs.changes-found }}
       test-dev-setup: ${{ steps.dev-setup-sh-changes.outputs.changes-found }}
       test-website-build: ${{ steps.website-changes.outputs.changes-found }}
       test-non-rust-lint: ${{ steps.non-rust-lint-changes.outputs.changes-found }}
+      test-docker-compose: ${{ steps.docker-compose-changes.outputs.changes-found }}
     steps:
       - uses: actions/checkout@v2
         with:
@@ -39,27 +46,80 @@ jobs:
         uses: ./.github/actions/changes
         with:
           workflow-file: ci-test.yml
+      - id: need-build-images
+        name: find changes need image build.
+        uses: ./.github/actions/matches
+        with:
+          pattern: '^documentation\|^developers.diem.com'
+          invert: "true"
+      - id: need-land-blocking-test
+        name: check KS if LBT should be run
+        if: ${{ github.event_name == 'push' }}
+        run: |
+          res=true
+          branches="${{ secrets.BRANCHES_TO_ENABLE_LBT }}"
+          if ! [[ -z "${branches}" ]] && [[ "${branches}" =~ .*"${{ steps.changes.outputs.changes-target-branch }}".* ]]; then
+            echo "LBT is enabled for target branch. Will trigger it."
+          else
+            echo "LBT is NOT enabled for target branch. Will skip it."
+            res=false
+          fi
+          echo "::set-output name=need-lbt::$(echo $res)";
+      - id: need-base-images
+        name: build extra images if it is needed by LBT
+        if: ${{ github.event_name == 'push' && steps.need-land-blocking-test.outputs.need-lbt == 'true' }}
+        run: |
+          res=true
+          branches="${{ secrets.BRANCHES_TO_ENABLE_LBT_COMPAT_SUITE }}"
+          if ! [[ -z "${branches}" ]] && [[ "${branches}" =~ .*"${{ steps.changes.outputs.changes-target-branch }}".* ]];  then
+            echo "LBT compatibility suite is enabled. Will use land_blocking_compat suite."
+            echo "Will trigger base images build if they not found."
+          else
+            echo "LBT compatibility sutie is NOT enabled. Will use land_blocking suite."
+            res=false
+          fi
+          echo "::set-output name=need-extra::$(echo $res)";
+      - id: environment
+        name: Which environment should we use for secrets.
+        run: |
+          output=None
+          if ${{ github.event_name == 'push' }}; then
+            echo "will use sccache environment for rust builds";
+            output=Sccache
+          fi
+          echo "::set-output name=name::$(echo $output)";
       - id: rust-changes
         name: find rust/cargo changes.
         uses: ./.github/actions/matches
         with:
-          pattern: '^documentation\|^docker\|^scripts\|^.circleci'
+          pattern: '^documentation\|^docker\|^scripts\|^developers.diem.com'
           invert: "true"
       - id: non-rust-lint-changes
         name: find shell/dockerfile changes
         uses: ./.github/actions/matches
         with:
-          pattern: 'Dockerfile$\|.*.sh$'
+          pattern: 'Dockerfile$\|.*.sh$|^developers.diem.com'
+      - id: helm-changes
+        name: find helm changes
+        uses: ./.github/actions/matches
+        with:
+          pattern: '^.github\|^helm\|^developers.diem.com'
       - id: dev-setup-sh-changes
         name: find dev-setup.sh/base docker image changes
         uses: ./.github/actions/matches
         with:
-          pattern: '^.github\|docker/ci\|scripts/dev_setup.sh'
+          pattern: 'docker/ci\|scripts/dev_setup.sh'
+      - id: docker-compose-changes
+        name: find changes that should trigger docker compose testing.
+        uses: ./.github/actions/matches
+        with:
+          pattern: "^documentation"
+          invert: "true"
       - id: website-changes
         name: find website changes.
         uses: ./.github/actions/matches
         with:
-          pattern: "^documentation"
+          pattern: "^documentation|^developers.diem.com"
 
   dev-setup-sh-test:
     runs-on: ubuntu-latest-xl
@@ -68,20 +128,323 @@ jobs:
     if: ${{ needs.prepare.outputs.test-dev-setup == 'true' }}
     strategy:
       matrix:
-        target_os: [alpine, centos, github]
+        target_os: [alpine, centos, arch, github]
     steps:
       - uses: actions/checkout@v2
         with:
           ref: ${{ github.event.pull_request.head.sha }}
-      - uses: ./.github/actions/check-machine
-        with:
-          webhook-gha-hardware: ${{ secrets.WEBHOOK_GHA_HARDWARE }}
       - name: build image with dev-setup.sh
         run: docker build -f docker/ci/${{ matrix.target_os }}/Dockerfile -t diem/build_environment:test .
 
+  build-images:
+    runs-on: ubuntu-latest-xl
+    needs: prepare
+    if: ${{ github.event_name == 'push' && needs.prepare.outputs.build-images == 'true' }}
+    outputs:
+      head-tag: ${{ steps.push-to-novi-ecr.outputs.head-tag }}
+    environment:
+      name: Docker
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          fetch-depth: 0 #get all the history!!!
+      - id: changes
+        name: determine changes
+        uses: ./.github/actions/changes
+        with:
+          workflow-file: docker-publish.yml
+      - name: setup_aws_ecr_login
+        run: |
+          echo 'AWS_ECR_ACCOUNT_URL=${{ secrets.ENV_NOVI_ECR_AWS_ACCOUNT_NUM }}.dkr.ecr.${{ secrets.ENV_NOVI_ECR_AWS_REGION }}.amazonaws.com' >> $GITHUB_ENV
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.ENV_NOVI_ECR_AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.ENV_NOVI_ECR_AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.ENV_NOVI_ECR_AWS_REGION }}
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+      - name: Sign in to dockerhub, install image signing cert.
+        uses: ./.github/actions/dockerhub_login
+        with:
+          username: ${{ secrets.ENV_DOCKERHUB_USERNAME }}
+          password: ${{ secrets.ENV_DOCKERHUB_PASSWORD }}
+          key_material: ${{ secrets.ENV_DOCKERHUB_KEY_MATERIAL }}
+          key_name: ${{ secrets.ENV_DOCKERHUB_KEY_NAME }}
+          key_password: ${{ secrets.ENV_DOCKERHUB_KEY_PASSWORD }}
+      - name: pre-release docker images
+        run: |
+          BRANCH="$CHANGES_TARGET_BRANCH"
+          success=0
+          tmpfile=$(mktemp)
+          echo "Failed to push:" > "${tmpfile}"
+          docker/build_push.sh -u -p -b ${BRANCH} -n client || success=$(echo "client" >> "${tmpfile}"; echo 1)
+          docker/build_push.sh -u -p -b ${BRANCH} -n init || success=$(echo "init" >> "${tmpfile}"; echo 1)
+          docker/build_push.sh -u -p -b ${BRANCH} -n faucet || success=$(echo "faucet" >> "${tmpfile}"; echo 1)
+          docker/build_push.sh -u -p -b ${BRANCH} -n tools || success=$(echo "tools" >> "${tmpfile}"; echo 1)
+          docker/build_push.sh -u -p -b ${BRANCH} -n validator || success=$(echo "validator" >> "${tmpfile}"; echo 1)
+          docker/build_push.sh -u -p -b ${BRANCH} -n validator-tcb || success=$(echo "validator-tcb" >> "${tmpfile}"; echo 1)
+          docker/build_push.sh -u -p -b ${BRANCH} -n cluster-test || success=$(echo "cluster-test" >> "${tmpfile}"; echo 1)
+          if [[ "$success" == "1" ]]; then
+            cat "${tmpfile}"
+          fi
+          exit $success
+        env:
+          DOCKER_CONTENT_TRUST_REPOSITORY_PASSPHRASE: ${{ secrets.ENV_DOCKERHUB_KEY_PASSWORD }}
+      - name: push to novi ecr
+        id: push-to-novi-ecr
+        run: |
+          #push to novi ecr with standard names
+          BRANCH="$CHANGES_TARGET_BRANCH"
+          GIT_REV=$(git rev-parse --short=8 HEAD)
+          echo "::set-output name=head-tag::land_$GIT_REV";
+          aws ecr get-login-password --region ${{ secrets.ENV_NOVI_ECR_AWS_REGION }} | \
+          docker login --username AWS --password-stdin "${AWS_ECR_ACCOUNT_URL}"
+          docker/docker_republish.sh -t pre_${BRANCH}_${GIT_REV} -o land_${GIT_REV} -r ${AWS_ECR_ACCOUNT_URL} -d
+
+  need-base-images:
+    runs-on: self-hosted
+    needs: prepare
+    if: ${{ github.event_name == 'push' && needs.prepare.outputs.build-images == 'true' && needs.prepare.outputs.need-base-images == 'true' }}
+    outputs:
+      prev-tag: ${{ steps.build-extra-images.outputs.prev-tag }}
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0 #get all the history!!!
+      - name: Setup env
+        run: |
+          echo "BASE_GIT_REV=${{ needs.prepare.outputs.changes-base-git-rev }}" >> $GITHUB_ENV
+      - name: find images
+        run: |
+          set +e
+          echo "Will run land_blocking_compat suite"
+          echo "Finding a previous image tag to test against"
+          .github/actions/land-blocking/find-lbt-images.sh > lbt_images_output.txt
+          if [ $? -ne 0 ]; then
+            echo "BUILD_PREV=1" >> $GITHUB_ENV
+            cat lbt_images_output.txt
+            jq -n \
+            --arg msg "*${{ github.job }}* job in ${{ github.workflow }} workflow failed. Could not find a recent image tag for Compat Test" \
+            --arg url "https://github.com/${{ github.repository }}/actions/runs/${{github.run_id}}" \
+            '{
+              "attachments": [
+              {
+                "text": $msg,
+                "actions": [
+                {
+                  "type": "button",
+                  "text": "Visit Job",
+                  "url": $url
+                }
+                ]
+              }
+              ]
+            }' > /tmp/payload
+            curl -X POST -H 'Content-type: application/json' -d @/tmp/payload ${{ secrets.WEBHOOK_FLAKY_LAND_BLOCKING_CT }}
+          else
+            compat_prev_tag=$(tail -1 lbt_images_output.txt)
+            echo "Using previous image tag $compat_prev_tag"
+            echo "PREV_TAG=$compat_prev_tag" >> $GITHUB_ENV
+            echo "BUILD_PREV=0" >> $GITHUB_ENV
+          fi
+      - name: build extra images
+        id: build-extra-images
+        run: |
+          res=land_$BASE_GIT_REV
+          if [ $BUILD_PREV -eq 1 ]; then
+            compat_prev_tag=$res
+            echo "Starting codebuild for $compat_prev_tag"
+            VERSION=$BASE_GIT_REV ADDL_TAG=$compat_prev_tag .github/actions/land-blocking/cti-codebuild.sh &> codebuild-prev.log &
+            prev_build_pid=$!
+            wait $prev_build_pid
+            echo "====== codebuild-prev.log start ======"
+            cat codebuild-prev.log
+          else
+            res=$PREV_TAG;
+          fi
+          echo "::set-output name=prev-tag::$(echo $res)";
+
+  land-blocking-test:
+    name: Run land blocking test
+    runs-on: self-hosted
+    needs: [prepare, build-images, need-base-images]
+    if: ${{ always() && needs.build-images.result=='success' && needs.prepare.outputs.test-land-blocking == 'true' }}
+    timeout-minutes: 45
+    steps:
+      - name: Launch cluster test
+        # NOTE Remember to update PR comment payload if cti cmd is updated.
+        run: |
+          set +e
+          date
+          export CTI_OUTPUT_LOG=$(mktemp)
+          echo "CTI_OUTPUT_LOG=$CTI_OUTPUT_LOG" >> $GITHUB_ENV
+          cmd=""
+          if ${{ needs.need-base-images.result!='success' }}; then
+            cmd="./scripts/cti --tag ${{ needs.build-images.outputs.head-tag }} --report report.json --suite land_blocking"
+          else
+            cmd="./scripts/cti --tag ${{ needs.need-base-images.outputs.prev-tag }} --cluster-test-tag ${{ needs.build-images.outputs.head-tag }} -E BATCH_SIZE=15 -E UPDATE_TO_TAG=${{ needs.build-images.outputs.head-tag }} --report report.json --suite land_blocking_compat"
+          fi
+          eval $cmd
+          ret=$?
+          echo "cti exit code: $ret"
+          echo "CTI_REPRO_CMD=$cmd" >> $GITHUB_ENV
+          echo "CTI_EXIT_CODE=$ret" >> $GITHUB_ENV
+          msg_text="*${{ github.job }}* job in ${{ github.workflow }} workflow failed for PR ${{ needs.prepare.outputs.changes-pull-request-number }}."
+          if [ -s "report.json" ]; then
+            echo "report.json start"
+            cat report.json
+            echo "report.json end"
+            msg_text="$msg_text Report:\n$(cat report.json)"
+          else
+            echo "report.json is empty or not found."
+            msg_text="$msg_text Report:\nEmpty"
+            ret=1
+          fi
+          if [ $ret -ne 0 ]; then
+            jq -n \
+              --arg msg "$msg_text" \
+              --arg url "https://github.com/${{ github.repository }}/actions/runs/${{github.run_id}}" \
+              --arg pr_url "https://github.com/${{ github.repository }}/pull/${{ needs.prepare.outputs.changes-pull-request-number }}" \
+            '{
+              "attachments": [
+                {
+                  "text": $msg,
+                  "actions": [
+                    {
+                      "type": "button",
+                      "text": "Visit Job",
+                      "url": $url
+                    },
+                    {
+                      "type": "button",
+                      "text": "Visit PR",
+                      "url": $pr_url
+                    }
+                  ]
+                }
+              ]
+            }' > /tmp/payload
+            curl -X POST -H 'Content-type: application/json' -d @/tmp/payload ${{ secrets.WEBHOOK_FLAKY_LAND_BLOCKING_CT }}
+          fi
+      - name: Post test results on PR
+        uses: actions/github-script@v3
+        with:
+          github-token: ${{secrets.GITHUB_TOKEN}}
+          script: |
+            // Find the number of the pull request that trigggers this push
+            let pr_num = ${{ needs.prepare.outputs.changes-pull-request-number }};
+            if (!pr_num) {
+              console.warn("Did not find pull request num in previous step");
+              console.log("GH event payload\n", context.payload);
+              return;
+            }
+            // Read and check cluster test results
+            let should_fail = false;
+            let env_vars = process.env;
+            let body = '';
+            const fsp = require('fs').promises;
+            try {
+              data = await fsp.readFile('report.json', 'utf-8');
+              var result = JSON.parse(data);
+              // TODO - set P/F based on metrics TPS, latency
+              body = `Cluster Test Result
+            \`\`\`
+            ${result.text}
+            ${result.links}
+            \`\`\`
+            `;
+              // Check CTI exit code for errors
+              if (parseInt(env_vars.CTI_EXIT_CODE) != 0) {
+                body += "\n :exclamation: Cluster Test failed - non-zero exit code for `cti` \n"
+                should_fail = true;
+              } else {
+                let tps = result.metrics.find(m => m.experiment == "all up" && m.metric == "avg_tps").value;
+                let min_tps = 750;
+                if (tps < min_tps) {
+                  body += "\n :exclamation: Performance regression is detected on this PR";
+                  body += "\n TPS with PR: " + tps + ", this is lower then minimum allowed " + min_tps + " TPS.";
+                  console.log(body);
+                  should_fail = true;
+                }
+              }
+            } catch (err) {
+              if (err.code === 'ENOENT') {
+                body = "Cluster Test failed - no test report found.\n";
+                // Check Cluster Test output log for infra error
+                try {
+                  cti_log = await fsp.readFile(env_vars.CTI_OUTPUT_LOG, 'utf-8');
+                  let re = /.*(^Failed\sto\s.*\"Service\sUnavailable.\sPlease\stry\sagain\slater\.\".*)/;
+                  if (re.test(cti_log)) {
+                    let match = re.exec(cti_log);
+                    body += " There was service infra error:\n";
+                    body += `
+                    ${match[1]}
+                    `
+                    + "\n"
+                    ;
+                    body += "To retry, comment your PR with `/land`.";
+                    body += " If that doesn't trigger re-run, amend and push again.";
+                  }
+                } catch (err) {
+                  console.error("Failed to check infra error in CT output log.\n", err);
+                }
+              } else {
+                body = "Cluster Test runner failed.";
+                console.error(err);
+              }
+              body += " See https://github.com/diem/diem/actions/runs/${{github.run_id}}";
+              // Post comment on PR then fail this workflow
+              should_fail = true;
+            }
+            // Add repro cmd to message
+            try {
+              body += "\nRepro cmd:\n";
+              body += `
+              \`\`\`
+              ${env_vars.CTI_REPRO_CMD}
+              \`\`\`
+              `
+            } catch (err) {
+              if (err.code === 'ReferenceError') {
+                console.error("One of the following env vars is not set");
+              } else {
+                body += "[GHA DEBUG]\nFound error in actions/github-script\n";
+                body += err;
+              }
+            }
+            // Post test result on original pull request
+            try {
+              if (!should_fail) {
+                body += "\n :tada: Land-blocking cluster test passed! :ok_hand:"
+              }
+              await github.issues.createComment(
+                  {
+                    issue_number: pr_num,
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    body: body,
+                  }
+              );
+            } catch (err) {
+              if (err.status === 401) {
+                // Fail silently for auth but log to console.
+                console.warn("GH token has expired when trying to POST\n", err);
+              } else {
+                console.error("HttpError other than 401 is not bypassed");
+                throw err;
+              }
+            }
+            // Fail the workflow if test fails or perf regresses
+            if (should_fail) {
+              throw "Land-blocking test failed";
+            }
+
   non-rust-lint:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
+    runs-on: ubuntu-latest-xl
+    timeout-minutes: 10
     needs: prepare
     if: ${{ needs.prepare.outputs.test-non-rust-lint == 'true'  }}
     container:
@@ -91,11 +454,6 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
       - uses: ./.github/actions/build-setup
-      - uses: ./.github/actions/check-machine
-        with:
-          min-cpu: 2
-          min-ram: 7
-          webhook-gha-hardware: ${{ secrets.WEBHOOK_GHA_HARDWARE }}
       - name: shell lints
         run: |
           shellcheck scripts/dev_setup.sh && \
@@ -119,11 +477,8 @@ jobs:
       - uses: actions/checkout@v2
         with:
           ref: ${{ github.event.pull_request.head.sha }}
-      - uses: ./.github/actions/check-machine
-        with:
-          webhook-gha-hardware: ${{ secrets.WEBHOOK_GHA_HARDWARE }}
       - uses: ./.github/actions/build-setup
-      - uses: actions/cache@v2
+      - uses: actions/cache@v2.1.4
         with:
           path: "/opt/cargo/git\n/opt/cargo/registry\n/opt/cargo/.package-cache"
           key: crates-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
@@ -132,15 +487,17 @@ jobs:
         run: $pre_command && cargo x lint
       - name: cargo clippy
         run: $pre_command && cargo xclippy --workspace --all-targets
+      - name: cargo clippy tcb
+        run: $pre_command && cargo xclippy --members lec --members lsr --members key-manager
       - name: cargo fmt
         run: $pre_command && cargo xfmt --check
       - uses: ./.github/actions/build-teardown
 
   unit-test:
     runs-on: ubuntu-latest-xl
-    timeout-minutes: 40
+    timeout-minutes: 50
     needs: prepare
-    if: ${{ needs.prepare.outputs.test-rust == 'true' }}
+    if: ${{ needs.prepare.outputs.test-rust == 'true' && github.event_name == 'pull_request' }}
     container:
       image: diem/build_environment:${{ needs.prepare.outputs.changes-target-branch }}
       volumes:
@@ -150,19 +507,119 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0 #get all the history!!!
-      - uses: ./.github/actions/check-machine
-        with:
-          webhook-gha-hardware: ${{ secrets.WEBHOOK_GHA_HARDWARE }}
       - uses: ./.github/actions/build-setup
-      - uses: actions/cache@v2
+      - uses: actions/cache@v2.1.4
         with:
           path: "/opt/cargo/git\n/opt/cargo/registry\n/opt/cargo/.package-cache"
           key: crates-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: "crates-${{ runner.os }}"
       - name: run unit tests
-        run: $pre_command && cargo x test --jobs ${max_threads} --unit --changed-since "origin/$TARGET_BRANCH"
+        run: |
+          $pre_command && cargo nextest --jobs ${max_threads} --unit --changed-since "origin/$TARGET_BRANCH"
+          sccache -s
         env:
           TARGET_BRANCH: ${{ needs.prepare.outputs.changes-target-branch }}
+      - name: run doctests
+        run: |
+          $pre_command && cargo xtest --doc --jobs ${max_threads} --unit --changed-since "origin/$TARGET_BRANCH"
+          sccache -s
+        env:
+          TARGET_BRANCH: ${{ needs.prepare.outputs.changes-target-branch }}
+      - uses: ./.github/actions/build-teardown
+
+  unit-test-sccache:
+    runs-on: ubuntu-latest-xl
+    timeout-minutes: 50
+    needs: prepare
+    if: ${{ needs.prepare.outputs.test-rust == 'true' && github.event_name == 'push' }}
+    environment:
+      name: Sccache
+    container:
+      image: diem/build_environment:${{ needs.prepare.outputs.changes-target-branch }}
+      volumes:
+        - "/home/runner/work/diem/diem:/opt/git/diem"
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0 #get all the history!!!
+      - uses: ./.github/actions/build-setup
+      - uses: actions/cache@v2.1.4
+        with:
+          path: "/opt/cargo/git\n/opt/cargo/registry\n/opt/cargo/.package-cache"
+          key: crates-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: "crates-${{ runner.os }}"
+      - name: run unit tests
+        run: |
+          $pre_command && cargo nextest --jobs ${max_threads} --unit --changed-since "origin/$TARGET_BRANCH"
+          sccache -s
+        env:
+          TARGET_BRANCH: ${{ needs.prepare.outputs.changes-target-branch }}
+          SCCACHE_AWS_ACCESS_KEY_ID: ${{ secrets.ENV_DIEM_S3_AWS_ACCESS_KEY_ID }}
+          SCCACHE_AWS_SECRET_ACCESS_KEY: ${{ secrets.ENV_DIEM_S3_AWS_SECRET_ACCESS_KEY }}
+      - name: run doctests
+        run: |
+          $pre_command && cargo xtest --doc --jobs ${max_threads} --unit --changed-since "origin/$TARGET_BRANCH"
+          sccache -s
+        env:
+          TARGET_BRANCH: ${{ needs.prepare.outputs.changes-target-branch }}
+          SCCACHE_AWS_ACCESS_KEY_ID: ${{ secrets.ENV_DIEM_S3_AWS_ACCESS_KEY_ID }}
+          SCCACHE_AWS_SECRET_ACCESS_KEY: ${{ secrets.ENV_DIEM_S3_AWS_SECRET_ACCESS_KEY }}
+      - uses: ./.github/actions/build-teardown
+
+  codegen-unit-test:
+    runs-on: ubuntu-latest-xl
+    timeout-minutes: 60
+    needs: prepare
+    if: ${{ needs.prepare.outputs.test-rust == 'true' && github.event_name == 'pull_request' }}
+    container:
+      image: diem/build_environment:${{ needs.prepare.outputs.changes-target-branch }}
+      volumes:
+        - "/home/runner/work/diem/diem:/opt/git/diem"
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0 #get all the history!!!
+      - uses: ./.github/actions/build-setup
+      - uses: actions/cache@v2.1.4
+        with:
+          path: "/opt/cargo/git\n/opt/cargo/registry\n/opt/cargo/.package-cache"
+          key: crates-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: "crates-${{ runner.os }}"
+      - name: run codegen unit tests
+        run: $pre_command && cargo nextest --jobs ${max_threads} -p transaction-builder-generator --unit --changed-since "origin/$TARGET_BRANCH" --run-ignored=ignored-only
+        env:
+          TARGET_BRANCH: ${{ needs.prepare.outputs.changes-target-branch }}
+      - uses: ./.github/actions/build-teardown
+
+  codegen-unit-test-sccache:
+    runs-on: ubuntu-latest-xl
+    timeout-minutes: 60
+    needs: prepare
+    if: ${{ needs.prepare.outputs.test-rust == 'true' && github.event_name == 'push' }}
+    environment: Sccache
+    container:
+      image: diem/build_environment:${{ needs.prepare.outputs.changes-target-branch }}
+      volumes:
+        - "/home/runner/work/diem/diem:/opt/git/diem"
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0 #get all the history!!!
+      - uses: ./.github/actions/build-setup
+      - uses: actions/cache@v2.1.4
+        with:
+          path: "/opt/cargo/git\n/opt/cargo/registry\n/opt/cargo/.package-cache"
+          key: crates-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: "crates-${{ runner.os }}"
+      - name: run codegen unit tests
+        run: $pre_command && cargo nextest --jobs ${max_threads} -p transaction-builder-generator --unit --changed-since "origin/$TARGET_BRANCH" --run-ignored=ignored-only
+        env:
+          TARGET_BRANCH: ${{ needs.prepare.outputs.changes-target-branch }}
+          SCCACHE_AWS_ACCESS_KEY_ID: ${{ secrets.ENV_DIEM_S3_AWS_ACCESS_KEY_ID }}
+          SCCACHE_AWS_SECRET_ACCESS_KEY: ${{ secrets.ENV_DIEM_S3_AWS_SECRET_ACCESS_KEY }}
       - uses: ./.github/actions/build-teardown
 
   e2e-test:
@@ -233,14 +690,46 @@ jobs:
           fi
           if [[ $num_fails != 0 ]]; then
             echo -e "$num_fails test(s) failed:\n${failed_tests}"
+          else
+            echo -e "No issues detected in this build". > ${MESSAGE_PAYLOAD_FILE}
           fi
           exit $num_fails
       - name: "Send Message"
         uses: ./.github/actions/slack-file
-        if: ${{ failure() }}
+        if: ${{ always() }}
         with:
           payload-file: ${{ env.MESSAGE_PAYLOAD_FILE }}
           webhook: ${{ secrets.WEBHOOK_FLAKY_TESTS }}
+
+  docker-compose-test:
+    runs-on: ubuntu-latest-xl
+    timeout-minutes: 30
+    needs: prepare
+    if: ${{ needs.prepare.outputs.test-docker-compose == 'true' }}
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: install expect
+        run: |
+          sudo apt --assume-yes update
+          sudo apt --assume-yes install expect
+      - name: build validator docker image
+        run: docker/diem-build.sh docker/validator/Dockerfile diem/validator:test
+      - name: build faucet image
+        run: docker/diem-build.sh docker/faucet/Dockerfile diem/faucet:test
+      - name: build client image
+        run: docker/diem-build.sh docker/client/Dockerfile diem/client:test
+      - name: run validator-client test
+        run: docker/compose/test_docker_compose.sh
+        env:
+          # this overrides the default docker tag of "testnet"
+          IMAGE_TAG: "test"
+      - name: run sdk-compatability tests from main
+        run: cd sdk/compatability && cargo test -- --include-ignored
+        env:
+          JSON_RPC_URL: "http://127.0.0.1:8080"
+          FAUCET_URL: "http://127.0.0.1:8000"
 
   crypto-unit-test:
     runs-on: ubuntu-latest
@@ -255,13 +744,8 @@ jobs:
       - uses: actions/checkout@v2
         with:
           ref: ${{ github.event.pull_request.head.sha }}
-      - uses: ./.github/actions/check-machine
-        with:
-          min-cpu: 2
-          min-ram: 7
-          webhook-gha-hardware: ${{ secrets.WEBHOOK_GHA_HARDWARE }}
       - uses: ./.github/actions/build-setup
-      - uses: actions/cache@v2
+      - uses: actions/cache@v2.1.4
         with:
           path: "/opt/cargo/git\n/opt/cargo/registry\n/opt/cargo/.package-cache"
           key: crates-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
@@ -269,8 +753,77 @@ jobs:
       - name: run crypto unit tests
         run: |
           cd /opt/git/diem/crypto/crypto
-          $CARGO $CARGOFLAGS test --features='vanilla-u64' --no-default-features
-          $CARGO $CARGOFLAGS test --features='vanilla-u32' --no-default-features
+          cargo test --features='u64' --no-default-features
+          cargo test --features='u32' --no-default-features
+      - uses: ./.github/actions/build-teardown
+
+  helm-test:
+    runs-on: ubuntu-latest-xl
+    timeout-minutes: 20
+    needs: prepare
+    if: ${{ needs.prepare.outputs.test-helm == 'true' }}
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Check machine details for minikube
+        run: |
+          kubectl version
+          helm version
+          lscpu
+      - name: Helm lint
+        working-directory: helm
+        run: helm lint fullnode
+      - name: Install minikube v1.17.1
+        run: |
+          curl -LO https://storage.googleapis.com/minikube/releases/v1.17.1/minikube-linux-amd64
+          checksum="03a6d6cccecb7a33a09afc6dae40d8d76ccfe168aa4aba1a18c1f45bbab120c2"
+          filename=minikube-linux-amd64
+          if [[ $(sha256sum $filename | awk '{print $1}') != "$checksum" ]]; then
+            echo "$filename checksum mismatch"
+            exit 1
+          fi
+          # TODO(rustielin): add minikube into scripts/dev_setup.sh
+          sudo install minikube-linux-amd64 /usr/local/bin/minikube
+          rm minikube-linux-amd64
+      - name: Start minikube
+        run: minikube start --driver=docker --cpus=3 --memory=5Gi
+      - name: Wait for node status
+        run: kubectl wait --for=condition=ready node/minikube --timeout=5m
+      - name: Interact with the cluster
+        run: kubectl get nodes
+      - name: Install fullnode helm chart
+        working-directory: helm/fullnode
+        run: |
+          helm install fullnode --set storage.class=standard --set storage.size=10Gi .
+      - name: Wait and check pods
+        run: |
+          echo "Sleep 30s while fullnode starts"
+          sleep 30
+          kubectl wait -l statefulset.kubernetes.io/pod-name=fullnode-diem-fullnode-0 --for=condition=ready pod --timeout=5m
+          echo "Sleep 1m while fullnode syncs"
+          sleep 60
+          kubectl get pods
+      - name: Run the fullnode helm chart tests
+        working-directory: helm/fullnode
+        run: helm test fullnode --logs
+      - name: Check resources
+        if: ${{ always() }}
+        run: |
+          echo "===== nodes ====="
+          kubectl get nodes
+          kubectl describe nodes
+          echo "===== pvcs ====="
+          kubectl get pvc
+          kubectl describe pvc
+          echo "===== pods ====="
+          kubectl get pods
+          kubectl describe pod fullnode-diem-fullnode-0
+          kubectl logs fullnode-diem-fullnode-0
+          kubectl logs fullnode-diem-fullnode-sync-test
+      - name: Clean up
+        if: ${{ always() }}
+        run: minikube delete
       - uses: ./.github/actions/build-teardown
 
   # Compile (but don't run) the benchmarks, to insulate against bit rot
@@ -288,7 +841,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
       - uses: ./.github/actions/build-setup
-      - uses: actions/cache@v2
+      - uses: actions/cache@v2.1.4
         with:
           path: "/opt/cargo/git\n/opt/cargo/registry\n/opt/cargo/.package-cache"
           key: crates-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
@@ -306,30 +859,58 @@ jobs:
       image: diem/build_environment:${{ needs.prepare.outputs.changes-target-branch }}
       volumes:
         - "/home/runner/work/diem/diem:/opt/git/diem"
-    env:
-      RUST_BACKTRACE: 1
     steps:
       - uses: actions/checkout@v2
         with:
           ref: ${{ github.event.pull_request.head.sha }}
       - uses: ./.github/actions/build-setup
-      - uses: actions/cache@v2
+      - uses: actions/cache@v2.1.4
         with:
           path: "/opt/cargo/git\n/opt/cargo/registry\n/opt/cargo/.package-cache"
           key: crates-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: "crates-${{ runner.os }}"
-      - run: cd /opt/git/diem/ && cargo xbuild
-      - run: cd /opt/git/diem/ && cargo xbuild -p cli
-      - run: cd /opt/git/diem/ && cargo xbuild -p cluster-test
-      - run: cd /opt/git/diem/ && cargo xbuild -p language-benchmarks
-      - run: cd /opt/git/diem/ && cargo xbuild -p diem-fuzzer
-      - run: cd /opt/git/diem/ && cargo xbuild -p diem-swarm
-      - run: cd /opt/git/diem/ && cargo xbuild -p test-generation
+      - run: cd /opt/git/diem/ && cargo xcheck -j ${max_threads} --members production
+      - run: cd /opt/git/diem/ && cargo xcheck -j ${max_threads} --workspace --all-targets
       - run: |
           cd /opt/git/diem
           rustup target add powerpc-unknown-linux-gnu
-          cargo xbuild -j ${max_threads} -p transaction-builder -p move-vm-types --target powerpc-unknown-linux-gnu
+          cargo xcheck -j ${max_threads} -p diem-transaction-builder -p move-vm-types --target powerpc-unknown-linux-gnu
       - uses: ./.github/actions/build-teardown
+
+  perf-benchmarks:
+    name: run-perf-benchmarks
+    runs-on: ubuntu-latest-xl
+    timeout-minutes: 30
+    needs:
+      - prepare
+      - build-benchmarks
+    env:
+      CRITERION_HOME: /tmp/benches
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/cache@v2.1.4
+        with:
+          path: "/opt/cargo/git\n/opt/cargo/registry\n/opt/cargo/.package-cache"
+          key: crates-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: "crates-${{ runner.os }}"
+      - name: Download the previous baseline
+        continue-on-error: true
+        uses: actions/download-artifact@v2
+        with:
+          name: bench-baseline
+      - name: Run performance benchamrks
+        run: |
+          # Replace this with a cargo x bench
+          cargo bench --package language-benchmarks
+      - name: Archive criterion results
+        uses: actions/upload-artifact@v2
+        with:
+          name: bench-baseline
+          retention-days: 5
+          path: |
+            /tmp/benches
 
   success:
     name: ci-test-success
@@ -340,10 +921,17 @@ jobs:
     needs:
       - prepare
       - dev-setup-sh-test
+      - build-images
+      - need-base-images
+      - land-blocking-test
       - non-rust-lint
       - lint
       - unit-test
+      - unit-test-sccache
+      - codegen-unit-test
+      - codegen-unit-test-sccache
       - e2e-test
+      - docker-compose-test
       - crypto-unit-test
       - build-benchmarks
       - build-dev
@@ -351,20 +939,34 @@ jobs:
       - run: |
           echo prepare: ${{ needs.prepare.result }}
           echo dev-setup-sh-test: ${{ needs.dev-setup-sh-test.result }}
+          echo build-images: ${{ needs.build-images.result }}
+          echo need-base-images: ${{ needs.need-base-images.result }}
+          echo land-blocking-test: ${{ needs.land-blocking-test.result }}
           echo non-rust-lint: ${{ needs.non-rust-lint.result }}
           echo lint: ${{ needs.lint.result }}
           echo unit-test: ${{ needs.unit-test.result }}
+          echo unit-test-sccache: ${{ needs.unit-test-sccache.result }}
+          echo codegen-unit-test: ${{ needs.codegen-unit-test.result }}
+          echo codegen-unit-test-sccache: ${{ needs.codegen-unit-test-sccache.result }}
           echo e2e-test: ${{ needs.e2e-test.result }}
+          echo docker-compose-test: ${{ needs.docker-compose-test.result }}
           echo crypto-unit-test: ${{ needs.crypto-unit-test.result }}
           echo build-benchmarks: ${{ needs.build-benchmarks.result }}
           echo build-dev: ${{ needs.build-dev.result }}
           success="${{
             needs.prepare.result=='success'
             && (needs.dev-setup-sh-test.result=='success' || needs.dev-setup-sh-test.result=='skipped')
+            && (needs.build-images.result=='success' || needs.build-images.result=='skipped')
+            && (needs.need-base-images.result=='success' || needs.need-base-images.result=='skipped')
+            && (needs.land-blocking-test.result=='success' || needs.land-blocking-test.result=='skipped')
             && (needs.non-rust-lint.result=='success' || needs.non-rust-lint.result=='skipped')
             && (needs.lint.result=='success' || needs.lint.result=='skipped')
             && (needs.unit-test.result=='success' || needs.unit-test.result=='skipped')
+            && (needs.unit-test-sccache.result=='success' || needs.unit-test-sccache.result=='skipped')
+            && (needs.codegen-unit-test.result=='success' || needs.codegen-unit-test.result=='skipped')
+            && (needs.codegen-unit-test-sccache.result=='success' || needs.codegen-unit-test-sccache.result=='skipped')
             && (needs.e2e-test.result=='success' || needs.e2e-test.result=='skipped')
+            && (needs.docker-compose-test.result=='success' || needs.docker-compose-test.result=='skipped')
             && (needs.crypto-unit-test.result=='success' || needs.crypto-unit-test.result=='skipped')
             && (needs.build-benchmarks.result=='success' || needs.build-benchmarks.result=='skipped')
             && (needs.build-dev.result=='success' || needs.build-dev.result=='skipped')

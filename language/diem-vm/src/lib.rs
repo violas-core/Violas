@@ -117,11 +117,15 @@ pub mod transaction_metadata;
 pub mod diem_transaction_executor;
 pub mod diem_transaction_validator;
 pub mod logging;
+mod script_to_script_function;
 pub mod system_module_names;
+
+#[cfg(test)]
+mod unit_tests;
 
 pub use crate::{
     diem_transaction_executor::DiemVM, diem_transaction_validator::DiemVMValidator,
-    diem_vm::txn_effects_to_writeset_and_events,
+    diem_vm::convert_changeset_and_events,
 };
 
 use diem_state_view::StateView;

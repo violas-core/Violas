@@ -52,7 +52,7 @@ impl Mnemonic {
     pub fn from(s: &str) -> Result<Mnemonic> {
         let words: Vec<_> = s.split(' ').collect();
         let len = words.len();
-        if len < 12 || len > 24 || len % 3 != 0 {
+        if !(12..=24).contains(&len) || len % 3 != 0 {
             return Err(WalletError::DiemWalletGeneric(
                 "Mnemonic must have a word count of the following lengths: 24, 21, 18, 15, 12"
                     .to_string(),
@@ -94,7 +94,7 @@ impl Mnemonic {
     /// Generate mnemonic from entropy byte-array.
     pub fn mnemonic(entropy: &[u8]) -> Result<Mnemonic> {
         let len = entropy.len();
-        if len < 16 || len > 32 || len % 4 != 0 {
+        if !(16..=32).contains(&len) || len % 4 != 0 {
             return Err(WalletError::DiemWalletGeneric(
                 "Entropy data for mnemonic must have one of the following byte lengths: \
                  32, 28, 24, 20, 16"
@@ -532,12 +532,12 @@ fn test_failed_checksum() {
 
     // Test: change first word.
     let mut mnemonic = "science abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
-    let mut computed_mnemonic = Mnemonic::from(&mnemonic[..]);
+    let mut computed_mnemonic = Mnemonic::from(mnemonic);
     assert!(computed_mnemonic.is_err());
 
     // Test: change last word.
     mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon zoo";
-    computed_mnemonic = Mnemonic::from(&mnemonic[..]);
+    computed_mnemonic = Mnemonic::from(mnemonic);
     assert!(computed_mnemonic.is_err());
 
     // CORRECT MNEMONIC: "void come effort suffer camp survey warrior heavy shoot primary clutch
@@ -545,12 +545,12 @@ fn test_failed_checksum() {
 
     // Test: change second word.
     let mut mnemonic = "void black effort suffer camp survey warrior heavy shoot primary clutch crush open amazing screen patrol group space point ten exist slush involve unfold";
-    let mut computed_mnemonic = Mnemonic::from(&mnemonic[..]);
+    let mut computed_mnemonic = Mnemonic::from(mnemonic);
     assert!(computed_mnemonic.is_err());
 
     // Test: change last word.
     mnemonic = "void come effort suffer camp survey warrior heavy shoot primary clutch crush open amazing screen patrol group space point ten exist slush involve holiday";
-    computed_mnemonic = Mnemonic::from(&mnemonic[..]);
+    computed_mnemonic = Mnemonic::from(mnemonic);
     assert!(computed_mnemonic.is_err());
 }
 

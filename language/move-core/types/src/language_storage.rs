@@ -5,7 +5,6 @@ use crate::{
     account_address::AccountAddress,
     identifier::{IdentStr, Identifier},
 };
-use diem_crypto_derive::{BCSCryptoHash, CryptoHasher};
 #[cfg(any(test, feature = "fuzzing"))]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -30,19 +29,7 @@ pub enum TypeTag {
     Struct(StructTag),
 }
 
-#[derive(
-    Serialize,
-    Deserialize,
-    Debug,
-    PartialEq,
-    Hash,
-    Eq,
-    Clone,
-    PartialOrd,
-    Ord,
-    CryptoHasher,
-    BCSCryptoHash,
-)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Hash, Eq, Clone, PartialOrd, Ord)]
 pub struct StructTag {
     pub address: AccountAddress,
     pub module: Identifier,
@@ -53,9 +40,7 @@ pub struct StructTag {
 
 impl StructTag {
     pub fn access_vector(&self) -> Vec<u8> {
-        let mut key = vec![];
-        key.push(RESOURCE_TAG);
-
+        let mut key = vec![RESOURCE_TAG];
         key.append(&mut bcs::to_bytes(self).unwrap());
         key
     }
@@ -91,19 +76,7 @@ impl ResourceKey {
 
 /// Represents the initial key into global storage where we first index by the address, and then
 /// the struct tag
-#[derive(
-    Serialize,
-    Deserialize,
-    Debug,
-    PartialEq,
-    Hash,
-    Eq,
-    Clone,
-    PartialOrd,
-    Ord,
-    CryptoHasher,
-    BCSCryptoHash,
-)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Hash, Eq, Clone, PartialOrd, Ord)]
 #[cfg_attr(any(test, feature = "fuzzing"), derive(Arbitrary))]
 #[cfg_attr(any(test, feature = "fuzzing"), proptest(no_params))]
 pub struct ModuleId {
@@ -131,9 +104,7 @@ impl ModuleId {
     }
 
     pub fn access_vector(&self) -> Vec<u8> {
-        let mut key = vec![];
-        key.push(CODE_TAG);
-
+        let mut key = vec![CODE_TAG];
         key.append(&mut bcs::to_bytes(self).unwrap());
         key
     }

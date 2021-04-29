@@ -13,17 +13,18 @@ use move_coverage::coverage_map::{ExecCoverageMap, FunctionCoverage};
 use vm::{
     access::ModuleAccess,
     file_format::{
-        Bytecode, CompiledModule, FieldHandleIndex, FunctionDefinition, FunctionDefinitionIndex,
-        Kind, Signature, SignatureIndex, SignatureToken, StructDefinition, StructDefinitionIndex,
-        StructFieldInformation, TableIndex, TypeSignature,
+        Ability, AbilitySet, Bytecode, CompiledModule, CompiledScript, FieldHandleIndex,
+        FunctionDefinition, FunctionDefinitionIndex, Signature, SignatureIndex, SignatureToken,
+        StructDefinition, StructDefinitionIndex, StructFieldInformation, TableIndex, TypeSignature,
+        Visibility,
     },
 };
 
 /// Holds the various options that we support while disassembling code.
 #[derive(Debug, Default)]
 pub struct DisassemblerOptions {
-    /// Only print public functions
-    pub only_public: bool,
+    /// Only print non-private functions
+    pub only_externally_visible: bool,
 
     /// Print the bytecode for the instructions within the function.
     pub print_code: bool,
@@ -38,7 +39,7 @@ pub struct DisassemblerOptions {
 impl DisassemblerOptions {
     pub fn new() -> Self {
         Self {
-            only_public: false,
+            only_externally_visible: false,
             print_code: false,
             print_basic_blocks: false,
             print_locals: false,
@@ -68,6 +69,16 @@ impl<Location: Clone + Eq> Disassembler<Location> {
         options.print_code = true;
         Ok(Self {
             source_mapper: SourceMapping::new_from_module(module, default_loc)?,
+            options,
+            coverage_map: None,
+        })
+    }
+
+    pub fn from_script(script: CompiledScript, default_loc: Location) -> Result<Self> {
+        let mut options = DisassemblerOptions::new();
+        options.print_code = true;
+        Ok(Self {
+            source_mapper: SourceMapping::new_from_script(script, default_loc)?,
             options,
             coverage_map: None,
         })
@@ -132,6 +143,9 @@ impl<Location: Clone + Eq> Disassembler<Location> {
     }
 
     fn format_function_coverage(&self, name: &IdentStr, function_body: String) -> String {
+        if self.coverage_map.is_none() {
+            return function_body;
+        }
         if self.is_function_called(name) {
             function_body.green()
         } else {
@@ -141,10 +155,14 @@ impl<Location: Clone + Eq> Disassembler<Location> {
     }
 
     fn format_with_instruction_coverage(
+        &self,
         pc: usize,
         function_coverage_map: Option<&FunctionCoverage>,
         instruction: String,
     ) -> String {
+        if self.coverage_map.is_none() {
+            return format!("\t{}: {}", pc, instruction);
+        }
         let coverage = function_coverage_map.and_then(|map| map.get(&(pc as u64)));
         match coverage {
             Some(coverage) => format!("[{}]\t{}: {}", coverage, pc, instruction).green(),
@@ -225,7 +243,7 @@ impl<Location: Clone + Eq> Disassembler<Location> {
             .0
             .iter()
             .map(|sig_tok| {
-                Ok(self.disassemble_sig_tok(sig_tok.clone(), &struct_source_map.type_parameters)?)
+                self.disassemble_sig_tok(sig_tok.clone(), &struct_source_map.type_parameters)
             })
             .collect::<Result<Vec<String>>>()?;
 
@@ -645,7 +663,7 @@ impl<Location: Clone + Eq> Disassembler<Location> {
                     .signature_at(function_handle.parameters)
                     .0
                     .iter()
-                    .map(|sig_tok| Ok(self.disassemble_sig_tok(sig_tok.clone(), &[])?))
+                    .map(|sig_tok| self.disassemble_sig_tok(sig_tok.clone(), &[]))
                     .collect::<Result<Vec<String>>>()?
                     .join(", ");
                 let type_rets = self
@@ -654,7 +672,7 @@ impl<Location: Clone + Eq> Disassembler<Location> {
                     .signature_at(function_handle.return_)
                     .0
                     .iter()
-                    .map(|sig_tok| Ok(self.disassemble_sig_tok(sig_tok.clone(), &[])?))
+                    .map(|sig_tok| self.disassemble_sig_tok(sig_tok.clone(), &[]))
                     .collect::<Result<Vec<String>>>()?;
                 Ok(format!(
                     "Call[{}]({}({}){})",
@@ -700,7 +718,7 @@ impl<Location: Clone + Eq> Disassembler<Location> {
                     .signature_at(function_handle.parameters)
                     .0
                     .iter()
-                    .map(|sig_tok| Ok(self.disassemble_sig_tok(sig_tok.clone(), &ty_params)?))
+                    .map(|sig_tok| self.disassemble_sig_tok(sig_tok.clone(), &ty_params))
                     .collect::<Result<Vec<String>>>()?
                     .join(", ");
                 let type_rets = self
@@ -709,7 +727,7 @@ impl<Location: Clone + Eq> Disassembler<Location> {
                     .signature_at(function_handle.return_)
                     .0
                     .iter()
-                    .map(|sig_tok| Ok(self.disassemble_sig_tok(sig_tok.clone(), &ty_params)?))
+                    .map(|sig_tok| self.disassemble_sig_tok(sig_tok.clone(), &ty_params))
                     .collect::<Result<Vec<String>>>()?;
                 Ok(format!(
                     "Call[{}]({}{}({}){})",
@@ -780,7 +798,7 @@ impl<Location: Clone + Eq> Disassembler<Location> {
             .into_iter()
             .enumerate()
             .map(|(instr_index, dis_instr)| {
-                Self::format_with_instruction_coverage(
+                self.format_with_instruction_coverage(
                     instr_index,
                     function_code_coverage_map,
                     dis_instr,
@@ -803,12 +821,18 @@ impl<Location: Clone + Eq> Disassembler<Location> {
 
     fn disassemble_type_formals(
         source_map_ty_params: &[SourceName<Location>],
-        kinds: &[Kind],
+        ablities: &[AbilitySet],
     ) -> String {
         let ty_params: Vec<String> = source_map_ty_params
             .iter()
-            .zip(kinds.iter())
-            .map(|((name, _), kind)| format!("{}: {:#?}", name.as_str(), kind))
+            .zip(ablities)
+            .map(|((name, _), abs)| {
+                format!(
+                    "{}{}",
+                    name.as_str(),
+                    kind_to_constraint(ability_to_kind(*abs))
+                )
+            })
             .collect();
         Self::format_type_params(&ty_params)
     }
@@ -853,14 +877,21 @@ impl<Location: Clone + Eq> Disassembler<Location> {
             .source_map
             .get_function_source_map(function_definition_index)?;
 
-        if self.options.only_public && !function_definition.is_public() {
+        if match function_definition.visibility {
+            Visibility::Script | Visibility::Friend | Visibility::Public => false,
+            Visibility::Private => self.options.only_externally_visible,
+        } {
             return Ok("".to_string());
         }
 
-        let visibility_modifier = if function_definition.is_native() {
+        let visibility_modifier = match function_definition.visibility {
+            Visibility::Private => "",
+            Visibility::Script => "public(script) ",
+            Visibility::Friend => "public(friend) ",
+            Visibility::Public => "public ",
+        };
+        let native_modifier = if function_definition.is_native() {
             "native "
-        } else if function_definition.is_public() {
-            "public "
         } else {
             ""
         };
@@ -916,7 +947,8 @@ impl<Location: Clone + Eq> Disassembler<Location> {
         Ok(self.format_function_coverage(
             name,
             format!(
-                "{visibility_modifier}{name}{ty_params}({params}){ret_type}{body}",
+                "{native_modifier}{visibility_modifier}{name}{ty_params}({params}){ret_type}{body}",
+                native_modifier = native_modifier,
                 visibility_modifier = visibility_modifier,
                 name = name,
                 ty_params = ty_params,
@@ -960,10 +992,20 @@ impl<Location: Clone + Eq> Disassembler<Location> {
 
         let native = if field_info.is_none() { "native " } else { "" };
 
-        let nominal_name = if struct_handle.is_nominal_resource {
-            "resource"
+        let abilities = if struct_handle.abilities == AbilitySet::EMPTY {
+            String::new()
         } else {
-            "struct"
+            let ability_vec = struct_handle
+                .abilities
+                .into_iter()
+                .map(|a| match a {
+                    Ability::Copy => "copy",
+                    Ability::Drop => "drop",
+                    Ability::Store => "store",
+                    Ability::Key => "key",
+                })
+                .collect::<Vec<_>>();
+            format!("has {}", ability_vec.join(", "))
         };
 
         let name = self
@@ -997,11 +1039,11 @@ impl<Location: Clone + Eq> Disassembler<Location> {
         }
 
         Ok(format!(
-            "{native}{nominal_name} {name}{ty_params} {fields}",
+            "{native}struct {name}{ty_params}{abilities} {fields}",
             native = native,
-            nominal_name = nominal_name,
             name = name,
             ty_params = ty_params,
+            abilities = abilities,
             fields = &fields.join(",\n\t"),
         ))
     }
@@ -1029,5 +1071,29 @@ impl<Location: Clone + Eq> Disassembler<Location> {
             struct_defs = &struct_defs.join("\n"),
             function_defs = &function_defs.join("\n")
         ))
+    }
+}
+
+// Temporary helpers until abilities+constraints are added to the IR
+enum Kind {
+    Copyable,
+    Resource,
+    All,
+}
+
+fn ability_to_kind(abs: AbilitySet) -> Kind {
+    match (abs.has_copy(), abs.has_drop(), abs.has_key()) {
+        (true, true, false) => Kind::Copyable,
+        (false, false, true) => Kind::Resource,
+        (false, false, false) => Kind::All,
+        _ => panic!("Unsupported ability set"),
+    }
+}
+
+fn kind_to_constraint(k: Kind) -> &'static str {
+    match k {
+        Kind::Copyable => ": copyable",
+        Kind::Resource => ": resource",
+        Kind::All => "",
     }
 }

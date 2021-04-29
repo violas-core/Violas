@@ -10,7 +10,7 @@ use crate::{
 };
 use move_core_types::value::MoveValue;
 use move_ir_types::location::*;
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 // HLIR + Unstructured Control Flow + CFG
 
@@ -18,7 +18,7 @@ use std::collections::{BTreeMap, VecDeque};
 // Program
 //**************************************************************************************************
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Program {
     pub modules: UniqueMap<ModuleIdent, ModuleDefinition>,
     pub scripts: BTreeMap<String, Script>,
@@ -28,7 +28,7 @@ pub struct Program {
 // Scripts
 //**************************************************************************************************
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Script {
     pub loc: Loc,
     pub constants: UniqueMap<ConstantName, Constant>,
@@ -40,11 +40,12 @@ pub struct Script {
 // Modules
 //**************************************************************************************************
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ModuleDefinition {
     pub is_source_module: bool,
     /// `dependency_order` is the topological order/rank in the dependency graph.
     pub dependency_order: usize,
+    pub friends: UniqueMap<ModuleIdent, Loc>,
     pub structs: UniqueMap<StructName, StructDefinition>,
     pub constants: UniqueMap<ConstantName, Constant>,
     pub functions: UniqueMap<FunctionName, Function>,
@@ -54,7 +55,7 @@ pub struct ModuleDefinition {
 // Constants
 //**************************************************************************************************
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub struct Constant {
     pub loc: Loc,
     pub signature: BaseType,
@@ -65,18 +66,19 @@ pub struct Constant {
 // Functions
 //**************************************************************************************************
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub enum FunctionBody_ {
     Native,
     Defined {
         locals: UniqueMap<Var, SingleType>,
         start: Label,
+        loop_heads: BTreeSet<Label>,
         blocks: BasicBlocks,
     },
 }
 pub type FunctionBody = Spanned<FunctionBody_>;
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub struct Function {
     pub visibility: FunctionVisibility,
     pub signature: FunctionSignature,
@@ -91,6 +93,39 @@ pub struct Function {
 pub type BasicBlocks = BTreeMap<Label, BasicBlock>;
 
 pub type BasicBlock = VecDeque<Command>;
+
+#[derive(Clone, Copy, Debug)]
+pub enum LoopEnd {
+    // If the generated loop end block was not used
+    Unused,
+    // The target of breaks inside the loop
+    Target(Label),
+}
+
+#[derive(Clone, Debug)]
+pub struct LoopInfo {
+    pub is_loop_stmt: bool,
+    pub loop_end: LoopEnd,
+}
+
+#[derive(Clone, Debug)]
+pub enum BlockInfo {
+    LoopHead(LoopInfo),
+    Other,
+}
+
+//**************************************************************************************************
+// impls
+//**************************************************************************************************
+
+impl LoopEnd {
+    pub fn equals(&self, lbl: Label) -> bool {
+        match self {
+            LoopEnd::Unused => false,
+            LoopEnd::Target(t) => *t == lbl,
+        }
+    }
+}
 
 //**************************************************************************************************
 // Label util
@@ -121,8 +156,8 @@ fn remap_labels_cmd(remapping: &BTreeMap<Label, Label>, sp!(_, cmd_): &mut Comma
     use Command_::*;
     match cmd_ {
         Break | Continue => panic!("ICE break/continue not translated to jumps"),
-        Mutate(_, _) | Assign(_, _) | IgnoreAndPop { .. } | Abort(_) | Return(_) => (),
-        Jump(lbl) => *lbl = remapping[lbl],
+        Mutate(_, _) | Assign(_, _) | IgnoreAndPop { .. } | Abort(_) | Return { .. } => (),
+        Jump { target, .. } => *target = remapping[target],
         JumpIf {
             if_true, if_false, ..
         } => {
@@ -139,7 +174,7 @@ fn remap_labels_cmd(remapping: &BTreeMap<Label, Label>, sp!(_, cmd_): &mut Comma
 impl AstDebug for Program {
     fn ast_debug(&self, w: &mut AstWriter) {
         let Program { modules, scripts } = self;
-        for (m, mdef) in modules {
+        for (m, mdef) in modules.key_cloned_iter() {
             w.write(&format!("module {}", m));
             w.block(|w| mdef.ast_debug(w));
             w.new_line();
@@ -161,7 +196,7 @@ impl AstDebug for Script {
             function_name,
             function,
         } = self;
-        for cdef in constants {
+        for cdef in constants.key_cloned_iter() {
             cdef.ast_debug(w);
             w.new_line();
         }
@@ -174,6 +209,7 @@ impl AstDebug for ModuleDefinition {
         let ModuleDefinition {
             is_source_module,
             dependency_order,
+            friends,
             structs,
             constants,
             functions,
@@ -184,15 +220,19 @@ impl AstDebug for ModuleDefinition {
             w.writeln("source module")
         }
         w.writeln(&format!("dependency order #{}", dependency_order));
-        for sdef in structs {
+        for (mident, _loc) in friends.key_cloned_iter() {
+            w.write(&format!("friend {};", mident));
+            w.new_line();
+        }
+        for sdef in structs.key_cloned_iter() {
             sdef.ast_debug(w);
             w.new_line();
         }
-        for cdef in constants {
+        for cdef in constants.key_cloned_iter() {
             cdef.ast_debug(w);
             w.new_line();
         }
-        for fdef in functions {
+        for fdef in functions.key_cloned_iter() {
             fdef.ast_debug(w);
             w.new_line();
         }
@@ -266,17 +306,24 @@ impl AstDebug for (FunctionName, &Function) {
             FunctionBody_::Defined {
                 locals,
                 start,
+                loop_heads,
                 blocks,
             } => w.block(|w| {
                 w.write("locals:");
                 w.indent(4, |w| {
-                    w.list(locals, ",", |w, (v, st)| {
+                    w.list(locals, ",", |w, (_, v, st)| {
                         w.write(&format!("{}: ", v));
                         st.ast_debug(w);
                         true
                     })
                 });
                 w.new_line();
+                w.writeln("loop heads:");
+                w.indent(4, |w| {
+                    for loop_head in loop_heads {
+                        w.writeln(&format!("{}", loop_head))
+                    }
+                });
                 w.writeln(&format!("start={}", start.0));
                 w.new_line();
                 blocks.ast_debug(w);

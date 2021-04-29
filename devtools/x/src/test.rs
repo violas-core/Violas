@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{
-    cargo::{CargoArgs, CargoCommand, SelectedPackageArgs},
+    cargo::{build_args::BuildArgs, selected_package::SelectedPackageArgs, CargoCommand},
     context::XContext,
     utils::project_root,
     Result,
@@ -12,7 +12,7 @@ use log::info;
 use std::{
     ffi::OsString,
     fs::create_dir_all,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Command, Stdio},
 };
 use structopt::StructOpt;
@@ -25,17 +25,16 @@ pub struct Args {
     /// Skip running expensive diem testsuite integration tests
     unit: bool,
     #[structopt(long)]
-    /// Test only this package's library unit tests, skipping doctests
-    lib: bool,
+    /// Only run doctests
+    doc: bool,
+    #[structopt(flatten)]
+    pub(crate) build_args: BuildArgs,
     #[structopt(long)]
     /// Do not fast fail the run if tests (or test executables) fail
     no_fail_fast: bool,
     #[structopt(long)]
     /// Do not run tests, only compile the test executables
     no_run: bool,
-    #[structopt(long, short)]
-    /// Number of parallel jobs, defaults to # of CPUs
-    jobs: Option<u16>,
     #[structopt(long, parse(from_os_str))]
     /// Directory to output HTML coverage report (using grcov)
     html_cov_dir: Option<PathBuf>,
@@ -88,20 +87,16 @@ pub fn run(mut args: Args, xctx: XContext) -> Result<()> {
     };
 
     let mut direct_args = Vec::new();
+    args.build_args.add_args(&mut direct_args);
     if args.no_run {
         direct_args.push(OsString::from("--no-run"));
     };
     if args.no_fail_fast {
         direct_args.push(OsString::from("--no-fail-fast"));
     };
-    if args.lib {
-        direct_args.push(OsString::from("--lib"));
-    };
-
-    if let Some(jobs) = args.jobs {
-        direct_args.push(OsString::from("--jobs"));
-        direct_args.push(OsString::from(jobs.to_string()));
-    };
+    if args.doc {
+        direct_args.push(OsString::from("--doc"));
+    }
 
     let cmd = CargoCommand::Test {
         cargo_config: xctx.config().cargo_config(),
@@ -110,7 +105,7 @@ pub fn run(mut args: Args, xctx: XContext) -> Result<()> {
         env: &env_vars,
     };
 
-    let cmd_result = cmd.run_on_packages(&packages, &CargoArgs::default());
+    let cmd_result = cmd.run_on_packages(&packages);
 
     if !args.no_fail_fast && cmd_result.is_err() {
         return cmd_result;
@@ -132,7 +127,7 @@ pub fn run(mut args: Args, xctx: XContext) -> Result<()> {
     cmd_result
 }
 
-fn exec_lcov_genhtml(html_lcov_path: &PathBuf) -> Result<()> {
+fn exec_lcov_genhtml(html_lcov_path: &Path) -> Result<()> {
     let mut genhtml = Command::new("genhtml");
     let mut lcov_file_path = PathBuf::new();
     lcov_file_path.push(html_lcov_path);
@@ -159,7 +154,7 @@ fn exec_lcov_genhtml(html_lcov_path: &PathBuf) -> Result<()> {
     }
 }
 
-fn exec_lcov(html_lcov_path: &PathBuf) -> Result<()> {
+fn exec_lcov(html_lcov_path: &Path) -> Result<()> {
     let debug_dir = project_root().join("target/debug/");
     let mut lcov_file_path = PathBuf::new();
     lcov_file_path.push(html_lcov_path);
@@ -197,7 +192,7 @@ fn exec_lcov(html_lcov_path: &PathBuf) -> Result<()> {
     }
 }
 
-fn exec_grcov(html_cov_path: &PathBuf) -> Result<()> {
+fn exec_grcov(html_cov_path: &Path) -> Result<()> {
     let debug_dir = project_root().join("target/debug/");
     let mut grcov_html = Command::new("grcov");
     grcov_html

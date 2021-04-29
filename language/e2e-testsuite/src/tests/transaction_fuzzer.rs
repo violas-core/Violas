@@ -1,7 +1,8 @@
 // Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use compiled_stdlib::transaction_scripts::StdlibScript;
+use diem_framework_releases::legacy::transaction_scripts::LegacyStdlibScript;
+use diem_transaction_builder::stdlib::{encode_create_parent_vasp_account_script, ScriptCall};
 use diem_types::account_config;
 use language_e2e_tests::{
     account::{self, Account},
@@ -9,14 +10,12 @@ use language_e2e_tests::{
 };
 use proptest::{collection::vec, prelude::*};
 use std::convert::TryFrom;
-use transaction_builder::encode_create_parent_vasp_account_script;
-use transaction_builder_generated::stdlib::ScriptCall;
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(16))]
+    #![proptest_config(ProptestConfig::with_cases(10))]
     #[test]
     fn fuzz_scripts_genesis_state(
-        txns in vec(any::<ScriptCall>(), 0..100),
+        txns in vec(any::<ScriptCall>(), 0..10),
     ) {
         let executor = FakeExecutor::from_genesis_file();
         let mut accounts = vec![];
@@ -72,10 +71,10 @@ proptest! {
         for (i, txn) in txns.into_iter().enumerate() {
             let script = txn.encode();
             let (account, account_sequence_number) = accounts.get_mut(i % num_accounts).unwrap();
-            let script_is_rotate = StdlibScript::try_from(script.code()).map(|script|
-                script == StdlibScript::RotateAuthenticationKey ||
-                script == StdlibScript::RotateAuthenticationKeyWithNonce ||
-                script == StdlibScript::RotateAuthenticationKeyWithRecoveryAddress
+            let script_is_rotate = LegacyStdlibScript::try_from(script.code()).map(|script|
+                script == LegacyStdlibScript::RotateAuthenticationKey ||
+                script == LegacyStdlibScript::RotateAuthenticationKeyWithNonce ||
+                script == LegacyStdlibScript::RotateAuthenticationKeyWithRecoveryAddress
             ).unwrap_or(false);
             let output = executor.execute_transaction(
                 account.transaction()

@@ -1,6 +1,7 @@
 ---
 id: overview
 title: GitHub Projects
+hide_right_sidebar: true
 ---
 
 ## Available Projects
@@ -11,7 +12,7 @@ title: GitHub Projects
     iconDark="img/github-dark.svg"
     overlay="The primary source code for the Diem project"
     title="Diem Core"
-    to="https://github.com/libra/libra"
+    to="https://github.com/diem/diem"
   />
   <SimpleTextCard
     icon="img/github.svg"

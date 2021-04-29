@@ -3,26 +3,19 @@
 
 #![forbid(unsafe_code)]
 
-use crate::{
-    boogie_wrapper::BoogieWrapper,
-    bytecode_translator::BoogieTranslator,
-    cli::{Options, INLINE_PRELUDE},
-    prelude_template_helpers::StratificationHelper,
-};
+use crate::cli::{Options, INLINE_PRELUDE};
 use abigen::Abigen;
 use anyhow::anyhow;
+use boogie_backend::{boogie_wrapper::BoogieWrapper, bytecode_translator::BoogieTranslator};
+use boogie_backend_v2::prelude_template_helpers::StratificationHelper;
 use bytecode::{
-    borrow_analysis::BorrowAnalysisProcessor,
-    clean_and_optimize::CleanAndOptimizeProcessor,
-    eliminate_imm_refs::EliminateImmRefsProcessor,
-    eliminate_mut_refs::EliminateMutRefsProcessor,
+    data_invariant_instrumentation::DataInvariantInstrumentationProcessor,
+    debug_instrumentation::DebugInstrumenter,
     function_target_pipeline::{FunctionTargetPipeline, FunctionTargetsHolder},
-    livevar_analysis::LiveVarAnalysisProcessor,
-    memory_instrumentation::MemoryInstrumentationProcessor,
-    reaching_def_analysis::ReachingDefProcessor,
-    stackless_bytecode::{Bytecode, Operation},
-    test_instrumenter::TestInstrumenter,
-    usage_analysis::{self, UsageProcessor},
+    global_invariant_instrumentation::GlobalInvariantInstrumentationProcessor,
+    global_invariant_instrumentation_v2::GlobalInvariantInstrumentationProcessorV2,
+    read_write_set_analysis::{self, ReadWriteSetProcessor},
+    spec_instrumentation::SpecInstrumentationProcessor,
 };
 use codespan_reporting::term::termcolor::{ColorChoice, StandardStream, WriteColor};
 use docgen::Docgen;
@@ -32,25 +25,20 @@ use itertools::Itertools;
 #[allow(unused_imports)]
 use log::{debug, info, warn};
 use move_lang::find_move_filenames;
+use move_model::{code_writer::CodeWriter, emit, emitln, model::GlobalEnv, run_model_builder};
 use once_cell::sync::Lazy;
 use regex::Regex;
-use spec_lang::{code_writer::CodeWriter, emit, emitln, env::GlobalEnv, run_spec_lang_compiler};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     fs::File,
-    io::{Read, Write},
+    io::Read,
     path::{Path, PathBuf},
     time::Instant,
 };
 
-mod boogie_helpers;
-mod boogie_wrapper;
-mod bytecode_translator;
 pub mod cli;
-mod prelude_template_helpers;
-mod prover_task_runner;
-mod spec_translator;
+mod pipelines;
 
 // =================================================================================================
 // Entry Point
@@ -63,11 +51,16 @@ pub fn run_move_prover<W: WriteColor>(
     options: Options,
 ) -> anyhow::Result<()> {
     let now = Instant::now();
-    let sources = find_move_filenames(&options.move_sources, true)?;
-    let deps = calculate_deps(&sources, &find_move_filenames(&options.move_deps, true)?)?;
+    let target_sources = find_move_filenames(&options.move_sources, true)?;
+    let all_sources = collect_all_sources(
+        &target_sources,
+        &find_move_filenames(&options.move_deps, true)?,
+        options.inv_v2,
+    )?;
+    let other_sources = remove_sources(&target_sources, all_sources);
     let address = Some(options.account_address.as_ref());
     debug!("parsing and checking sources");
-    let mut env: GlobalEnv = run_spec_lang_compiler(sources, deps, address)?;
+    let mut env: GlobalEnv = run_model_builder(target_sources, other_sources, address)?;
     if env.has_errors() {
         env.report_errors(error_writer);
         return Err(anyhow!("exiting with checking errors"));
@@ -75,6 +68,10 @@ pub fn run_move_prover<W: WriteColor>(
     if options.prover.report_warnings && env.has_warnings() {
         env.report_warnings(error_writer);
     }
+
+    // Add the prover options as an extension to the environment, so they can be accessed
+    // from there.
+    env.set_extension(options.prover.clone());
 
     // Until this point, prover and docgen have same code. Here we part ways.
     if options.run_docgen {
@@ -86,7 +83,11 @@ pub fn run_move_prover<W: WriteColor>(
     }
     // Same for the error map generator
     if options.run_errmapgen {
-        return run_errmapgen(&env, &options, now);
+        return Ok(run_errmapgen(&env, &options, now));
+    }
+    // Same for read/write set analysis
+    if options.run_read_write_set {
+        return Ok(run_read_write_set(&env, &options, now));
     }
 
     let targets = create_and_process_bytecode(&options, &env);
@@ -95,19 +96,30 @@ pub fn run_move_prover<W: WriteColor>(
         return Err(anyhow!("exiting with transformation errors"));
     }
 
-    if options.run_packed_types_gen {
-        return run_packed_types_gen(&options, &env, &targets, now);
-    }
-    check_modifies(&env, &targets);
     if env.has_errors() {
         env.report_errors(error_writer);
         return Err(anyhow!("exiting with modifies checking errors"));
     }
-
+    // Analyze and find out the set of modules/functions to be translated and/or verified.
+    if env.has_errors() {
+        env.report_errors(error_writer);
+        return Err(anyhow!("exiting with analysis errors"));
+    }
     let writer = CodeWriter::new(env.internal_loc());
-    add_prelude(&options, &writer)?;
-    let mut translator = BoogieTranslator::new(&env, &options, &targets, &writer);
-    translator.translate();
+    if options.vnext {
+        boogie_backend_v2::add_prelude(&options.backend, &writer)?;
+        let mut translator = boogie_backend_v2::bytecode_translator::BoogieTranslator::new(
+            &env,
+            &options.backend,
+            &targets,
+            &writer,
+        );
+        translator.translate();
+    } else {
+        add_prelude(&options, &writer)?;
+        let mut translator = BoogieTranslator::new(&env, &options.backend, &targets, &writer);
+        translator.translate();
+    }
     if env.has_errors() {
         env.report_errors(error_writer);
         return Err(anyhow!("exiting with boogie generation errors"));
@@ -119,14 +131,31 @@ pub fn run_move_prover<W: WriteColor>(
     if !options.prover.generate_only {
         let boogie_file_id =
             writer.process_result(|result| env.add_source(&options.output_path, result, false));
-        let boogie = BoogieWrapper {
-            env: &env,
-            targets: &targets,
-            writer: &writer,
-            options: &options,
-            boogie_file_id,
-        };
-        boogie.call_boogie_and_verify_output(options.backend.bench_repeat, &options.output_path)?;
+        if options.vnext {
+            let boogie = boogie_backend_v2::boogie_wrapper::BoogieWrapper {
+                env: &env,
+                targets: &targets,
+                writer: &writer,
+                options: &options.backend,
+                boogie_file_id,
+            };
+            boogie.call_boogie_and_verify_output(
+                options.backend.bench_repeat,
+                &options.output_path,
+            )?;
+        } else {
+            let boogie = BoogieWrapper {
+                env: &env,
+                targets: &targets,
+                writer: &writer,
+                options: &options.backend,
+                boogie_file_id,
+            };
+            boogie.call_boogie_and_verify_output(
+                options.backend.bench_repeat,
+                &options.output_path,
+            )?;
+        }
         let boogie_elapsed = now.elapsed();
         if options.backend.bench_repeat <= 1 {
             info!(
@@ -207,7 +236,7 @@ fn run_abigen(env: &GlobalEnv, options: &Options, now: Instant) -> anyhow::Resul
     Ok(())
 }
 
-fn run_errmapgen(env: &GlobalEnv, options: &Options, now: Instant) -> anyhow::Result<()> {
+fn run_errmapgen(env: &GlobalEnv, options: &Options, now: Instant) {
     let mut generator = ErrmapGen::new(env, &options.errmapgen);
     let checking_elapsed = now.elapsed();
     info!("generating error map");
@@ -219,43 +248,32 @@ fn run_errmapgen(env: &GlobalEnv, options: &Options, now: Instant) -> anyhow::Re
         checking_elapsed.as_secs_f64(),
         (generating_elapsed - checking_elapsed).as_secs_f64()
     );
-    Ok(())
 }
 
-fn run_packed_types_gen(
-    options: &Options,
-    env: &GlobalEnv,
-    targets: &FunctionTargetsHolder,
-    now: Instant,
-) -> anyhow::Result<()> {
-    let checking_elapsed = now.elapsed();
-    info!("generating packed_types");
-    let packed_types = usage_analysis::get_packed_types(&env, &targets);
-    info!("found {:?} packed types", packed_types.len());
-    let mut access_path_type_map = BTreeMap::new();
-    for ty in packed_types {
-        access_path_type_map.insert(ty.access_vector(), ty);
-    }
-    let flattened_map = access_path_type_map
-        .into_iter()
-        .map(|(k, v)| (hex::encode(&k), v))
-        .collect::<Vec<_>>();
-    let types_json = serde_json::to_string_pretty(&flattened_map)?;
-    let mut types_file = File::create(options.output_path.clone())?;
-    types_file.write_all(&types_json.as_bytes())?;
-    types_file.write_all(b"\n")?;
+fn run_read_write_set(env: &GlobalEnv, options: &Options, now: Instant) {
+    let mut targets = FunctionTargetsHolder::default();
 
-    let generating_elapsed = now.elapsed();
-    info!(
-        "{:.3}s checking, {:.3}s generating",
-        checking_elapsed.as_secs_f64(),
-        (generating_elapsed - checking_elapsed).as_secs_f64()
-    );
-    Ok(())
+    for module_env in env.get_modules() {
+        for func_env in module_env.get_functions() {
+            targets.add_target(&func_env)
+        }
+    }
+    let mut pipeline = FunctionTargetPipeline::default();
+    pipeline.add_processor(ReadWriteSetProcessor::new());
+
+    let start = now.elapsed();
+    info!("generating read/write set");
+    pipeline.run(env, &mut targets, None, /* dump_cfg */ false);
+    read_write_set_analysis::get_read_write_set(env, &targets);
+    println!("generated for {:?}", options.move_sources);
+
+    let end = now.elapsed();
+    info!("{:.3}s analyzing", (end - start).as_secs_f64());
 }
 
 /// Adds the prelude to the generated output.
 fn add_prelude(options: &Options, writer: &CodeWriter) -> anyhow::Result<()> {
+    // TOODO: move this to boogie-backend
     emit!(writer, "\n// ** prelude from {}\n\n", &options.prelude_path);
     let content = if options.prelude_path == INLINE_PRELUDE {
         debug!("using inline prelude");
@@ -265,6 +283,7 @@ fn add_prelude(options: &Options, writer: &CodeWriter) -> anyhow::Result<()> {
         fs::read_to_string(&options.prelude_path)?
     };
     let mut handlebars = Handlebars::new();
+    handlebars.set_strict_mode(true);
     handlebars.register_helper(
         "stratified",
         Box::new(StratificationHelper::new(
@@ -274,39 +293,6 @@ fn add_prelude(options: &Options, writer: &CodeWriter) -> anyhow::Result<()> {
     let expanded_content = handlebars.render_template(&content, &options)?;
     emitln!(writer, &expanded_content);
     Ok(())
-}
-
-/// Check modifies annotations
-fn check_modifies(env: &GlobalEnv, targets: &FunctionTargetsHolder) {
-    use Bytecode::*;
-    use Operation::*;
-
-    for module_env in env.get_modules() {
-        for func_env in module_env.get_functions() {
-            let caller_func_target = targets.get_target(&func_env);
-            for code in caller_func_target.get_bytecode() {
-                if let Call(_, _, oper, _) = code {
-                    if let Function(mid, fid, _) = oper {
-                        let callee = mid.qualified(*fid);
-                        let callee_func_env = env.get_function(callee);
-                        let callee_func_target = targets.get_target(&callee_func_env);
-                        let callee_modified_memory =
-                            usage_analysis::get_modified_memory(&callee_func_target);
-                        caller_func_target.get_modify_targets().keys().for_each(|target| {
-                                if callee_modified_memory.contains(target) && callee_func_target.get_modify_targets_for_type(target).is_none() {
-                                    let loc = caller_func_target.get_bytecode_loc(code.get_attr_id());
-                                    env.error(&loc, &format!(
-                                                        "caller `{}` specifies modify targets for `{}::{}` but callee does not",
-                                                        env.symbol_pool().string(caller_func_target.get_name()),
-                                                        env.get_module(target.module_id).get_name().display(env.symbol_pool()),
-                                                        env.symbol_pool().string(target.id.symbol())));
-                                }
-                            });
-                    }
-                }
-            }
-        }
-    }
 }
 
 /// Create bytecode and process it.
@@ -334,7 +320,7 @@ fn create_and_process_bytecode(options: &Options, env: &GlobalEnv) -> FunctionTa
     } else {
         None
     };
-    pipeline.run(env, &mut targets, dump_file);
+    pipeline.run(env, &mut targets, dump_file, options.prover.dump_cfg);
 
     targets
 }
@@ -342,40 +328,92 @@ fn create_and_process_bytecode(options: &Options, env: &GlobalEnv) -> FunctionTa
 /// Function to create the transformation pipeline.
 fn create_bytecode_processing_pipeline(options: &Options) -> FunctionTargetPipeline {
     let mut res = FunctionTargetPipeline::default();
-
     // Add processors in order they are executed.
-    res.add_processor(EliminateImmRefsProcessor::new());
-    res.add_processor(EliminateMutRefsProcessor::new());
-    res.add_processor(ReachingDefProcessor::new());
-    res.add_processor(LiveVarAnalysisProcessor::new());
-    res.add_processor(BorrowAnalysisProcessor::new());
-    res.add_processor(MemoryInstrumentationProcessor::new());
-    res.add_processor(CleanAndOptimizeProcessor::new());
-    res.add_processor(TestInstrumenter::new(options.prover.verify_scope));
-    res.add_processor(UsageProcessor::new());
 
+    res.add_processor(DebugInstrumenter::new());
+    pipelines::pipelines(options)
+        .into_iter()
+        .for_each(|processor| res.add_processor(processor));
+    res.add_processor(SpecInstrumentationProcessor::new());
+    res.add_processor(DataInvariantInstrumentationProcessor::new());
+    if options.inv_v2 {
+        // *** convert to v2 version ***
+        res.add_processor(GlobalInvariantInstrumentationProcessorV2::new());
+    } else {
+        res.add_processor(GlobalInvariantInstrumentationProcessor::new());
+    }
     res
 }
 
-/// Calculates transitive dependencies of the given Move sources.
-fn calculate_deps(sources: &[String], input_deps: &[String]) -> anyhow::Result<Vec<String>> {
-    let file_map = calculate_file_map(input_deps)?;
-    let mut deps = vec![];
-    let mut visited = BTreeSet::new();
-    for src in sources.iter() {
-        calculate_deps_recursively(Path::new(src), &file_map, &mut visited, &mut deps)?;
-    }
-    // Remove input sources from deps. They can end here because our dep analysis is an
-    // over-approximation and for example cannot distinguish between references inside
-    // and outside comments.
+/// Remove the target Move files from the list of files.
+fn remove_sources(sources: &[String], all_files: Vec<String>) -> Vec<String> {
     let canonical_sources = sources
         .iter()
         .map(|s| canonicalize(s))
         .collect::<BTreeSet<_>>();
-    let mut deps = deps
+    all_files
         .into_iter()
         .filter(|d| !canonical_sources.contains(&canonicalize(d)))
-        .collect_vec();
+        .collect_vec()
+}
+
+/// Collect all the relevant Move sources among sources represented by `input deps`
+/// parameter. The resulting vector of sources includes target sources, dependencies
+/// of target sources, (recursive)friends of targets and dependencies, and
+/// dependencies of friends.
+fn collect_all_sources(
+    target_sources: &[String],
+    input_deps: &[String],
+    use_inv_v2: bool,
+) -> anyhow::Result<Vec<String>> {
+    let mut all_sources = target_sources.to_vec();
+    static DEP_REGEX: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"(?m)use\s*0x[0-9abcdefABCDEF]+::\s*(\w+)").unwrap());
+    static NEW_FRIEND_REGEX: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"(?m)friend\s*0x[0-9abcdefABCDEF]+::\s*(\w+)").unwrap());
+    static FRIEND_REGEX: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r"(?m)pragma\s*friend\s*=\s*0x[0-9abcdefABCDEF]+::\s*(\w+)").unwrap()
+    });
+
+    let target_deps = calculate_deps(&all_sources, input_deps, &DEP_REGEX)?;
+    all_sources.extend(target_deps);
+
+    let friend_sources = calculate_deps(
+        &all_sources,
+        input_deps,
+        if use_inv_v2 {
+            &NEW_FRIEND_REGEX
+        } else {
+            &FRIEND_REGEX
+        },
+    )?;
+
+    all_sources.extend(friend_sources);
+
+    let friend_deps = calculate_deps(&all_sources, input_deps, &DEP_REGEX)?;
+    all_sources.extend(friend_deps);
+
+    Ok(all_sources)
+}
+
+/// Calculates transitive dependencies of the given Move sources. This function
+/// is also used to calculate transitive friends depending on the regex provided
+/// for extracting matches.
+fn calculate_deps(
+    sources: &[String],
+    input_deps: &[String],
+    regex: &Regex,
+) -> anyhow::Result<Vec<String>> {
+    let file_map = calculate_file_map(input_deps)?;
+    let mut deps = vec![];
+    let mut visited = BTreeSet::new();
+    for src in sources.iter() {
+        calculate_deps_recursively(Path::new(src), &file_map, &mut visited, &mut deps, regex)?;
+    }
+    // Remove input sources from deps. They can end here because our dep analysis is an
+    // over-approximation and for example cannot distinguish between references inside
+    // and outside comments.
+    let mut deps = remove_sources(sources, deps);
     // Sort deps by simple file name. Sorting is important because different orders
     // caused by platform dependent ways how `calculate_deps_recursively` may return values, can
     // cause different behavior of the SMT solver (butterfly effect). By using the simple file
@@ -403,19 +441,18 @@ fn calculate_deps_recursively(
     file_map: &BTreeMap<String, PathBuf>,
     visited: &mut BTreeSet<String>,
     deps: &mut Vec<String>,
+    regex: &Regex,
 ) -> anyhow::Result<()> {
-    static REX: Lazy<Regex> =
-        Lazy::new(|| Regex::new(r"(?m)use\s*0x[0-9abcdefABCDEF]+::\s*(\w+)").unwrap());
     if !visited.insert(path.to_string_lossy().to_string()) {
         return Ok(());
     }
     debug!("including `{}`", path.display());
-    for dep in extract_matches(path, &*REX)? {
+    for dep in extract_matches(path, regex)? {
         if let Some(dep_path) = file_map.get(&dep) {
             let dep_str = dep_path.to_string_lossy().to_string();
             if !deps.contains(&dep_str) {
                 deps.push(dep_str);
-                calculate_deps_recursively(dep_path.as_path(), file_map, visited, deps)?;
+                calculate_deps_recursively(dep_path.as_path(), file_map, visited, deps, regex)?;
             }
         }
     }

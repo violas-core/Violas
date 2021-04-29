@@ -3,8 +3,8 @@
 //! account: alice, 0XUS
 
 module Holder {
-    resource struct Holder<T> { x: T }
-    public fun hold<T>(account: &signer, x: T)  {
+    struct Holder<T> has key { x: T }
+    public fun hold<T: store>(account: &signer, x: T)  {
         move_to(account, Holder<T> { x })
     }
 }
@@ -17,7 +17,8 @@ script {
 use 0x1::XUS::XUS;
 use 0x1::Diem;
 use {{default}}::Holder;
-fun main(account: &signer) {
+fun main(account: signer) {
+    let account = &account;
     // mint 100 coins and check that the market cap increases appropriately
     let old_market_cap = Diem::market_cap<XUS>();
     let coin = Diem::mint<XUS>(account, 100);
@@ -37,7 +38,8 @@ fun main(account: &signer) {
 script {
 use 0x1::XUS::XUS;
 use 0x1::Diem;
-fun main(account: &signer) {
+fun main(account: signer) {
+    let account = &account;
     let coin = Diem::mint<XUS>(account, 100);
     Diem::destroy_zero(coin)
 }

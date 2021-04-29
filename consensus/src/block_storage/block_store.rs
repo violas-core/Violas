@@ -26,6 +26,7 @@ use diem_logger::prelude::*;
 use diem_trace::prelude::*;
 use diem_types::{ledger_info::LedgerInfoWithSignatures, transaction::TransactionStatus};
 use executor_types::{Error, StateComputeResult};
+use short_hex_str::AsShortHexStr;
 use std::{collections::vec_deque::VecDeque, sync::Arc, time::Duration};
 
 #[cfg(test)]
@@ -477,6 +478,6 @@ impl BlockStore {
     /// Helper function to insert the block with the qc together
     pub fn insert_block_with_qc(&self, block: Block) -> anyhow::Result<Arc<ExecutedBlock>> {
         self.insert_single_quorum_cert(block.quorum_cert().clone())?;
-        Ok(self.execute_and_insert_block(block)?)
+        self.execute_and_insert_block(block)
     }
 }

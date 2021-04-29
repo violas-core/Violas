@@ -9,8 +9,10 @@ use crate::{
     golden_outputs::GoldenOutputs,
     keygen::KeyGen,
 };
-use compiled_stdlib::{stdlib_modules, transaction_scripts::StdlibScript, StdLibOptions};
 use diem_crypto::HashValue;
+use diem_framework_releases::{
+    current_module_blobs, current_modules, legacy::transaction_scripts::LegacyStdlibScript,
+};
 use diem_state_view::StateView;
 use diem_types::{
     access_path::AccessPath,
@@ -18,29 +20,32 @@ use diem_types::{
     block_metadata::{new_block_event_key, BlockMetadata, NewBlockEvent},
     on_chain_config::{OnChainConfig, VMPublishingOption, ValidatorSet},
     transaction::{
-        SignedTransaction, Transaction, TransactionOutput, TransactionStatus, VMValidatorResult,
+        ChangeSet, SignedTransaction, Transaction, TransactionOutput, TransactionStatus,
+        VMValidatorResult,
     },
     vm_status::{KeptVMStatus, VMStatus},
     write_set::WriteSet,
 };
 use diem_vm::{
-    data_cache::RemoteStorage, txn_effects_to_writeset_and_events, DiemVM, DiemVMValidator,
-    VMExecutor, VMValidator,
+    convert_changeset_and_events, data_cache::RemoteStorage, DiemVM, DiemVMValidator, VMExecutor,
+    VMValidator,
 };
 use move_core_types::{
-    account_address::AccountAddress,
     gas_schedule::{GasAlgebra, GasUnits},
     identifier::Identifier,
     language_storage::{ModuleId, TypeTag},
 };
 use move_vm_runtime::{logging::NoContextLog, move_vm::MoveVM};
-use move_vm_types::{
-    gas_schedule::{zero_cost_schedule, CostStrategy},
-    values::Value,
-};
-use vm::CompiledModule;
+use move_vm_types::gas_schedule::{zero_cost_schedule, CostStrategy};
 
 static RNG_SEED: [u8; 32] = [9u8; 32];
+
+pub const RELEASE_1_1_GENESIS: &[u8] =
+    include_bytes!("../genesis-release-1-1/release-1-1-genesis.blob");
+pub const RELEASE_1_1_GENESIS_PRIVKEY: &[u8] =
+    include_bytes!("../genesis-release-1-1/release-1-1-privkey.blob");
+pub const RELEASE_1_1_GENESIS_PUBKEY: &[u8] =
+    include_bytes!("../genesis-release-1-1/release-1-1-pubkey.blob");
 
 /// Provides an environment to run a VM instance.
 ///
@@ -66,6 +71,12 @@ impl FakeExecutor {
         executor
     }
 
+    /// Create an executor from a saved genesis blob
+    pub fn from_saved_genesis(saved_genesis_blob: &[u8]) -> Self {
+        let change_set = bcs::from_bytes::<ChangeSet>(saved_genesis_blob).unwrap();
+        Self::from_genesis(change_set.write_set())
+    }
+
     /// Creates an executor from the genesis file GENESIS_FILE_LOCATION
     pub fn from_genesis_file() -> Self {
         Self::from_genesis(GENESIS_CHANGE_SET.clone().write_set())
@@ -78,9 +89,9 @@ impl FakeExecutor {
 
     pub fn allowlist_genesis() -> Self {
         Self::custom_genesis(
-            stdlib_modules(StdLibOptions::Compiled).to_vec(),
+            current_module_blobs(),
             None,
-            VMPublishingOption::locked(StdlibScript::allowlist()),
+            VMPublishingOption::locked(LegacyStdlibScript::allowlist()),
         )
     }
 
@@ -92,11 +103,7 @@ impl FakeExecutor {
             panic!("Allowlisted transactions are not supported as a publishing option")
         }
 
-        Self::custom_genesis(
-            stdlib_modules(StdLibOptions::Compiled).to_vec(),
-            None,
-            publishing_options,
-        )
+        Self::custom_genesis(current_module_blobs(), None, publishing_options)
     }
 
     /// Creates an executor in which no genesis state has been applied yet.
@@ -110,23 +117,29 @@ impl FakeExecutor {
     }
 
     pub fn set_golden_file(&mut self, test_name: &str) {
-        self.executed_output = Some(GoldenOutputs::new(test_name));
+        // 'test_name' includes ':' in the names, lets re-write these to be '_'s so that these
+        // files can persist on windows machines.
+        let file_name = test_name.replace(':', "_");
+        self.executed_output = Some(GoldenOutputs::new(&file_name));
     }
 
     /// Creates an executor with only the standard library Move modules published and not other
     /// initialization done.
     pub fn stdlib_only_genesis() -> Self {
         let mut genesis = Self::no_genesis();
-        for module in stdlib_modules(StdLibOptions::Compiled) {
+        let blobs = current_module_blobs();
+        let modules = current_modules();
+        assert!(blobs.len() == modules.len());
+        for (module, bytes) in modules.iter().zip(blobs) {
             let id = module.self_id();
-            genesis.add_module(&id, module);
+            genesis.add_module(&id, bytes.to_vec());
         }
         genesis
     }
 
     /// Creates fresh genesis from the stdlib modules passed in.
     pub fn custom_genesis(
-        genesis_modules: Vec<CompiledModule>,
+        genesis_modules: &[Vec<u8>],
         validator_accounts: Option<usize>,
         publishing_options: VMPublishingOption,
     ) -> Self {
@@ -173,8 +186,8 @@ impl FakeExecutor {
     /// Adds a module to this executor's data store.
     ///
     /// Does not do any sort of verification on the module.
-    pub fn add_module(&mut self, module_id: &ModuleId, module: &CompiledModule) {
-        self.data_store.add_module(module_id, module)
+    pub fn add_module(&mut self, module_id: &ModuleId, module_blob: Vec<u8>) {
+        self.data_store.add_module(module_id, module_blob)
     }
 
     /// Reads the resource [`Value`] for an account from this executor's data store.
@@ -337,8 +350,7 @@ impl FakeExecutor {
         module_name: &str,
         function_name: &str,
         type_params: Vec<TypeTag>,
-        args: Vec<Value>,
-        sender: &AccountAddress,
+        args: Vec<Vec<u8>>,
     ) {
         let write_set = {
             let cost_table = zero_cost_schedule();
@@ -353,7 +365,6 @@ impl FakeExecutor {
                     &Self::name(function_name),
                     type_params,
                     args,
-                    *sender,
                     &mut cost_strategy,
                     &log_context,
                 )
@@ -365,9 +376,9 @@ impl FakeExecutor {
                         e.into_vm_status()
                     )
                 });
-            let effects = session.finish().expect("Failed to generate txn effects");
-            let (writeset, _events) =
-                txn_effects_to_writeset_and_events(effects).expect("Failed to generate writeset");
+            let (changeset, events) = session.finish().expect("Failed to generate txn effects");
+            let (writeset, _events) = convert_changeset_and_events(changeset, events)
+                .expect("Failed to generate writeset");
             writeset
         };
         self.data_store.add_write_set(&write_set);
@@ -378,8 +389,7 @@ impl FakeExecutor {
         module_name: &str,
         function_name: &str,
         type_params: Vec<TypeTag>,
-        args: Vec<Value>,
-        sender: &AccountAddress,
+        args: Vec<Vec<u8>>,
     ) -> Result<WriteSet, VMStatus> {
         let cost_table = zero_cost_schedule();
         let mut cost_strategy = CostStrategy::system(&cost_table, GasUnits::new(100_000_000));
@@ -393,14 +403,13 @@ impl FakeExecutor {
                 &Self::name(function_name),
                 type_params,
                 args,
-                *sender,
                 &mut cost_strategy,
                 &log_context,
             )
             .map_err(|e| e.into_vm_status())?;
-        let effects = session.finish().expect("Failed to generate txn effects");
+        let (changeset, events) = session.finish().expect("Failed to generate txn effects");
         let (writeset, _events) =
-            txn_effects_to_writeset_and_events(effects).expect("Failed to generate writeset");
+            convert_changeset_and_events(changeset, events).expect("Failed to generate writeset");
         Ok(writeset)
     }
 }

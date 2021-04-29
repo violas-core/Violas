@@ -17,26 +17,26 @@ use std::collections::BTreeMap;
 // Compiled Unit
 //**************************************************************************************************
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct VarInfo {
     pub type_: H::SingleType,
     pub index: F::LocalIndex,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SpecInfo {
     pub offset: F::CodeOffset,
     // Free locals that are used but not declared in the block
     pub used_locals: UniqueMap<Var, VarInfo>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FunctionInfo {
     pub spec_info: BTreeMap<SpecId, SpecInfo>,
     pub parameters: Vec<(Var, VarInfo)>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum CompiledUnit {
     Module {
         ident: ModuleIdent,
@@ -56,12 +56,19 @@ pub enum CompiledUnit {
 impl CompiledUnit {
     pub fn name(&self) -> String {
         match self {
-            CompiledUnit::Module { ident, .. } => format!("{}", &ident.0.value.name),
+            CompiledUnit::Module { ident, .. } => ident.value.1.to_owned(),
             CompiledUnit::Script { key, .. } => key.to_owned(),
         }
     }
 
-    pub fn serialize(self) -> Vec<u8> {
+    pub fn loc(&self) -> &Loc {
+        match self {
+            CompiledUnit::Module { ident, .. } => &ident.locs.1,
+            CompiledUnit::Script { loc, .. } => loc,
+        }
+    }
+
+    pub fn serialize(&self) -> Vec<u8> {
         let mut serialized = Vec::<u8>::new();
         match self {
             CompiledUnit::Module { module, .. } => module.serialize(&mut serialized).unwrap(),

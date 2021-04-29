@@ -1,4 +1,4 @@
-FROM debian:buster-20201117@sha256:f520e4a80b736389c3de162b8f60608d11c9fa3b2ec619bd40aabfd7e70d3455 AS debian-base
+FROM debian:buster-20210329@sha256:5c1daf79a2d6202cf1b80a80f522fa0aaec4dc1c0520135ed277627c12171c3b AS debian-base
 
 FROM debian-base AS toolchain
 
@@ -14,9 +14,6 @@ WORKDIR /diem
 COPY rust-toolchain /diem/rust-toolchain
 RUN rustup install $(cat rust-toolchain)
 
-COPY cargo-toolchain /diem/cargo-toolchain
-RUN rustup install $(cat cargo-toolchain)
-
 FROM toolchain AS builder
 
 ARG ENABLE_FAILPOINTS
@@ -28,18 +25,13 @@ RUN ./docker/build-common.sh
 FROM debian-base AS pre-test
 
 # TODO: Unsure which of these are needed exactly for client
-RUN apt-get update && apt-get install -y libssl1.1 python3-pip nano net-tools tcpdump iproute2 netcat \
+RUN apt-get update && apt-get install -y libssl1.1 nano net-tools tcpdump iproute2 netcat \
     && apt-get clean && rm -r /var/lib/apt/lists/*
-
-# RUN apt-get install python3
-COPY docker/mint/requirements.txt /diem/docker/mint/requirements.txt
-RUN pip3 install -r /diem/docker/mint/requirements.txt
 
 RUN mkdir -p /opt/diem/bin  /diem/client/data/wallet/
 
 COPY --from=builder /diem/target/release/cli /opt/diem/bin
 COPY --from=builder /diem/target/release/diem-faucet /opt/diem/bin
-COPY docker/mint/server.py /opt/diem/bin
 
 # Test the docker container before shipping.
 FROM pre-test AS test

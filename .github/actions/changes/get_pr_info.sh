@@ -86,13 +86,13 @@ fi
 $DEBUG && echo GITHUB_SLUG="$GITHUB_SLUG"
 
 BRANCH=
+TARGET_BRANCH=
 #Attempt to determine/normalize the branch.
 if  [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
   BRANCH=${GITHUB_REF//*\/}
 fi
 if  [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
   BRANCH=${GITHUB_BASE_REF}
-  TARGET_BRANCH=${BRANCH}
 fi
 $DEBUG && echoerr BRANCH="$BRANCH"
 
@@ -105,6 +105,7 @@ if [[ "${GITHUB_EVENT_NAME}" == "push" ]] && [[ "$BORS" == false || ( "$BRANCH" 
   if [[ -n "$QUERIED_GITHASH" ]] && [[ $(git merge-base --is-ancestor "$QUERIED_GITHASH" "$(git rev-parse HEAD)" 2>/dev/null; echo $?) == 0 ]]; then
     BASE_GITHASH="${QUERIED_GITHASH}"
   fi
+  TARGET_BRANCH=${BRANCH}
 fi
 $DEBUG && echoerr BASE_GITHASH="$BASE_GITHASH"
 
@@ -137,6 +138,7 @@ fi
 $DEBUG && echoerr TARGET_BRANCH="$TARGET_BRANCH"
 if [[ -n "$TARGET_BRANCH" ]] && [[ -z "$BASE_GITHASH" ]]; then
   BASE_GITHASH=$(git merge-base HEAD origin/"$TARGET_BRANCH")
+  BASE_GIT_REV=$(git rev-parse --short=8 origin/"$TARGET_BRANCH")
 fi
 
 if [[ -n "$BASE_GITHASH" ]]; then
@@ -148,3 +150,4 @@ echo 'export CHANGES_PULL_REQUEST='"$PR_NUMBER"
 echo 'export CHANGES_BASE_GITHASH='"$BASE_GITHASH"
 echo 'export CHANGES_CHANGED_FILE_OUTPUTFILE='"$CHANGED_FILE_OUTPUTFILE"
 echo 'export CHANGES_TARGET_BRANCH='"$TARGET_BRANCH"
+echo 'export CHANGES_BASE_GIT_REV='"$BASE_GIT_REV"

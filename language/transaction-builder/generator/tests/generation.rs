@@ -5,7 +5,7 @@ use diem_types::transaction::ScriptABI;
 use serde_generate as serdegen;
 use serde_generate::SourceInstaller as _;
 use serde_reflection::Registry;
-use std::{io::Write, process::Command};
+use std::{io::Write, path::Path, process::Command};
 use tempfile::tempdir;
 use transaction_builder_generator as buildgen;
 use transaction_builder_generator::SourceInstaller as _;
@@ -17,11 +17,20 @@ fn get_diem_registry() -> Registry {
 }
 
 fn get_stdlib_script_abis() -> Vec<ScriptABI> {
-    let path = "../../stdlib/compiled/transaction_scripts/abi";
-    buildgen::read_abis(path).expect("reading ABI files should not fail")
+    // This is also a custom rule in diem/x.toml.
+    let legacy_path = Path::new("../../diem-framework/releases/legacy/script_abis");
+    let new_abis = Path::new("../../diem-framework/releases/artifacts/current/script_abis");
+    let mut abis =
+        buildgen::read_abis(&[legacy_path]).expect("reading legacy ABI files should not fail");
+    abis.extend(
+        buildgen::read_abis(&[new_abis])
+            .expect("reading new ABI files should not fail")
+            .into_iter(),
+    );
+    abis
 }
 
-const EXPECTED_OUTPUT: &str = "224 1 161 28 235 11 1 0 0 0 7 1 0 2 2 2 4 3 6 16 4 22 2 5 24 29 7 53 96 8 149 1 16 0 0 0 1 1 0 0 2 0 1 0 0 3 2 3 1 1 0 4 1 3 0 1 5 1 6 12 1 8 0 5 6 8 0 5 3 10 2 10 2 0 5 6 12 5 3 10 2 10 2 1 9 0 11 68 105 101 109 65 99 99 111 117 110 116 18 87 105 116 104 100 114 97 119 67 97 112 97 98 105 108 105 116 121 27 101 120 116 114 97 99 116 95 119 105 116 104 100 114 97 119 95 99 97 112 97 98 105 108 105 116 121 8 112 97 121 95 102 114 111 109 27 114 101 115 116 111 114 101 95 119 105 116 104 100 114 97 119 95 99 97 112 97 98 105 108 105 116 121 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 1 1 4 1 12 11 0 17 0 12 5 14 5 10 1 10 2 11 3 11 4 56 0 11 5 17 2 2 1 7 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 3 88 68 88 3 88 68 88 0 4 3 34 34 34 34 34 34 34 34 34 34 34 34 34 34 34 34 1 135 214 18 0 0 0 0 0 4 0 4 0 \n";
+const EXPECTED_OUTPUT: &str = "224 1 161 28 235 11 1 0 0 0 7 1 0 2 2 2 4 3 6 16 4 22 2 5 24 29 7 53 96 8 149 1 16 0 0 0 1 1 0 0 2 0 1 0 0 3 2 3 1 1 0 4 1 3 0 1 5 1 6 12 1 8 0 5 6 8 0 5 3 10 2 10 2 0 5 6 12 5 3 10 2 10 2 1 9 0 11 68 105 101 109 65 99 99 111 117 110 116 18 87 105 116 104 100 114 97 119 67 97 112 97 98 105 108 105 116 121 27 101 120 116 114 97 99 116 95 119 105 116 104 100 114 97 119 95 99 97 112 97 98 105 108 105 116 121 8 112 97 121 95 102 114 111 109 27 114 101 115 116 111 114 101 95 119 105 116 104 100 114 97 119 95 99 97 112 97 98 105 108 105 116 121 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 1 1 4 1 12 11 0 17 0 12 5 14 5 10 1 10 2 11 3 11 4 56 0 11 5 17 2 2 1 7 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 3 88 68 88 3 88 68 88 0 4 3 34 34 34 34 34 34 34 34 34 34 34 34 34 34 34 34 1 135 214 18 0 0 0 0 0 4 0 4 0 \n3 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 14 80 97 121 109 101 110 116 83 99 114 105 112 116 115 26 112 101 101 114 95 116 111 95 112 101 101 114 95 119 105 116 104 95 109 101 116 97 100 97 116 97 1 7 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 3 88 68 88 3 88 68 88 0 4 16 34 34 34 34 34 34 34 34 34 34 34 34 34 34 34 34 8 135 214 18 0 0 0 0 0 1 0 1 0 \n";
 
 // Cannot run this test in the CI of Diem.
 #[test]
@@ -47,7 +56,7 @@ fn test_that_python_code_parses_and_passes_pyre_check() {
     installer.install_serde_runtime().unwrap();
     installer.install_bcs_runtime().unwrap();
 
-    let stdlib_dir_path = src_dir_path.join("diem_stdlib");
+    let stdlib_dir_path = src_dir_path.join("diem_framework");
     std::fs::create_dir_all(stdlib_dir_path.clone()).unwrap();
     let source_path = stdlib_dir_path.join("__init__.py");
 
@@ -77,42 +86,30 @@ fn test_that_python_code_parses_and_passes_pyre_check() {
         EXPECTED_OUTPUT
     );
 
-    // This temporarily requires a checkout of serde-reflection.git next to diem.git
-    // Hopefully, numpy's next release will include typeshed (.pyi) files and we will only
-    // require a local install of numpy (on top of python3 and pyre).
-    let status = Command::new("cp")
-        .arg("-r")
-        .arg("../../../../serde-reflection/serde-generate/runtime/python/typeshed")
-        .arg(dir.path())
-        .status()
-        .unwrap();
-    assert!(status.success());
+    let site_packages = Command::new("python3")
+        .arg("-c")
+        .arg("import os; import numpy; print(os.path.dirname(numpy.__path__[0]), end='')")
+        .output()
+        .unwrap()
+        .stdout;
 
-    let mut pyre_config = std::fs::File::create(dir.path().join(".pyre_configuration")).unwrap();
-    writeln!(
-        &mut pyre_config,
-        r#"{{
-  "source_directories": [
-    "src"
-  ],
-  "search_path": [
-    "typeshed"
-  ]
-}}"#,
-    )
-    .unwrap();
+    let local_bin_path = which::which("pyre")
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf();
 
     let status = Command::new("pyre")
         .current_dir(dir.path())
-        // Work around configuration issue with Pyre 0.0.53
+        .arg("--source-directory")
+        .arg("src")
+        .arg("--noninteractive")
+        .arg("--binary")
+        .arg(local_bin_path.join("pyre.bin"))
         .arg("--typeshed")
-        .arg(
-            which::which("pyre")
-                .unwrap()
-                .parent()
-                .unwrap()
-                .join("../lib/pyre_check/typeshed"),
-        )
+        .arg(local_bin_path.join("../lib/pyre_check/typeshed"))
+        .arg("--search-path")
+        .arg(String::from_utf8_lossy(&site_packages).as_ref())
         .arg("check")
         .status()
         .unwrap();
@@ -129,14 +126,14 @@ fn test_that_rust_code_compiles() {
     let config = serdegen::CodeGeneratorConfig::new("diem-types".to_string());
     installer.install_module(&config, &registry).unwrap();
 
-    let stdlib_dir_path = dir.path().join("diem-stdlib");
+    let stdlib_dir_path = dir.path().join("diem-framework");
     std::fs::create_dir_all(stdlib_dir_path.clone()).unwrap();
 
     let mut cargo = std::fs::File::create(&stdlib_dir_path.join("Cargo.toml")).unwrap();
     write!(
         cargo,
         r#"[package]
-name = "diem-stdlib"
+name = "diem-framework"
 version = "0.1.0"
 edition = "2018"
 
@@ -168,7 +165,7 @@ test = false
     // Use a stable `target` dir to avoid downloading and recompiling crates everytime.
     let target_dir = std::env::current_dir().unwrap().join("../../target");
     let status = Command::new("cargo")
-        .current_dir(dir.path().join("diem-stdlib"))
+        .current_dir(dir.path().join("diem-framework"))
         .arg("build")
         .arg("--target-dir")
         .arg(target_dir.clone())
@@ -202,7 +199,7 @@ fn test_that_cpp_code_compiles_and_demo_runs() {
 
     let abi_installer = buildgen::cpp::Installer::new(dir.path().to_path_buf());
     abi_installer
-        .install_transaction_builders("diem_stdlib", &abis)
+        .install_transaction_builders("diem_framework", &abis)
         .unwrap();
 
     std::fs::copy(
@@ -214,7 +211,7 @@ fn test_that_cpp_code_compiles_and_demo_runs() {
     let status = Command::new("clang++")
         .arg("--std=c++17")
         .arg("-g")
-        .arg(dir.path().join("diem_stdlib.cpp"))
+        .arg(dir.path().join("diem_framework.cpp"))
         .arg(dir.path().join("stdlib_demo.cpp"))
         .arg("-o")
         .arg(dir.path().join("stdlib_demo"))
@@ -299,6 +296,163 @@ fn test_that_java_code_compiles_and_demo_runs() {
         .arg("-cp")
         .arg(dir.path())
         .arg("StdlibDemo")
+        .output()
+        .unwrap();
+    assert_eq!(std::str::from_utf8(&output.stderr).unwrap(), String::new());
+    assert_eq!(
+        std::str::from_utf8(&output.stdout).unwrap(),
+        EXPECTED_OUTPUT
+    );
+    assert!(output.status.success());
+}
+
+#[test]
+#[ignore]
+fn test_that_csharp_code_compiles_and_demo_runs() {
+    let registry = get_diem_registry();
+    let abis = get_stdlib_script_abis();
+    // Special case this because of what the default tempdir is on a mac
+    // It looks as if the path string might be too long for the dotnet runtime
+    // to execute correctly because you get funny errors that don't occur when
+    // the path string is shorter. So make the temp path shorter and all is good.
+    // Avoids this:
+    // "Unhandled exception. System.IO.FileNotFoundException: Could not load file
+    // or assembly \'Diem.Types, Version=1.0.0.0, Culture=neutral,
+    // PublicKeyToken=null\'. The system cannot find the file specified.\n\n
+    // File name: \'Diem.Types, Version=1.0.0.0, Culture=neutral,
+    // PublicKeyToken=null\'\n\n\n"`,
+    if std::env::consts::OS == "macos" {
+        std::env::set_var("TMPDIR", "/private/tmp/");
+    }
+    let dir = tempdir().unwrap();
+
+    let paths = std::fs::read_dir("examples/csharp/custom_diem_code")
+        .unwrap()
+        .map(|e| e.unwrap().path());
+    let config = serdegen::CodeGeneratorConfig::new("Diem.Types".to_string())
+        .with_encodings(vec![serdegen::Encoding::Bcs])
+        .with_custom_code(buildgen::read_custom_code_from_paths(
+            &["Diem", "Types"],
+            paths,
+        ));
+    let bcs_installer = serdegen::csharp::Installer::new(dir.path().to_path_buf());
+    bcs_installer.install_module(&config, &registry).unwrap();
+    bcs_installer.install_serde_runtime().unwrap();
+    bcs_installer.install_bcs_runtime().unwrap();
+
+    let abi_installer = buildgen::csharp::Installer::new(dir.path().to_path_buf());
+    abi_installer
+        .install_transaction_builders("Diem.Stdlib", &abis)
+        .unwrap();
+
+    std::fs::create_dir(dir.path().join("Demo")).unwrap();
+    std::fs::copy(
+        "examples/csharp/StdlibDemo.cs",
+        dir.path().join("Demo/StdlibDemo.cs"),
+    )
+    .unwrap();
+
+    let status = Command::new("dotnet")
+        .arg("new")
+        .arg("classlib")
+        .arg("-n")
+        .arg("Diem.Stdlib")
+        .arg("-o")
+        .arg(dir.path().join("Diem/Stdlib"))
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let status = Command::new("rm")
+        .arg(dir.path().join("Diem/Stdlib/Class1.cs"))
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let status = Command::new("dotnet")
+        .arg("add")
+        .arg(dir.path().join("Diem/Stdlib/Diem.Stdlib.csproj"))
+        .arg("reference")
+        .arg(dir.path().join("Diem/Types/Diem.Types.csproj"))
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let status = Command::new("dotnet")
+        .arg("new")
+        .arg("sln")
+        .arg("-n")
+        .arg("Demo")
+        .arg("-o")
+        .arg(dir.path().join("Demo"))
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let status = Command::new("dotnet")
+        .arg("new")
+        .arg("console")
+        .arg("-n")
+        .arg("Demo")
+        .arg("-o")
+        .arg(dir.path().join("Demo"))
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let status = Command::new("rm")
+        .arg(dir.path().join("Demo/Program.cs"))
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let status = Command::new("dotnet")
+        .arg("add")
+        .arg(dir.path().join("Demo/Demo.csproj"))
+        .arg("reference")
+        .arg(dir.path().join("Diem/Stdlib/Diem.Stdlib.csproj"))
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let status = Command::new("dotnet")
+        .arg("add")
+        .arg(dir.path().join("Demo/Demo.csproj"))
+        .arg("reference")
+        .arg(dir.path().join("Diem/Types/Diem.Types.csproj"))
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let status = Command::new("dotnet")
+        .arg("add")
+        .arg(dir.path().join("Demo/Demo.csproj"))
+        .arg("reference")
+        .arg(dir.path().join("Serde/Serde.csproj"))
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let status = Command::new("dotnet")
+        .arg("add")
+        .arg(dir.path().join("Demo/Demo.csproj"))
+        .arg("reference")
+        .arg(dir.path().join("Bcs/Bcs.csproj"))
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let status = Command::new("dotnet")
+        .arg("build")
+        .arg(dir.path().join("Demo/Demo.csproj"))
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let output = Command::new("dotnet")
+        .arg("run")
+        .arg("--project")
+        .arg(dir.path().join("Demo/Demo.csproj"))
         .output()
         .unwrap();
     assert_eq!(std::str::from_utf8(&output.stderr).unwrap(), String::new());

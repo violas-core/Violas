@@ -39,7 +39,8 @@ script {
 use 0x1::Diem;
 use 0x1::XUS::XUS;
 use 0x1::FixedPoint32;
-fun main(account: &signer) {
+fun main(account: signer) {
+    let account = &account;
     Diem::update_xdx_exchange_rate<XUS>(account, FixedPoint32::create_from_rational(1, 3));
 }
 }
@@ -49,7 +50,8 @@ fun main(account: &signer) {
 script {
 use 0x1::Diem;
 use 0x1::XUS::XUS;
-fun main(account: &signer) {
+fun main(account: signer) {
+    let account = &account;
     Diem::update_minting_ability<XUS>(account, false);
 }
 }
@@ -57,12 +59,12 @@ fun main(account: &signer) {
 
 //! new-transaction
 module Holder {
-    resource struct Holder<T> { x: T }
-    public fun hold<T>(account: &signer, x: T) {
+    struct Holder<T> has key { x: T }
+    public fun hold<T: store>(account: &signer, x: T) {
         move_to(account, Holder<T>{ x })
     }
 
-    public fun get<T>(addr: address): T
+    public fun get<T: store>(addr: address): T
     acquires Holder {
        let Holder<T> { x } = move_from<Holder<T>>(addr);
        x
@@ -77,7 +79,8 @@ use 0x1::Diem;
 use 0x1::XUS::XUS;
 use 0x1::FixedPoint32;
 use {{default}}::Holder;
-fun main(dr_account: &signer) {
+fun main(dr_account: signer) {
+    let dr_account = &dr_account;
     let (a, b) = Diem::register_currency<XUS>(
         dr_account,
         FixedPoint32::create_from_rational(1, 1),
@@ -99,7 +102,8 @@ script {
 use 0x1::Diem;
 use 0x1::FixedPoint32;
 use {{default}}::Holder;
-fun main(dr_account: &signer) {
+fun main(dr_account: signer) {
+    let dr_account = &dr_account;
     let (a, b) = Diem::register_currency<u64>(
         dr_account,
         FixedPoint32::create_from_rational(1,1),
@@ -120,7 +124,8 @@ script {
 use 0x1::Diem;
 use 0x1::FixedPoint32;
 use {{default}}::Holder;
-fun main(dr_account: &signer) {
+fun main(dr_account: signer) {
+    let dr_account = &dr_account;
     let (a, b) = Diem::register_currency<u64>(
         dr_account,
         FixedPoint32::create_from_rational(1,1),

@@ -1,4 +1,4 @@
-FROM debian:buster-20201117@sha256:f520e4a80b736389c3de162b8f60608d11c9fa3b2ec619bd40aabfd7e70d3455 AS toolchain
+FROM debian:buster-20210329@sha256:5c1daf79a2d6202cf1b80a80f522fa0aaec4dc1c0520135ed277627c12171c3b AS toolchain
 
 # To use http/https proxy while building, use:
 # docker build --build-arg https_proxy=http://fwdproxy:8080 --build-arg http_proxy=http://fwdproxy:8080
@@ -12,9 +12,6 @@ WORKDIR /diem
 COPY rust-toolchain /diem/rust-toolchain
 RUN rustup install $(cat rust-toolchain)
 
-COPY cargo-toolchain /diem/cargo-toolchain
-RUN rustup install $(cat cargo-toolchain)
-
 FROM toolchain AS builder
 
 ARG ENABLE_FAILPOINTS
@@ -23,7 +20,7 @@ COPY . /diem
 RUN ./docker/build-common.sh
 
 ### Production Image ###
-FROM debian:buster-20201117@sha256:f520e4a80b736389c3de162b8f60608d11c9fa3b2ec619bd40aabfd7e70d3455  AS prod
+FROM debian:buster-20210329@sha256:5c1daf79a2d6202cf1b80a80f522fa0aaec4dc1c0520135ed277627c12171c3b  AS pre-prod
 
 RUN apt-get update && apt-get -y install libssl1.1 wget busybox gettext-base && apt-get clean && rm -r /var/lib/apt/lists/*
 RUN cd /usr/local/bin && wget "https://storage.googleapis.com/kubernetes-release/release/v1.18.6/bin/linux/amd64/kubectl" -O kubectl && chmod +x kubectl
@@ -32,6 +29,13 @@ RUN cd /usr/local/bin && wget "https://releases.hashicorp.com/vault/1.5.0/vault_
 RUN mkdir -p /opt/diem/bin
 COPY --from=builder /diem/target/release/diem-genesis-tool /usr/local/bin
 COPY --from=builder /diem/target/release/diem-operational-tool /usr/local/bin
+
+FROM pre-prod as testing
+
+RUN /usr/local/bin/diem-genesis-tool -h
+RUN /usr/local/bin/diem-operational-tool -h
+
+FROM pre-prod as prod
 
 ARG BUILD_DATE
 ARG GIT_REV

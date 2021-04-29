@@ -14,28 +14,66 @@ use std::{
     collections::BTreeMap,
     ops::{Deref, DerefMut},
     path::PathBuf,
+    process::Command,
     sync::Mutex,
 };
-use vm::CompiledModule;
 
 /// Checkin the release artifact to a local file to make sure the release process is reproducible
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ReleaseArtifact {
     pub chain_id: ChainId,
     pub version: Version,
+    pub commit_hash: String,
     pub stdlib_hash: HashValue,
+    pub diem_version: Option<u64>,
+    pub release_name: String,
 }
 
+#[derive(Clone, Serialize, Deserialize)]
+struct ReleaseArtifacts(Vec<ReleaseArtifact>);
+
 const ARTIFACT_PATH: &str = "release";
+const ARTIFACT_NAME: &str = "artifacts";
 const ARTIFACT_EXTENSION: &str = "json";
 
 // Store the artifact in memory if ChainId is TESTING.
 static TESTING_ARTIFACT: Lazy<Mutex<Option<ReleaseArtifact>>> = Lazy::new(|| Mutex::new(None));
 
-fn artifact_path(chain_id: &ChainId) -> PathBuf {
+impl ReleaseArtifacts {
+    pub fn load_artifacts() -> Result<ReleaseArtifacts> {
+        serde_json::from_slice(
+            std::fs::read(artifact_path().as_path())
+                .map_err(|_| {
+                    format_err!("Artifact file not found. Is it the first time doing release?")
+                })?
+                .as_slice(),
+        )
+        .map_err(|_| format_err!("Unable to read from artifact"))
+    }
+
+    pub fn save_artifact(artifact: ReleaseArtifact) -> Result<()> {
+        let mut existing_artifacts =
+            Self::load_artifacts().unwrap_or_else(|_| ReleaseArtifacts(vec![]));
+        existing_artifacts.0.push(artifact);
+        std::fs::write(
+            artifact_path().as_path(),
+            serde_json::to_vec_pretty(&existing_artifacts)?.as_slice(),
+        )
+        .map_err(|_| format_err!("Unable to write to path"))
+    }
+
+    pub fn load_latest_artifact() -> Result<ReleaseArtifact> {
+        Self::load_artifacts()?
+            .0
+            .pop()
+            .ok_or_else(|| format_err!("No previous artifact found"))
+    }
+}
+
+fn artifact_path() -> PathBuf {
     let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     path.push(ARTIFACT_PATH.to_string());
-    path.push(chain_id.to_string());
+    path.push(ARTIFACT_NAME.to_string());
     path.with_extension(ARTIFACT_EXTENSION)
 }
 
@@ -44,15 +82,11 @@ pub fn save_release_artifact(artifact: ReleaseArtifact) -> Result<()> {
         *TESTING_ARTIFACT.lock().unwrap().deref_mut() = Some(artifact);
         Ok(())
     } else {
-        std::fs::write(
-            artifact_path(&artifact.chain_id).as_path(),
-            serde_json::to_vec(&artifact)?.as_slice(),
-        )
-        .map_err(|_| format_err!("Unable to write to path"))
+        ReleaseArtifacts::save_artifact(artifact)
     }
 }
 
-pub fn load_artifact(chain_id: &ChainId) -> Result<ReleaseArtifact> {
+pub fn load_latest_artifact(chain_id: &ChainId) -> Result<ReleaseArtifact> {
     if chain_id == &ChainId::test() {
         TESTING_ARTIFACT
             .lock()
@@ -61,13 +95,25 @@ pub fn load_artifact(chain_id: &ChainId) -> Result<ReleaseArtifact> {
             .clone()
             .ok_or_else(|| format_err!("Unable to read from artifact"))
     } else {
-        serde_json::from_slice(std::fs::read(artifact_path(chain_id).as_path())?.as_slice())
-            .map_err(|_| format_err!("Unable to read from artifact"))
+        ReleaseArtifacts::load_latest_artifact()
     }
 }
 
+pub fn get_commit_hash() -> Result<String> {
+    Ok(String::from_utf8(
+        Command::new("git")
+            .args(&["rev-parse", "HEAD"])
+            .output()?
+            .stdout,
+    )?
+    .trim_end()
+    .to_string())
+}
+
 /// Generate a unique hash for a list of modules
-pub fn hash_for_modules(modules: &[CompiledModule]) -> Result<HashValue> {
+pub fn hash_for_modules<'a>(
+    modules: impl IntoIterator<Item = (ModuleId, &'a Vec<u8>)>,
+) -> Result<HashValue> {
     #[derive(Serialize, Deserialize, CryptoHasher)]
     struct Stdlib {
         modules: BTreeMap<ModuleId, Vec<u8>>,
@@ -87,11 +133,8 @@ pub fn hash_for_modules(modules: &[CompiledModule]) -> Result<HashValue> {
     let mut stdlib = Stdlib {
         modules: BTreeMap::new(),
     };
-    for module in modules {
-        let id = module.self_id();
-        let mut bytes = vec![];
-        module.serialize(&mut bytes)?;
-        stdlib.modules.insert(id, bytes);
+    for (id, module_bytes) in modules {
+        stdlib.modules.insert(id, module_bytes.to_vec());
     }
     Ok(stdlib.hash())
 }

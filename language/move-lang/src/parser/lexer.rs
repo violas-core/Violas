@@ -52,7 +52,6 @@ pub enum Tok {
     Break,
     Continue,
     Copy,
-    Copyable,
     Define,
     Else,
     False,
@@ -64,7 +63,6 @@ pub enum Tok {
     Move,
     Native,
     Public,
-    Resource,
     Return,
     Spec,
     Struct,
@@ -78,6 +76,7 @@ pub enum Tok {
     Fun,
     Script,
     Const,
+    Friend,
 }
 
 impl fmt::Display for Tok {
@@ -128,7 +127,6 @@ impl fmt::Display for Tok {
             Break => "break",
             Continue => "continue",
             Copy => "copy",
-            Copyable => "copyable",
             Define => "define",
             Else => "else",
             False => "false",
@@ -140,7 +138,6 @@ impl fmt::Display for Tok {
             Move => "move",
             Native => "native",
             Public => "public",
-            Resource => "resource",
             Return => "return",
             Spec => "spec",
             Struct => "struct",
@@ -154,6 +151,7 @@ impl fmt::Display for Tok {
             Fun => "fun",
             Script => "script",
             Const => "const",
+            Friend => "friend",
         };
         fmt::Display::fmt(s, formatter)
     }
@@ -482,11 +480,11 @@ fn get_name_token(name: &str) -> Tok {
         "const" => Tok::Const,
         "continue" => Tok::Continue,
         "copy" => Tok::Copy,
-        "copyable" => Tok::Copyable,
         "define" => Tok::Define,
         "else" => Tok::Else,
         "false" => Tok::False,
         "fun" => Tok::Fun,
+        "friend" => Tok::Friend,
         "if" => Tok::If,
         "invariant" => Tok::Invariant,
         "let" => Tok::Let,
@@ -495,7 +493,6 @@ fn get_name_token(name: &str) -> Tok {
         "move" => Tok::Move,
         "native" => Tok::Native,
         "public" => Tok::Public,
-        "resource" => Tok::Resource,
         "return" => Tok::Return,
         "script" => Tok::Script,
         "spec" => Tok::Spec,

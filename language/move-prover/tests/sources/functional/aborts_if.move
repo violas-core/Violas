@@ -159,22 +159,21 @@ module TestAbortsIf {
         pragma aborts_if_is_strict = true;
     }
 
-    // -------------------------------
-    // `succeeds_if`
-    // -------------------------------
-
-    fun succeed(x: u64) {
-        if (x == 2 || x == 3) abort 1;
+    fun abort_1() {
+        abort 1
     }
-    spec fun succeed {
-        succeeds_if x != 2 && x != 3;
+    spec fun abort_1 {
+        pragma opaque;
+        aborts_if true with 1;
     }
 
-    fun succeed_incorrect(x: u64) {
-        if (x == 2 || x == 3) abort 1;
+    fun aborts_if_with_code(x: u64) {
+        if (x == 2 || x == 3) abort_1();
     }
-    spec fun succeed_incorrect {
-        succeeds_if x == 2;
-        succeeds_if x == 4;
+    spec fun aborts_if_with_code {
+        // It is ok to specify only one abort condition of we set partial to true.
+        pragma aborts_if_is_partial = true;
+        aborts_if x == 2 with 1;
+        aborts_with 1;
     }
 }

@@ -95,7 +95,7 @@ impl<R: RetryStrategy> Client<R> {
                     ));
                 }
             }
-            tokio::time::delay_for(delay.unwrap_or(defaults::WAIT_DELAY)).await;
+            tokio::time::sleep(delay.unwrap_or(defaults::WAIT_DELAY)).await;
         }
         Err(WaitForTransactionError::Timeout(start.elapsed()))
     }
@@ -171,13 +171,14 @@ impl<R: RetryStrategy> Client<R> {
         self.send(Request::get_events(key, start_seq, limit)).await
     }
 
-    pub async fn get_events_ex(
+    pub async fn get_events_with_proofs(
         &self,
         key: &str,
         start_seq: u64,
         limit: u64,
-    ) -> Result<Response<Vec<crate::views::EventView>>, Error> {
-        self.send(Request::get_events(key, start_seq, limit)).await
+    ) -> Result<Response<Vec<jsonrpc::Event>>, Error> {
+        self.send(Request::get_events_with_proofs(key, start_seq, limit))
+            .await
     }
 
     pub async fn get_currencies(&self) -> Result<Response<Vec<jsonrpc::CurrencyInfo>>, Error> {
@@ -206,8 +207,8 @@ impl<R: RetryStrategy> Client<R> {
     }
 
     pub async fn submit(&self, txn: &SignedTransaction) -> Result<Response<()>, Error> {
-        let req = Request::submit(txn).map_err(Error::unexpected_bcs_error)?;
-        let resp = self.http_client.single_request(&req).await?;
+        let request = Request::submit(txn).map_err(Error::unexpected_bcs_error)?;
+        let resp = self.send_with_retry(&request, &self.retry).await?;
         Ok(Response {
             result: (),
             state: State::from_response(&resp),
@@ -322,7 +323,7 @@ impl<R: RetryStrategy> Client<R> {
                 }
                 _ => return Err(err),
             };
-            tokio::time::delay_for(retry.delay(&err, retries)).await;
+            tokio::time::sleep(retry.delay(&err, retries)).await;
             Ok(retries)
         } else {
             Err(err)

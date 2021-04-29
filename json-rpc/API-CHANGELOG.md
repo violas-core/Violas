@@ -13,6 +13,60 @@ Please add the API change in the following format:
 
 ```
 
+## 2021-03-25 Add `metadata` field to preburns in the `preburn_queues` for designated dealers
+
+This adds an additional `metadata` field coupled with each preburn request held
+in the `preburn_queues` for a designated dealer. This also adds a new `PreburnWithMetadataView`.
+
+## 2021-03-25 Add `arguments_bcs` in `ScriptView` for hex-encoded BCS bytes
+
+The `ScriptFunction` transaction payload accepts BCS-encoded bytes as arguments
+while the traditional `Script` payload type still accepts arguments wrapped in
+`TransactionArgument`. To differentiate them in `ScriptView` returned to users,
+a `arguments_bcs` field is added which will display HEX-encoded BCS bytes for
+the `ScriptFunction` payload while the arguments in the `Script` payload is
+still displayed through `arguments`.
+
+## 2021-03-18 Add optional parameter `version` to `get_account` method
+
+- Get account data by version.
+- A new field `version` is added to [Account](docs/type_account.md) in the `get_account` method response.
+
+## 2021-03-16 Add support for script functions in `TransactionDataView` and `ScriptView`
+
+Update `ScriptView` to support script functions. This adds three new nullable
+fields to the `ScriptView` data type; `module_address`, `module_name`, and
+`function_name`. These fields are set to non-null values for script functions,
+and when the `ScriptView` `type` field is set to `"script_function"`.  These
+three new fields for script functions together represent a fully-qualified call
+into a Move module of the form `<module_address>::<module_name>::<function_name>`.
+
+Additionally, within the `UserTransaction` variant of the `TransactionDataView`
+for script functions, the `code` field is empty as no code is sent with the
+transaction, and the script bytes remain the BCS serialized bytes of the script
+being sent.
+
+## 2021-03-09 Add `preburn_queues` to `AccountRoleView` for designated dealers
+
+Designated dealers will now be able to have multiple preburn requests in-flight
+at the same time. This means that the `preburn` resource published under their
+account will be removed, and replaced with a `preburn_queue` resource the next
+time they send a preburn request. The view for a Designated Dealer has been
+updated to represent this new preburn queue and the outstanding preburn
+requests in it in the new field `preburn_queues`. This change is non-breaking
+as the values in the `preburn_balances` field are kept consistent with the sum
+of all outstanding burn requests in the preburn queue.
+
+## 2020-01-08 Removing known_version from verifying APIs
+
+Since the servers are pruning old ledger info states, it is easy for any call with a given known_version value to fail, unless that version is the last one of an epoch, since then it is preserved to provide epoch change proofs.
+To use the verifying API, people are expected to do batch calls with a `get_state_proof` call to make sure they get a matching response from the server.
+
+## 2020-12-22 Add `get_events_with_proof` APIs
+
+This allows to verify events since transactions and their proofs are not covering all events.
+
+
 # 2020-12-07 Add a `X-Diem-Chain-Id`, `X-Diem-Ledger-Version` and `X-Diem-Ledger-TimestampUsec` to http response header
 
 The added headers are same with JSON-RPC response json same name fields. They are added for client to know chain id and server's latest block version and timestamp without decoding body json.

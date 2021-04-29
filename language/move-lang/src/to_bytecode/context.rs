@@ -4,16 +4,15 @@
 use crate::{
     expansion::ast::SpecId,
     hlir::ast as H,
-    parser::ast::{
-        ConstantName, FunctionName, ModuleIdent, ModuleIdent_, ModuleName, StructName, Var,
-    },
+    parser::ast::{ConstantName, FunctionName, ModuleIdent, StructName, Var},
 };
-use diem_types::account_address::AccountAddress as DiemAddress;
+use move_core_types::account_address::AccountAddress as MoveAddress;
 use move_ir_types::ast as IR;
 use std::{
     clone::Clone,
     collections::{BTreeMap, BTreeSet, HashMap},
 };
+use IR::Ability;
 
 /// Compilation context for a single compilation unit (module or script).
 /// Contains all of the dependencies actually used in the module
@@ -60,7 +59,10 @@ impl<'a> Context<'a> {
         dependency_orderings: &HashMap<ModuleIdent, usize>,
         struct_declarations: &HashMap<
             (ModuleIdent, StructName),
-            (bool, Vec<(IR::TypeVar, IR::Kind)>),
+            (
+                BTreeSet<IR::Ability>,
+                Vec<(IR::TypeVar, BTreeSet<IR::Ability>)>,
+            ),
         >,
         function_declarations: &HashMap<
             (ModuleIdent, FunctionName),
@@ -69,18 +71,18 @@ impl<'a> Context<'a> {
     ) -> (Vec<IR::ImportDefinition>, Vec<IR::ModuleDependency>) {
         let Context {
             current_module: _current_module,
-            seen_structs,
+            mut seen_structs,
             seen_functions,
             ..
         } = self;
         let mut module_dependencies = BTreeMap::new();
-        Self::struct_dependencies(struct_declarations, &mut module_dependencies, seen_structs);
         Self::function_dependencies(
-            struct_declarations,
             function_declarations,
             &mut module_dependencies,
+            &mut seen_structs,
             seen_functions,
         );
+        Self::struct_dependencies(struct_declarations, &mut module_dependencies, seen_structs);
         let mut imports = vec![];
         let mut ordered_dependencies = vec![];
         for (module, (structs, functions)) in module_dependencies {
@@ -135,7 +137,7 @@ impl<'a> Context<'a> {
     fn struct_dependencies(
         struct_declarations: &HashMap<
             (ModuleIdent, StructName),
-            (bool, Vec<(IR::TypeVar, IR::Kind)>),
+            (BTreeSet<Ability>, Vec<(IR::TypeVar, BTreeSet<IR::Ability>)>),
         >,
         module_dependencies: &mut BTreeMap<
             ModuleIdent,
@@ -152,26 +154,22 @@ impl<'a> Context<'a> {
     fn struct_dependency(
         struct_declarations: &HashMap<
             (ModuleIdent, StructName),
-            (bool, Vec<(IR::TypeVar, IR::Kind)>),
+            (BTreeSet<Ability>, Vec<(IR::TypeVar, BTreeSet<IR::Ability>)>),
         >,
         module: &ModuleIdent,
         sname: StructName,
     ) -> IR::StructDependency {
         let key = (module.clone(), sname.clone());
-        let (is_nominal_resource, type_formals) = struct_declarations.get(&key).unwrap().clone();
+        let (abilities, type_formals) = struct_declarations.get(&key).unwrap().clone();
         let name = Self::translate_struct_name(sname);
         IR::StructDependency {
             name,
-            is_nominal_resource,
+            abilities,
             type_formals,
         }
     }
 
     fn function_dependencies(
-        struct_declarations: &HashMap<
-            (ModuleIdent, StructName),
-            (bool, Vec<(IR::TypeVar, IR::Kind)>),
-        >,
         function_declarations: &HashMap<
             (ModuleIdent, FunctionName),
             (BTreeSet<(ModuleIdent, StructName)>, IR::FunctionSignature),
@@ -180,13 +178,14 @@ impl<'a> Context<'a> {
             ModuleIdent,
             (Vec<IR::StructDependency>, Vec<IR::FunctionDependency>),
         >,
+        seen_structs: &mut BTreeSet<(ModuleIdent, StructName)>,
         seen_functions: BTreeSet<(ModuleIdent, FunctionName)>,
     ) {
         for (module, fname) in seen_functions {
-            let (seen_structs, function_dep) =
+            let (functions_seen_structs, function_dep) =
                 Self::function_dependency(function_declarations, &module, fname);
             Self::insert_function_dependency(module_dependencies, module, function_dep);
-            Self::struct_dependencies(struct_declarations, module_dependencies, seen_structs)
+            seen_structs.extend(functions_seen_structs)
         }
     }
 
@@ -209,21 +208,21 @@ impl<'a> Context<'a> {
     //**********************************************************************************************
 
     fn ir_module_alias(ident: &ModuleIdent) -> IR::ModuleName {
-        let ModuleIdent_ { address, name } = &ident.0.value;
+        let (address, name) = &ident.value;
         IR::ModuleName::new(format!("{}::{}", address, name))
     }
 
-    fn translate_module_ident(ident: ModuleIdent) -> IR::ModuleIdent {
-        let ModuleIdent_ { address, name } = ident.0.value;
-        let name = Self::translate_module_name(name);
+    pub fn translate_module_ident(ident: ModuleIdent) -> IR::ModuleIdent {
+        let (address, name) = ident.value;
+        let name = Self::translate_module_name_(name);
         IR::ModuleIdent::Qualified(IR::QualifiedModuleIdent::new(
             name,
-            DiemAddress::new(address.to_u8()),
+            MoveAddress::new(address.to_u8()),
         ))
     }
 
-    fn translate_module_name(n: ModuleName) -> IR::ModuleName {
-        IR::ModuleName::new(n.0.value)
+    fn translate_module_name_(s: String) -> IR::ModuleName {
+        IR::ModuleName::new(s)
     }
 
     fn translate_struct_name(n: StructName) -> IR::StructName {

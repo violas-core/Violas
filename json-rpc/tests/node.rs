@@ -4,18 +4,13 @@
 use anyhow::Result;
 use diem_config::config::NodeConfig;
 use diem_genesis_tool::{config_builder::ValidatorBuilder, swarm_config::BuildSwarm};
+use diem_logger::prelude::FileWriter;
 
 pub struct Node {
     pub config: NodeConfig,
     pub root_key: diem_crypto::ed25519::Ed25519PrivateKey,
-    node: diem_node::DiemHandle,
+    _node: diem_node::DiemHandle,
     _temp_dir: diem_temppath::TempPath,
-}
-
-impl Drop for Node {
-    fn drop(&mut self) {
-        self.node.shutdown();
-    }
 }
 
 impl Node {
@@ -35,12 +30,24 @@ impl Node {
         config.set_data_dir(node_dir.to_path_buf());
         config.save(&config_path)?;
 
-        let node = diem_node::setup_environment(&config, None);
+        // Create a logger for the validator node (in the "validator.log" file)
+        let mut log_file = node_dir.to_path_buf();
+        log_file.push("validator.log");
+        let mut logger = diem_logger::Logger::new();
+        let logger = logger
+            .printer(Box::new(FileWriter::new(log_file)))
+            .channel_size(config.logger.chan_size)
+            .is_async(config.logger.is_async)
+            .level(config.logger.level)
+            .read_env()
+            .build();
+
+        let node = diem_node::setup_environment(&config, Some(logger));
 
         Ok(Self {
             root_key,
             config,
-            node,
+            _node: node,
             _temp_dir: temp_dir,
         })
     }

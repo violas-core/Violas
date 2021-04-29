@@ -12,7 +12,7 @@ use diem_types::{
     account_state_blob::{AccountStateBlob, AccountStateWithProof},
     block_info::BlockInfo,
     chain_id::ChainId,
-    contract_event::ContractEvent,
+    contract_event::{ContractEvent, EventWithProof},
     epoch_change::EpochChangeProof,
     event::EventKey,
     ledger_info::{LedgerInfo, LedgerInfoWithSignatures},
@@ -45,6 +45,8 @@ pub fn test_bootstrap(
         DEFAULT_BATCH_SIZE_LIMIT,
         DEFAULT_PAGE_SIZE_LIMIT,
         DEFAULT_CONTENT_LENGTH_LIMIT,
+        &None,
+        &None,
         diem_db,
         mp_sender,
         RoleType::Validator,
@@ -211,6 +213,17 @@ impl DbReader for MockDiemDB {
         Ok(events)
     }
 
+    fn get_events_with_proofs(
+        &self,
+        _key: &EventKey,
+        _start: u64,
+        _order: Order,
+        _limit: u64,
+        _known_version: Option<u64>,
+    ) -> Result<Vec<EventWithProof>> {
+        unimplemented!()
+    }
+
     fn get_state_proof(
         &self,
         known_version: u64,
@@ -260,7 +273,10 @@ impl DbReader for MockDiemDB {
         &self,
         address: AccountAddress,
         _version: u64,
-    ) -> Result<(Option<AccountStateBlob>, SparseMerkleProof)> {
+    ) -> Result<(
+        Option<AccountStateBlob>,
+        SparseMerkleProof<AccountStateBlob>,
+    )> {
         Ok((
             self.get_latest_account_state(address)?,
             SparseMerkleProof::new(None, vec![]),

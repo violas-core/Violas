@@ -10,7 +10,7 @@ use crate::{
     utils::{
         backup_service_client::BackupServiceClient,
         test_utils::{start_local_backup_service, tmp_db_with_random_content},
-        GlobalBackupOpt, GlobalRestoreOpt, RocksdbOpt, TrustedWaypointOpt,
+        ConcurrentDownloadsOpt, GlobalBackupOpt, GlobalRestoreOpt, RocksdbOpt, TrustedWaypointOpt,
     },
 };
 use diem_config::config::RocksdbConfig;
@@ -34,7 +34,7 @@ fn end_to_end() {
     let version = latest_tree_state.num_transactions - 1;
     let state_root_hash = latest_tree_state.account_state_root_hash;
 
-    let (mut rt, port) = start_local_backup_service(src_db);
+    let (rt, port) = start_local_backup_service(src_db);
     let client = Arc::new(BackupServiceClient::new(format!(
         "http://localhost:{}",
         port
@@ -66,6 +66,7 @@ fn end_to_end() {
                 target_version: None, // max
                 trusted_waypoints: TrustedWaypointOpt::default(),
                 rocksdb_opt: RocksdbOpt::default(),
+                concurernt_downloads: ConcurrentDownloadsOpt::default(),
             }
             .try_into()
             .unwrap(),

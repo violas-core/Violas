@@ -1,7 +1,7 @@
 # Tests for Move Prover
 
 This directory contains the tests for Move Prover. The tests are defined by the `.move` files in this tree,
-as well as all the `.move` files in the [Diem framework](../../stdlib).
+as well as all the `.move` files in the [Diem framework](../../diem-framework).
 
 *Note*: in order to run these tests locally, you must have installed tools and setup a few environment variables.
 See [`../doc/user/install.md`](../doc/user/install.md) for details. If the environment variables for
@@ -10,6 +10,10 @@ configuring the prover are not set as described there, all tests and this direct
 *Note*: these are baseline tests, with expectations of prover output stored in files ending in `.exp`. To update
 those files, use `UPBL=1 cargo test`. To update or test a single file, you can also provide a fragment of the move
 source path.
+
+*Note*: there are three sets of tests here. The basic ones are those in `./sources`, in `../../diem-framework`, and in
+`../../move-stdlib`. Those are run by default and are merge blockers for submitting changes. An extended set of tests is
+found `./xsources`. Those are only run if the environment variable `MVP_TEST_X=1` is set.
 
 There is a convention for test cases under this directory. In general, there are two kinds of test cases, which can be
 mixed in a file. The first type of test cases are "correct" Move functions which are expected to be proven so.
@@ -38,6 +42,16 @@ be able to pass at least with `-T=20`. To do so use
 
 ```shell script
 MVP_TEST_FLAGS="-T=20" cargo test -p move-prover
+```
+
+## Inconsistency Check
+If the flag `--check-inconsistency` is given, the prover not only verifies a target, but also checks if there is any
+inconsistent assumption in the verification. If the environment variable `MVP_TEST_INCONSISTENCY=1` is set, `cargo test`
+will perform the inconsistency check while running the tests in `../../diem-framework` and `../../move-stdlib` (i.e.,
+the prover will run those tests with the flag `--check-inconsistency`).
+
+```shell script
+MVP_TEST_INCONSISTENCY=1 cargo test -p move-prover
 ```
 
 ## Code coverage

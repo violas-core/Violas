@@ -8,7 +8,7 @@ use diem_types::{
     account_address::AccountAddress,
     account_state::AccountState,
     account_state_blob::{AccountStateBlob, AccountStateWithProof},
-    contract_event::ContractEvent,
+    contract_event::{ContractEvent, EventWithProof},
     epoch_change::EpochChangeProof,
     epoch_state::EpochState,
     event::EventKey,
@@ -194,11 +194,32 @@ pub trait DbReader: Send + Sync {
         limit: u64,
     ) -> Result<Vec<(u64, ContractEvent)>>;
 
+    /// Returns events by given event key
+    fn get_events_with_proofs(
+        &self,
+        event_key: &EventKey,
+        start: u64,
+        order: Order,
+        limit: u64,
+        known_version: Option<u64>,
+    ) -> Result<Vec<EventWithProof>>;
+
     /// See [`DiemDB::get_block_timestamp`].
     ///
     /// [`DiemDB::get_block_timestamp`]:
     /// ../diemdb/struct.DiemDB.html#method.get_block_timestamp
     fn get_block_timestamp(&self, version: u64) -> Result<u64>;
+
+    /// Gets the version of the last transaction committed before timestamp,
+    /// a commited block at or after the required timestamp must exist (otherwise it's possible
+    /// the next block committed as a timestamp smaller than the one in the request).
+    fn get_last_version_before_timestamp(
+        &self,
+        _timestamp: u64,
+        _ledger_version: Version,
+    ) -> Result<Version> {
+        unimplemented!()
+    }
 
     /// See [`DiemDB::get_latest_account_state`].
     ///
@@ -276,7 +297,10 @@ pub trait DbReader: Send + Sync {
         &self,
         address: AccountAddress,
         version: Version,
-    ) -> Result<(Option<AccountStateBlob>, SparseMerkleProof)>;
+    ) -> Result<(
+        Option<AccountStateBlob>,
+        SparseMerkleProof<AccountStateBlob>,
+    )>;
 
     /// See [`DiemDB::get_latest_state_root`].
     ///

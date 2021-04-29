@@ -8,7 +8,7 @@ use anyhow::anyhow;
 use prettydiff::{basic::DiffOp, diff_lines};
 use regex::Regex;
 use std::{
-    fs::{remove_file, File},
+    fs::{self, remove_file, File},
     io::{Read, Write},
     path::Path,
 };
@@ -20,6 +20,7 @@ pub fn verify_or_update_baseline(baseline_file_name: &Path, text: &str) -> anyho
     if update_baseline {
         if !text.is_empty() {
             // Update the baseline file.
+            baseline_file_name.parent().map(fs::create_dir_all);
             let mut file = File::create(baseline_file_name)?;
             write!(file, "{}", clean_for_baseline(text))?;
         } else {
@@ -80,17 +81,14 @@ fn diff(old_content: &str, new_content: &str) -> anyhow::Result<()> {
     };
 
     let diff = diff_lines(&new_content, &old_content);
-    let mut result = vec![];
-    result.push(
-        "
+    let mut result = vec!["
 New output differs from baseline!
 Call this test with env variable UPBL=1 to regenerate or remove old baseline files.
 Then use your favorite changelist diff tool to verify you are good with the changes.
 
 Or check the rudimentary diff below:
 "
-        .to_string(),
-    );
+    .to_string()];
     for d in diff.diff() {
         match d {
             DiffOp::Equal(lines) => print_context(&mut result, lines),

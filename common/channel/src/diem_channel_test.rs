@@ -9,13 +9,12 @@ use futures::{
     future::{join, FutureExt},
     stream::{FusedStream, StreamExt},
 };
-use std::{num::NonZeroUsize, time::Duration};
-use tokio::{runtime::Runtime, time::delay_for};
+use std::time::Duration;
+use tokio::{runtime::Runtime, time::sleep};
 
 #[test]
 fn test_send_recv_order() {
-    let (mut sender, mut receiver) =
-        diem_channel::new(QueueStyle::FIFO, NonZeroUsize::new(10).unwrap(), None);
+    let (mut sender, mut receiver) = diem_channel::new(QueueStyle::FIFO, 10, None);
     sender.push(0, 0).unwrap();
     sender.push(0, 1).unwrap();
     sender.push(0, 2).unwrap();
@@ -34,16 +33,14 @@ fn test_send_recv_order() {
 
 #[test]
 fn test_empty() {
-    let (_, mut receiver) =
-        diem_channel::new::<u8, u8>(QueueStyle::FIFO, NonZeroUsize::new(10).unwrap(), None);
+    let (_, mut receiver) = diem_channel::new::<u8, u8>(QueueStyle::FIFO, 10, None);
     // Ensures that there is no other value which is ready
     assert_eq!(receiver.select_next_some().now_or_never(), None);
 }
 
 #[test]
 fn test_waker() {
-    let (mut sender, mut receiver) =
-        diem_channel::new(QueueStyle::FIFO, NonZeroUsize::new(10).unwrap(), None);
+    let (mut sender, mut receiver) = diem_channel::new(QueueStyle::FIFO, 10, None);
     // Ensures that there is no other value which is ready
     assert_eq!(receiver.select_next_some().now_or_never(), None);
     let f1 = async move {
@@ -52,21 +49,20 @@ fn test_waker() {
         assert_eq!(receiver.select_next_some().await, 2);
     };
     let f2 = async {
-        delay_for(Duration::from_millis(100)).await;
+        sleep(Duration::from_millis(100)).await;
         sender.push(0, 0).unwrap();
-        delay_for(Duration::from_millis(100)).await;
+        sleep(Duration::from_millis(100)).await;
         sender.push(0, 1).unwrap();
-        delay_for(Duration::from_millis(100)).await;
+        sleep(Duration::from_millis(100)).await;
         sender.push(0, 2).unwrap();
     };
-    let mut rt = Runtime::new().unwrap();
+    let rt = Runtime::new().unwrap();
     rt.block_on(join(f1, f2));
 }
 
 #[test]
 fn test_sender_clone() {
-    let (mut sender, mut receiver) =
-        diem_channel::new(QueueStyle::FIFO, NonZeroUsize::new(5).unwrap(), None);
+    let (mut sender, mut receiver) = diem_channel::new(QueueStyle::FIFO, 5, None);
     // Ensures that there is no other value which is ready
     assert_eq!(receiver.select_next_some().now_or_never(), None);
 
@@ -96,8 +92,7 @@ fn test_multiple_validators_helper(
     num_messages_per_validator: usize,
     expected_last_message: usize,
 ) {
-    let (mut sender, mut receiver) =
-        diem_channel::new(queue_style, NonZeroUsize::new(1).unwrap(), None);
+    let (mut sender, mut receiver) = diem_channel::new(queue_style, 1, None);
     let num_validators = 128;
     for message in 0..num_messages_per_validator {
         for validator in 0..num_validators {
@@ -132,8 +127,7 @@ fn test_multiple_validators_lifo() {
 
 #[test]
 fn test_feedback_on_drop() {
-    let (mut sender, mut receiver) =
-        diem_channel::new(QueueStyle::FIFO, NonZeroUsize::new(3).unwrap(), None);
+    let (mut sender, mut receiver) = diem_channel::new(QueueStyle::FIFO, 3, None);
     sender.push(0, 'a').unwrap();
     sender.push(0, 'b').unwrap();
     let (c_status_tx, c_status_rx) = oneshot::channel();

@@ -10,7 +10,7 @@ $ cargo install --path diem/language/tools/move-cli
 ```
 or
 ```shell
-$ cargo install --git https://github.com/diem/diem move-cli
+$ cargo install --git https://github.com/diem/diem move-cli --branch main
 ```
 
 This will install the `move` binary in your Cargo binary directory. On
@@ -68,7 +68,7 @@ Let's first start out with a simple script that prints its `signer`:
 ```rust
 script {
 use 0x1::Debug;
-fun main(account: &signer) {
+fun main(account: signer) {
     Debug::print(account)
 }
 }
@@ -84,6 +84,15 @@ $ move run src/scripts/debug_script.move --signers 0xf
 The `--signers 0xf` argument indicates which account address(es) have signed
 off on the script. Omitting `--signers` or passing multiple signers to this
 single-`signer` script will trigger a type error.
+
+## Passing arguments
+
+The CLI supports passing non-`signer` arguments to `move run` via `--args`. The following argument types are supported:
+* `bool` literals (`true`, `false`)
+* `u64` literals (e.g., `10`, `58`)
+* `address` literals (e.g., `0x12`, `0x0000000000000000000000000000000f`)
+* hexadecimal strings (e.g., `'x"0012"'` will parse as the `vector<u8>` value `[00, 12]`)
+* ASCII strings (e.g., `'b"hi"'` will parse as the `vector<u8>` value `[68, 69]`)
 
 ## Publishing new modules
 
@@ -102,7 +111,7 @@ address 0x2 {
 module Test {
     use 0x1::Signer;
 
-    resource struct Resource { i: u64 }
+    struct Resource { i: u64 } has key
 
     public fun publish(account: &signer) {
         move_to(account, Resource { i: 10 })
@@ -192,8 +201,8 @@ Let's exercise our new `Test` module by running the following script:
 ```rust
 script {
 use 0x2::Test;
-fun main(account: &signer) {
-    Test::publish(account)
+fun main(account: signer) {
+    Test::publish(&account)
 }
 }
 ```
@@ -384,8 +393,8 @@ content:
 ```rust
 script {
 use 0x2::Test;
-fun main(account: &signer) {
-    Test::unpublish(account)
+fun main(account: signer) {
+    Test::unpublish(&account)
 }
 }
 ```
@@ -445,19 +454,19 @@ are the following:
 * **stdlib:** This includes a small set of utility modules published under the
   `0x1` address. **This is the default mode if no mode is supplied**. The set of
   Move modules that are included in this mode are the following:
-  [`Debug`](https://github.com/diem/diem/blob/master/language/stdlib/nursery/Debug.move),
-  [`Errors`](https://github.com/diem/diem/blob/master/language/stdlib/modules/Errors.move),
-  [`Event`](https://github.com/diem/diem/blob/master/language/stdlib/modules/Event.move),
-  [`FixedPoint32`](https://github.com/diem/diem/blob/master/language/stdlib/modules/FixedPoint32.move),
-  [`Hash`](https://github.com/diem/diem/blob/master/language/stdlib/modules/Hash.move),
-  [`BCS`](https://github.com/diem/diem/blob/master/language/stdlib/modules/BCS.move),
-  [`Option`](https://github.com/diem/diem/blob/master/language/stdlib/modules/Option.move),
-  [`Vector`](https://github.com/diem/diem/blob/master/language/stdlib/modules/Vector.move), and
-  [`Signer`](https://github.com/diem/diem/blob/master/language/stdlib/modules/Signer.move).
+  [`Debug`](https://github.com/diem/diem/blob/main/language/diem-framework/nursery/Debug.move),
+  [`Errors`](https://github.com/diem/diem/blob/main/language/diem-framework/modules/Errors.move),
+  [`Event`](https://github.com/diem/diem/blob/main/language/diem-framework/modules/Event.move),
+  [`FixedPoint32`](https://github.com/diem/diem/blob/main/language/diem-framework/modules/FixedPoint32.move),
+  [`Hash`](https://github.com/diem/diem/blob/main/language/diem-framework/modules/Hash.move),
+  [`BCS`](https://github.com/diem/diem/blob/main/language/diem-framework/modules/BCS.move),
+  [`Option`](https://github.com/diem/diem/blob/main/language/diem-framework/modules/Option.move),
+  [`Vector`](https://github.com/diem/diem/blob/main/language/diem-framework/modules/Vector.move), and
+  [`Signer`](https://github.com/diem/diem/blob/main/language/diem-framework/modules/Signer.move).
 
 * **diem:** This includes all of the modules in the `stdlib` mode, along with
   all of the other modules that comprise the Diem Framework as defined
-  [here](https://github.com/diem/diem/blob/master/language/stdlib/modules/doc/overview.md).
+  [here](https://github.com/diem/diem/blob/main/language/diem-framework/modules/doc/overview.md).
 
 ### Running with genesis state
 
@@ -493,7 +502,7 @@ module:
 ```
 address 0x2 {
 module M {
-  resource struct S { f: u64, g: u64 }
+    struct S { f: u64, g: u64 } has key
 }
 }
 ```
@@ -503,7 +512,7 @@ and then wish to upgrade it to the following:
 ```
 address 0x2 {
 module M {
-  resource struct S { f: u64 }
+    struct S { f: u64 } has key
 }
 }
 ```

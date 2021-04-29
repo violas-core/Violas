@@ -209,7 +209,7 @@ fn add_module_txn(sender: &AccountData, seq_num: u64) -> (CompiledModule, Signed
         "
         module M {
             import 0x1.Signer;
-            resource T1 { v: u64 }
+            struct T1 has key { v: u64 }
 
             public borrow_t1(account: &signer) acquires T1 {
                 let t1: &Self.T1;
@@ -240,7 +240,8 @@ fn add_module_txn(sender: &AccountData, seq_num: u64) -> (CompiledModule, Signed
 
     let compiler = Compiler {
         address: *sender.address(),
-        ..Compiler::default()
+        skip_stdlib_deps: false,
+        extra_deps: vec![],
     };
     let module = compiler
         .into_compiled_module("file_name", module_code.as_str())
@@ -270,8 +271,8 @@ fn add_resource_txn(
         "
             import 0x{}.M;
 
-            main(account: &signer) {{
-                M.publish_t1(move(account));
+            main(account: signer) {{
+                M.publish_t1(&account);
                 return;
             }}
         ",
@@ -296,8 +297,8 @@ fn remove_resource_txn(
         "
             import 0x{}.M;
 
-            main(account: &signer) {{
-                M.remove_t1(move(account));
+            main(account: signer) {{
+                M.remove_t1(&account);
                 return;
             }}
         ",
@@ -322,8 +323,8 @@ fn borrow_resource_txn(
         "
             import 0x{}.M;
 
-            main(account: &signer) {{
-                M.borrow_t1(move(account));
+            main(account: signer) {{
+                M.borrow_t1(&account);
                 return;
             }}
         ",
@@ -348,8 +349,8 @@ fn change_resource_txn(
         "
             import 0x{}.M;
 
-            main(account: &signer) {{
-                M.change_t1(move(account), 20);
+            main(account: signer) {{
+                M.change_t1(&account, 20);
                 return;
             }}
         ",

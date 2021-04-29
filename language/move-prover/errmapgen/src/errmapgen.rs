@@ -7,12 +7,12 @@ use anyhow::{bail, Result};
 use move_core_types::{
     account_address::AccountAddress, identifier::Identifier, language_storage::ModuleId,
 };
-use serde::{Deserialize, Serialize};
-use spec_lang::{
+use move_model::{
     ast::Value,
-    env::{GlobalEnv, ModuleEnv, NamedConstantEnv},
+    model::{GlobalEnv, ModuleEnv, NamedConstantEnv},
     symbol::Symbol,
 };
+use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     convert::TryFrom,
@@ -159,7 +159,7 @@ impl<'env> ErrmapGen<'env> {
 
     pub fn gen(&mut self) {
         for module in self.env.get_modules() {
-            if !module.is_script_module() && !module.is_dependency() {
+            if !module.is_script_module() && module.is_target() {
                 self.build_error_map(&module).unwrap()
             }
         }

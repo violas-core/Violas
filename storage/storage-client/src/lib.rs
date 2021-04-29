@@ -11,7 +11,7 @@ use diem_secure_net::NetworkClient;
 use diem_types::{
     account_address::AccountAddress,
     account_state_blob::{AccountStateBlob, AccountStateWithProof},
-    contract_event::ContractEvent,
+    contract_event::{ContractEvent, EventWithProof},
     epoch_change::EpochChangeProof,
     event::EventKey,
     ledger_info::LedgerInfoWithSignatures,
@@ -61,7 +61,13 @@ impl StorageClient {
         &self,
         address: AccountAddress,
         version: Version,
-    ) -> std::result::Result<(Option<AccountStateBlob>, SparseMerkleProof), Error> {
+    ) -> std::result::Result<
+        (
+            Option<AccountStateBlob>,
+            SparseMerkleProof<AccountStateBlob>,
+        ),
+        Error,
+    > {
         self.request(StorageRequest::GetAccountStateWithProofByVersionRequest(
             Box::new(GetAccountStateWithProofByVersionRequest::new(
                 address, version,
@@ -90,7 +96,10 @@ impl DbReader for StorageClient {
         &self,
         address: AccountAddress,
         version: u64,
-    ) -> Result<(Option<AccountStateBlob>, SparseMerkleProof)> {
+    ) -> Result<(
+        Option<AccountStateBlob>,
+        SparseMerkleProof<AccountStateBlob>,
+    )> {
         Ok(Self::get_account_state_with_proof_by_version(
             self, address, version,
         )?)
@@ -139,6 +148,17 @@ impl DbReader for StorageClient {
         _limit: u64,
     ) -> Result<Vec<(u64, ContractEvent)>> {
         unimplemented!()
+    }
+
+    fn get_events_with_proofs(
+        &self,
+        _event_key: &EventKey,
+        _start: u64,
+        _order: Order,
+        _limit: u64,
+        _known_version: Option<u64>,
+    ) -> Result<Vec<EventWithProof>> {
+        unimplemented!();
     }
 
     fn get_state_proof(

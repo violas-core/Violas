@@ -15,7 +15,8 @@
 script {
 use 0x1::XUS::XUS;
 use 0x1::DiemAccount;
-fun main(tc_account: &signer) {
+fun main(tc_account: signer) {
+    let tc_account = &tc_account;
     let add_all_currencies = false;
 
     DiemAccount::create_parent_vasp_account<XUS>(
@@ -44,7 +45,8 @@ fun main(tc_account: &signer) {
 script {
 use 0x1::XUS::XUS;
 use 0x1::DiemAccount;
-fun main(account: &signer) {
+fun main(account: signer) {
+    let account = &account;
     DiemAccount::create_child_vasp_account<XUS>(account, {{child1}}, {{child1::auth_key}}, false);
     DiemAccount::create_child_vasp_account<XUS>(account, {{child2}}, {{child2::auth_key}}, false)
 }
@@ -59,7 +61,8 @@ fun main(account: &signer) {
 script {
 use 0x1::DiemAccount;
 use 0x1::RecoveryAddress;
-fun main(account: &signer) {
+fun main(account: signer) {
+    let account = &account;
     RecoveryAddress::publish(account, DiemAccount::extract_key_rotation_capability(account))
 }
 }
@@ -71,7 +74,8 @@ fun main(account: &signer) {
 script {
 use 0x1::DiemAccount;
 use 0x1::RecoveryAddress;
-fun main(account: &signer) {
+fun main(account: signer) {
+    let account = &account;
     RecoveryAddress::add_rotation_capability(
         DiemAccount::extract_key_rotation_capability(account), {{child1}}
     );
@@ -87,7 +91,8 @@ fun main(account: &signer) {
 script {
 use 0x1::DiemAccount;
 use 0x1::RecoveryAddress;
-fun main(account: &signer) {
+fun main(account: signer) {
+    let account = &account;
     RecoveryAddress::add_rotation_capability(
         DiemAccount::extract_key_rotation_capability(account), {{child1}}
     )
@@ -101,7 +106,8 @@ fun main(account: &signer) {
 script {
 use 0x1::DiemAccount;
 use 0x1::RecoveryAddress;
-fun main(account: &signer) {
+fun main(account: signer) {
+    let account = &account;
     RecoveryAddress::add_rotation_capability(
         DiemAccount::extract_key_rotation_capability(account), 0x3333
     )
@@ -115,7 +121,8 @@ fun main(account: &signer) {
 //! sender: child2
 script {
 use 0x1::RecoveryAddress;
-fun main(account: &signer) {
+fun main(account: signer) {
+    let account = &account;
     let dummy_auth_key = x"7013b6ed7dde3cfb1251db1b04ae9cd7853470284085693590a75def645a926d";
     RecoveryAddress::rotate_authentication_key(account, {{child1}}, {{child2}}, dummy_auth_key);
 }
@@ -127,7 +134,8 @@ fun main(account: &signer) {
 //! sender: child1
 script {
 use 0x1::RecoveryAddress;
-fun main(account: &signer) {
+fun main(account: signer) {
+    let account = &account;
     let dummy_auth_key = x"7013b6ed7dde3cfb1251db1b04ae9cd7853470284085693590a75def645a926d";
     RecoveryAddress::rotate_authentication_key(account, {{child2}}, {{child1}}, dummy_auth_key);
 }
@@ -140,7 +148,8 @@ fun main(account: &signer) {
 //! sender: parent1
 script {
 use 0x1::RecoveryAddress;
-fun main(account: &signer) {
+fun main(account: signer) {
+    let account = &account;
     let dummy_auth_key = x"7013b6ed7dde3cfb1251db1b04ae9cd7853470284085693590a75def645a926d";
     RecoveryAddress::rotate_authentication_key(account, {{child1}}, {{child1}}, dummy_auth_key);
 }
@@ -153,7 +162,8 @@ fun main(account: &signer) {
 script {
 use 0x1::RecoveryAddress;
 use 0x1::DiemAccount;
-fun main(account: &signer) {
+fun main(account: signer) {
+    let account = &account;
     RecoveryAddress::publish(account, DiemAccount::extract_key_rotation_capability(account))
 }
 }
@@ -161,12 +171,12 @@ fun main(account: &signer) {
 
 //! new-transaction
 module Holder {
-    resource struct Holder<T> { x: T }
-    public fun hold<T>(account: &signer, x: T) {
+    struct Holder<T> has key { x: T }
+    public fun hold<T: store>(account: &signer, x: T) {
         move_to(account, Holder<T> { x });
     }
 
-    public fun get<T>(addr: address): T
+    public fun get<T: store>(addr: address): T
     acquires Holder {
         let Holder<T>{ x } = move_from<Holder<T>>(addr);
         x
@@ -177,14 +187,14 @@ module Holder {
 //! sender: blessed
 //! type-args: 0x1::XUS::XUS
 //! args: 0, {{vasp1}}, {{vasp1::auth_key}}, b"bob", true
-stdlib_script::create_parent_vasp_account
+stdlib_script::AccountCreationScripts::create_parent_vasp_account
 // check: "Keep(EXECUTED)"
 
 //! new-transaction
 //! sender: blessed
 //! type-args: 0x1::XUS::XUS
 //! args: 0, {{vasp2}}, {{vasp2::auth_key}}, b"bob", true
-stdlib_script::create_parent_vasp_account
+stdlib_script::AccountCreationScripts::create_parent_vasp_account
 // check: "Keep(EXECUTED)"
 
 //! new-transaction
@@ -192,7 +202,8 @@ stdlib_script::create_parent_vasp_account
 script {
 use {{default}}::Holder;
 use 0x1::DiemAccount;
-fun main(account: &signer) {
+fun main(account: signer) {
+    let account = &account;
     Holder::hold(account, DiemAccount::extract_key_rotation_capability(account));
 }
 }
@@ -205,7 +216,8 @@ script {
 use 0x1::RecoveryAddress;
 use {{default}}::Holder;
 use 0x1::DiemAccount;
-fun main(account: &signer) {
+fun main(account: signer) {
+    let account = &account;
     let cap = Holder::get<DiemAccount::KeyRotationCapability>({{vasp1}});
     RecoveryAddress::publish(account, cap);
 }

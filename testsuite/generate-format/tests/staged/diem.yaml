@@ -29,6 +29,16 @@ ChangeSet:
     - events:
         SEQ:
           TYPENAME: ContractEvent
+CoinTradeMetadata:
+  ENUM:
+    0:
+      CoinTradeMetadataV0:
+        NEWTYPE:
+          TYPENAME: CoinTradeMetadataV0
+CoinTradeMetadataV0:
+  STRUCT:
+    - trade_ids:
+        SEQ: STR
 ContractEvent:
   ENUM:
     0:
@@ -83,9 +93,23 @@ Metadata:
       UnstructuredBytesMetadata:
         NEWTYPE:
           TYPENAME: UnstructuredBytesMetadata
+    4:
+      RefundMetadata:
+        NEWTYPE:
+          TYPENAME: RefundMetadata
+    5:
+      CoinTradeMetadata:
+        NEWTYPE:
+          TYPENAME: CoinTradeMetadata
 Module:
   STRUCT:
     - code: BYTES
+ModuleId:
+  STRUCT:
+    - address:
+        TYPENAME: AccountAddress
+    - name:
+        TYPENAME: Identifier
 MultiEd25519PublicKey:
   NEWTYPESTRUCT: BYTES
 MultiEd25519Signature:
@@ -103,6 +127,27 @@ RawTransaction:
     - expiration_timestamp_secs: U64
     - chain_id:
         TYPENAME: ChainId
+RefundMetadata:
+  ENUM:
+    0:
+      RefundMetadataV0:
+        NEWTYPE:
+          TYPENAME: RefundMetadataV0
+RefundMetadataV0:
+  STRUCT:
+    - transaction_version: U64
+    - reason:
+        TYPENAME: RefundReason
+RefundReason:
+  ENUM:
+    0:
+      OtherReason: UNIT
+    1:
+      InvalidSubaddress: UNIT
+    2:
+      UserInitiatedPartialRefund: UNIT
+    3:
+      UserInitiatedFullRefund: UNIT
 Script:
   STRUCT:
     - code: BYTES
@@ -112,6 +157,17 @@ Script:
     - args:
         SEQ:
           TYPENAME: TransactionArgument
+ScriptFunction:
+  STRUCT:
+    - module:
+        TYPENAME: ModuleId
+    - function:
+        TYPENAME: Identifier
+    - ty_args:
+        SEQ:
+          TYPENAME: TypeTag
+    - args:
+        SEQ: BYTES
 SignedTransaction:
   STRUCT:
     - raw_txn:
@@ -194,6 +250,10 @@ TransactionPayload:
       Module:
         NEWTYPE:
           TYPENAME: Module
+    3:
+      ScriptFunction:
+        NEWTYPE:
+          TYPENAME: ScriptFunction
 TravelRuleMetadata:
   ENUM:
     0:

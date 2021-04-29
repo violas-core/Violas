@@ -3,7 +3,7 @@
 
 use crate::shared::{ast_debug::*, Address, Identifier, Name, TName};
 use move_ir_types::location::*;
-use std::fmt;
+use std::{cmp::Ordering, fmt, hash::Hash};
 
 macro_rules! new_name {
     ($n:ident) => {
@@ -18,12 +18,12 @@ macro_rules! new_name {
                 (self.0.loc, self.0.value)
             }
 
-            fn clone_drop_loc(&self) -> (Loc, String) {
-                (self.0.loc, self.0.value.clone())
-            }
-
             fn add_loc(loc: Loc, key: String) -> Self {
                 $n(sp(loc, key))
+            }
+
+            fn borrow(&self) -> (&Loc, &String) {
+                (&self.0.loc, &self.0.value)
             }
         }
 
@@ -48,13 +48,13 @@ macro_rules! new_name {
 // Program
 //**************************************************************************************************
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Program {
     pub source_definitions: Vec<Definition>,
     pub lib_definitions: Vec<Definition>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[allow(clippy::large_enum_variant)]
 pub enum Definition {
     Module(ModuleDefinition),
@@ -62,7 +62,7 @@ pub enum Definition {
     Script(Script),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Script {
     pub loc: Loc,
     pub uses: Vec<Use>,
@@ -83,29 +83,43 @@ pub enum Use {
 
 new_name!(ModuleName);
 
-#[derive(Debug, Hash, Eq, PartialEq, Ord, PartialOrd, Clone)]
-pub struct ModuleIdent_ {
-    pub name: ModuleName,
-    pub address: Address,
+#[derive(Debug, Clone)]
+pub struct ModuleIdent {
+    pub locs: (
+        /* whole entity loc */ Loc,
+        /* module name loc */ Loc,
+    ),
+    pub value: (Address, String),
 }
-#[derive(Debug, Hash, Eq, PartialEq, Ord, PartialOrd, Clone)]
-pub struct ModuleIdent(pub Spanned<ModuleIdent_>);
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ModuleDefinition {
     pub loc: Loc,
     pub name: ModuleName,
     pub members: Vec<ModuleMember>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ModuleMember {
     Function(Function),
     Struct(StructDefinition),
     Spec(SpecBlock),
     Use(Use),
+    Friend(Friend),
     Constant(Constant),
 }
+
+//**************************************************************************************************
+// Friends
+//**************************************************************************************************
+
+#[derive(Debug, PartialEq, Clone)]
+pub enum Friend_ {
+    Module(ModuleName),
+    QualifiedModule(ModuleIdent),
+}
+
+pub type Friend = Spanned<Friend_>;
 
 //**************************************************************************************************
 // Structs
@@ -116,16 +130,16 @@ new_name!(StructName);
 
 pub type ResourceLoc = Option<Loc>;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct StructDefinition {
     pub loc: Loc,
-    pub resource_opt: ResourceLoc,
+    pub abilities: Vec<Ability>,
     pub name: StructName,
-    pub type_parameters: Vec<(Name, Kind)>,
+    pub type_parameters: Vec<(Name, Vec<Ability>)>,
     pub fields: StructFields,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum StructFields {
     Defined(Vec<(Field, Type)>),
     Native(Loc),
@@ -139,7 +153,7 @@ new_name!(FunctionName);
 
 #[derive(PartialEq, Clone, Debug)]
 pub struct FunctionSignature {
-    pub type_parameters: Vec<(Name, Kind)>,
+    pub type_parameters: Vec<(Name, Vec<Ability>)>,
     pub parameters: Vec<(Var, Type)>,
     pub return_type: Type,
 }
@@ -147,6 +161,8 @@ pub struct FunctionSignature {
 #[derive(PartialEq, Debug, Clone)]
 pub enum FunctionVisibility {
     Public(Loc),
+    Script(Loc),
+    Friend(Loc),
     Internal,
 }
 
@@ -157,7 +173,7 @@ pub enum FunctionBody_ {
 }
 pub type FunctionBody = Spanned<FunctionBody_>;
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 // (public?) foo<T1(: copyable?), ..., TN(: copyable?)>(x1: t1, ..., xn: tn): t1 * ... * tn {
 //    body
 //  }
@@ -177,7 +193,7 @@ pub struct Function {
 
 new_name!(ConstantName);
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub struct Constant {
     pub loc: Loc,
     pub signature: Type,
@@ -206,7 +222,7 @@ pub enum SpecBlockTarget_ {
     Module,
     Function(FunctionName),
     Structure(StructName),
-    Schema(Name, Vec<(Name, Kind)>),
+    Schema(Name, Vec<(Name, Vec<Ability>)>),
 }
 
 pub type SpecBlockTarget = Spanned<SpecBlockTarget_>;
@@ -214,7 +230,13 @@ pub type SpecBlockTarget = Spanned<SpecBlockTarget_>;
 #[derive(Debug, Clone, PartialEq)]
 pub struct PragmaProperty_ {
     pub name: Name,
-    pub value: Option<Value>,
+    pub value: Option<PragmaValue>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum PragmaValue {
+    Literal(Value),
+    Ident(ModuleAccess),
 }
 
 pub type PragmaProperty = Spanned<PragmaProperty_>;
@@ -223,7 +245,7 @@ pub type PragmaProperty = Spanned<PragmaProperty_>;
 pub struct SpecApplyPattern_ {
     pub visibility: Option<FunctionVisibility>,
     pub name_pattern: Vec<SpecApplyFragment>,
-    pub type_parameters: Vec<(Name, Kind)>,
+    pub type_parameters: Vec<(Name, Vec<Ability>)>,
 }
 
 pub type SpecApplyPattern = Spanned<SpecApplyPattern_>;
@@ -254,7 +276,7 @@ pub enum SpecBlockMember_ {
     Variable {
         is_global: bool,
         name: Name,
-        type_parameters: Vec<(Name, Kind)>,
+        type_parameters: Vec<(Name, Vec<Ability>)>,
         type_: Type,
     },
     Let {
@@ -287,6 +309,7 @@ pub enum SpecConditionKind {
     AbortsWith,
     SucceedsIf,
     Modifies,
+    Emits,
     Ensures,
     Requires,
     RequiresModule,
@@ -317,25 +340,21 @@ pub enum InvariantKind {
 pub enum ModuleAccess_ {
     // N
     Name(Name),
-    // M.S
+    // M::S
     ModuleAccess(ModuleName, Name),
-    // OxADDR.M.S
+    // OxADDR::M::S
     QualifiedModuleAccess(ModuleIdent, Name),
 }
 pub type ModuleAccess = Spanned<ModuleAccess_>;
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Hash)]
-pub enum Kind_ {
-    // Kind representing all types
-    Unknown,
-    // Linear resource types
-    Resource,
-    // Explicitly copyable types
-    Affine,
-    // Implicitly copyable types
-    Copyable,
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
+pub enum Ability_ {
+    Copy,
+    Drop,
+    Store,
+    Key,
 }
-pub type Kind = Spanned<Kind_>;
+pub type Ability = Spanned<Ability_>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Type_ {
@@ -372,6 +391,9 @@ pub enum Bind_ {
 pub type Bind = Spanned<Bind_>;
 // b1, ..., bn
 pub type BindList = Spanned<Vec<Bind>>;
+
+pub type BindWithRange = Spanned<(Bind, Exp)>;
+pub type BindWithRangeList = Spanned<Vec<BindWithRange>>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value_ {
@@ -450,6 +472,13 @@ pub enum BinOp_ {
 }
 pub type BinOp = Spanned<BinOp_>;
 
+#[derive(Debug, PartialEq, Copy, Clone)]
+pub enum QuantKind_ {
+    Forall,
+    Exists,
+}
+pub type QuantKind = Spanned<QuantKind_>;
+
 #[derive(Debug, Clone, PartialEq)]
 #[allow(clippy::large_enum_variant)]
 pub enum Exp_ {
@@ -480,6 +509,14 @@ pub enum Exp_ {
     Block(Sequence),
     // fun (x1, ..., xn) e
     Lambda(BindList, Box<Exp>), // spec only
+    // forall/exists x1 : e1, ..., xn [{ t1, .., tk } *] [where cond]: en.
+    Quant(
+        QuantKind,
+        BindWithRangeList,
+        Vec<Vec<Exp>>,
+        Option<Box<Exp>>,
+        Box<Exp>,
+    ), // spec only
     // (e1, ..., en)
     ExpList(Vec<Exp>),
     // ()
@@ -546,27 +583,68 @@ pub enum SequenceItem_ {
 pub type SequenceItem = Spanned<SequenceItem_>;
 
 //**************************************************************************************************
-// Loc
+// Traits
 //**************************************************************************************************
 
 impl TName for ModuleIdent {
     type Key = (Address, String);
     type Loc = (Loc, Loc);
+
     fn drop_loc(self) -> ((Loc, Loc), (Address, String)) {
-        let inner = self.0.value;
-        let (nloc, name_) = inner.name.drop_loc();
-        ((self.0.loc, nloc), (inner.address, name_))
+        (self.locs, self.value)
     }
-    fn clone_drop_loc(&self) -> ((Loc, Loc), (Address, String)) {
-        let (nloc, name_) = self.0.value.name.clone_drop_loc();
-        ((self.0.loc, nloc), (self.0.value.address, name_))
+
+    fn add_loc(locs: (Loc, Loc), value: (Address, String)) -> ModuleIdent {
+        ModuleIdent { locs, value }
     }
-    fn add_loc(locs: (Loc, Loc), key: (Address, String)) -> ModuleIdent {
-        let (iloc, nloc) = locs;
-        let (address, name_str) = key;
-        let name = ModuleName::add_loc(nloc, name_str);
-        let ident_ = ModuleIdent_ { address, name };
-        ModuleIdent(sp(iloc, ident_))
+
+    fn borrow(&self) -> (&(Loc, Loc), &(Address, String)) {
+        (&self.locs, &self.value)
+    }
+}
+
+// Hash, Eq, PartialEq, Ord, PartialOrd,
+impl PartialEq for ModuleIdent {
+    fn eq(&self, other: &ModuleIdent) -> bool {
+        self.value == other.value
+    }
+}
+
+impl Eq for ModuleIdent {}
+
+impl PartialOrd for ModuleIdent {
+    fn partial_cmp(&self, other: &ModuleIdent) -> Option<Ordering> {
+        self.value.partial_cmp(&other.value)
+    }
+}
+
+impl Ord for ModuleIdent {
+    fn cmp(&self, other: &ModuleIdent) -> Ordering {
+        self.value.cmp(&other.value)
+    }
+}
+
+impl Hash for ModuleIdent {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.value.hash(state)
+    }
+}
+
+impl TName for Ability {
+    type Key = Ability_;
+    type Loc = Loc;
+
+    fn drop_loc(self) -> (Self::Loc, Self::Key) {
+        let sp!(loc, ab_) = self;
+        (loc, ab_)
+    }
+
+    fn add_loc(loc: Self::Loc, key: Self::Key) -> Self {
+        sp(loc, key)
+    }
+
+    fn borrow(&self) -> (&Self::Loc, &Self::Key) {
+        (&self.loc, &self.value)
     }
 }
 
@@ -586,7 +664,7 @@ impl Definition {
 
 impl ModuleIdent {
     pub fn loc(&self) -> Loc {
-        self.0.loc
+        self.locs.0
     }
 }
 
@@ -595,19 +673,40 @@ impl ModuleName {
 }
 
 impl Var {
+    pub fn is_underscore(&self) -> bool {
+        self.0.value == "_"
+    }
+
     pub fn starts_with_underscore(&self) -> bool {
         self.0.value.starts_with('_')
     }
 }
 
-impl Kind_ {
-    pub const VALUE_CONSTRAINT: &'static str = "copyable";
-    pub const RESOURCE_CONSTRAINT: &'static str = "resource";
+impl Ability_ {
+    pub const COPY: &'static str = "copy";
+    pub const DROP: &'static str = "drop";
+    pub const STORE: &'static str = "store";
+    pub const KEY: &'static str = "key";
 
-    pub fn is_resourceful(&self) -> bool {
+    /// For a struct with ability `a`, each field needs to have the ability `a.requires()`.
+    /// Consider a generic type Foo<t1, ..., tn>, for Foo<t1, ..., tn> to have ability `a`, Foo must
+    /// have been declared with `a` and each type argument ti must have the ability `a.requires()`
+    pub fn requires(self) -> Ability_ {
         match self {
-            Kind_::Affine | Kind_::Copyable => false,
-            Kind_::Resource | Kind_::Unknown => true,
+            Ability_::Copy => Ability_::Copy,
+            Ability_::Drop => Ability_::Drop,
+            Ability_::Store => Ability_::Store,
+            Ability_::Key => Ability_::Store,
+        }
+    }
+
+    /// An inverse of `requires`, where x is in a.required_by() iff x.requires() == a
+    pub fn required_by(self) -> Vec<Ability_> {
+        match self {
+            Self::Copy => vec![Ability_::Copy],
+            Self::Drop => vec![Ability_::Drop],
+            Self::Store => vec![Ability_::Store, Ability_::Key],
+            Self::Key => vec![],
         }
     }
 }
@@ -710,13 +809,30 @@ impl BinOp_ {
     }
 }
 
+impl FunctionVisibility {
+    pub const PUBLIC: &'static str = "public";
+    pub const SCRIPT: &'static str = "public(script)";
+    pub const FRIEND: &'static str = "public(friend)";
+    pub const INTERNAL: &'static str = "";
+}
+
 //**************************************************************************************************
 // Display
 //**************************************************************************************************
 
 impl fmt::Display for ModuleIdent {
     fn fmt(&self, f: &mut fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{}::{}", self.0.value.address, &self.0.value.name)
+        write!(f, "{}::{}", self.value.0, &self.value.1)
+    }
+}
+
+impl fmt::Display for ModuleAccess_ {
+    fn fmt(&self, f: &mut fmt::Formatter) -> std::fmt::Result {
+        match self {
+            ModuleAccess_::Name(n) => write!(f, "{}", n),
+            ModuleAccess_::ModuleAccess(m, n) => write!(f, "{}::{}", m, n),
+            ModuleAccess_::QualifiedModuleAccess(m, n) => write!(f, "{}::{}", m, n),
+        }
     }
 }
 
@@ -729,6 +845,36 @@ impl fmt::Display for UnaryOp_ {
 impl fmt::Display for BinOp_ {
     fn fmt(&self, f: &mut fmt::Formatter) -> std::fmt::Result {
         write!(f, "{}", self.symbol())
+    }
+}
+
+impl fmt::Display for FunctionVisibility {
+    fn fmt(&self, f: &mut fmt::Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            match &self {
+                FunctionVisibility::Public(_) => FunctionVisibility::PUBLIC,
+                FunctionVisibility::Script(_) => FunctionVisibility::SCRIPT,
+                FunctionVisibility::Friend(_) => FunctionVisibility::FRIEND,
+                FunctionVisibility::Internal => FunctionVisibility::INTERNAL,
+            }
+        )
+    }
+}
+
+impl fmt::Display for Ability_ {
+    fn fmt(&self, f: &mut fmt::Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            match &self {
+                Ability_::Copy => Ability_::COPY,
+                Ability_::Drop => Ability_::DROP,
+                Ability_::Store => Ability_::STORE,
+                Ability_::Key => Ability_::KEY,
+            }
+        )
     }
 }
 
@@ -816,6 +962,7 @@ impl AstDebug for ModuleMember {
             ModuleMember::Struct(s) => s.ast_debug(w),
             ModuleMember::Spec(s) => s.ast_debug(w),
             ModuleMember::Use(u) => u.ast_debug(w),
+            ModuleMember::Friend(f) => f.ast_debug(w),
             ModuleMember::Constant(c) => c.ast_debug(w),
         }
     }
@@ -846,21 +993,43 @@ impl AstDebug for Use {
     }
 }
 
+impl AstDebug for Friend {
+    fn ast_debug(&self, w: &mut AstWriter) {
+        let Friend {
+            loc: _loc,
+            value: friend,
+        } = self;
+        match friend {
+            Friend_::Module(m_name) => {
+                w.write(&format!("friend {}", m_name));
+            }
+            Friend_::QualifiedModule(m_id) => {
+                w.write(&format!("friend {}", m_id));
+            }
+        }
+        w.write(";")
+    }
+}
+
 impl AstDebug for StructDefinition {
     fn ast_debug(&self, w: &mut AstWriter) {
         let StructDefinition {
             loc: _loc,
-            resource_opt,
+            abilities,
             name,
             type_parameters,
             fields,
         } = self;
+
+        w.list(abilities, " ", |w, ab_mod| {
+            ab_mod.ast_debug(w);
+            false
+        });
+
         if let StructFields::Native(_) = fields {
             w.write("native ");
         }
-        if resource_opt.is_some() {
-            w.write("resource ");
-        }
+
         w.write(&format!("struct {}", name));
         type_parameters.ast_debug(w);
         if let StructFields::Defined(fields) = fields {
@@ -917,6 +1086,7 @@ impl AstDebug for SpecConditionKind {
             AbortsWith => w.write("aborts_with "),
             SucceedsIf => w.write("succeeds_if "),
             Modifies => w.write("modifies "),
+            Emits => w.write("emits "),
             Ensures => w.write("ensures "),
             Requires => w.write("requires "),
             RequiresModule => w.write("requires module "),
@@ -1047,7 +1217,10 @@ impl AstDebug for PragmaProperty_ {
         w.write(&self.name.value);
         if let Some(value) = &self.value {
             w.write(" = ");
-            value.ast_debug(w);
+            match value {
+                PragmaValue::Literal(l) => l.ast_debug(w),
+                PragmaValue::Ident(i) => i.ast_debug(w),
+            }
         }
     }
 }
@@ -1082,10 +1255,7 @@ impl AstDebug for Function {
 
 impl AstDebug for FunctionVisibility {
     fn ast_debug(&self, w: &mut AstWriter) {
-        match self {
-            FunctionVisibility::Internal => (),
-            FunctionVisibility::Public(_) => w.write("public "),
-        }
+        w.write(&format!("{} ", self))
     }
 }
 
@@ -1124,7 +1294,7 @@ impl AstDebug for Constant {
     }
 }
 
-impl AstDebug for Vec<(Name, Kind)> {
+impl AstDebug for Vec<(Name, Vec<Ability>)> {
     fn ast_debug(&self, w: &mut AstWriter) {
         if !self.is_empty() {
             w.write("<");
@@ -1134,29 +1304,23 @@ impl AstDebug for Vec<(Name, Kind)> {
     }
 }
 
-impl AstDebug for (Name, Kind) {
+impl AstDebug for (Name, Vec<Ability>) {
     fn ast_debug(&self, w: &mut AstWriter) {
-        let (n, k) = self;
+        let (n, abilities) = self;
         w.write(&n.value);
-        match &k.value {
-            Kind_::Unknown => (),
-            Kind_::Resource | Kind_::Affine => {
-                w.write(": ");
-                k.ast_debug(w)
-            }
-            Kind_::Copyable => panic!("ICE 'copyable' kind constraint"),
+        if !abilities.is_empty() {
+            w.write(": ");
+            w.list(abilities, "+", |w, ab| {
+                ab.ast_debug(w);
+                false
+            })
         }
     }
 }
 
-impl AstDebug for Kind_ {
+impl AstDebug for Ability_ {
     fn ast_debug(&self, w: &mut AstWriter) {
-        w.write(match self {
-            Kind_::Unknown => "unknown",
-            Kind_::Resource => "resource",
-            Kind_::Affine => "copyable",
-            Kind_::Copyable => "copyable",
-        })
+        w.write(&format!("{}", self))
     }
 }
 
@@ -1202,11 +1366,7 @@ impl AstDebug for Vec<Type> {
 
 impl AstDebug for ModuleAccess_ {
     fn ast_debug(&self, w: &mut AstWriter) {
-        w.write(&match self {
-            ModuleAccess_::Name(n) => format!("{}", n),
-            ModuleAccess_::ModuleAccess(m, n) => format!("{}::{}", m, n),
-            ModuleAccess_::QualifiedModuleAccess(m, n) => format!("{}::{}", m, n),
-        })
+        w.write(&format!("{}", self))
     }
 }
 
@@ -1321,6 +1481,18 @@ impl AstDebug for Exp_ {
                 w.write(" ");
                 e.ast_debug(w);
             }
+            E::Quant(kind, sp!(_, rs), trs, c_opt, e) => {
+                kind.ast_debug(w);
+                w.write(" ");
+                rs.ast_debug(w);
+                trs.ast_debug(w);
+                if let Some(c) = c_opt {
+                    w.write(" where ");
+                    c.ast_debug(w);
+                }
+                w.write(" : ");
+                e.ast_debug(w);
+            }
             E::ExpList(es) => {
                 w.write("(");
                 w.comma(es, |w, e| e.ast_debug(w));
@@ -1413,6 +1585,36 @@ impl AstDebug for UnaryOp_ {
     }
 }
 
+impl AstDebug for QuantKind_ {
+    fn ast_debug(&self, w: &mut AstWriter) {
+        match self {
+            QuantKind_::Forall => w.write("forall"),
+            QuantKind_::Exists => w.write("exists"),
+        }
+    }
+}
+
+impl AstDebug for Vec<BindWithRange> {
+    fn ast_debug(&self, w: &mut AstWriter) {
+        let parens = self.len() != 1;
+        if parens {
+            w.write("(");
+        }
+        w.comma(self, |w, b| b.ast_debug(w));
+        if parens {
+            w.write(")");
+        }
+    }
+}
+
+impl AstDebug for (Bind, Exp) {
+    fn ast_debug(&self, w: &mut AstWriter) {
+        self.0.ast_debug(w);
+        w.write(" in ");
+        self.1.ast_debug(w);
+    }
+}
+
 impl AstDebug for Value_ {
     fn ast_debug(&self, w: &mut AstWriter) {
         use Value_ as V;
@@ -1437,6 +1639,16 @@ impl AstDebug for Vec<Bind> {
         w.comma(self, |w, b| b.ast_debug(w));
         if parens {
             w.write(")");
+        }
+    }
+}
+
+impl AstDebug for Vec<Vec<Exp>> {
+    fn ast_debug(&self, w: &mut AstWriter) {
+        for trigger in self {
+            w.write("{");
+            w.comma(trigger, |w, b| b.ast_debug(w));
+            w.write("}");
         }
     }
 }

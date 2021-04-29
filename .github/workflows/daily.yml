@@ -4,20 +4,20 @@ on:
   schedule:
     - cron: "14 14 * * *"
   # Uncomment below to test.
-  #push:
-  #  branches: [gha-test-*, canary, auto]
+  # push:
+  #   branches: [gha-test-*, canary, auto]
 
 jobs:
   audit:
     runs-on: ubuntu-latest
     container:
-      image: libra/build_environment:github-1
+      image: diem/build_environment:main
     strategy:
       fail-fast: false
       matrix:
         #this is a painful solution since it doesn't pick up new branches, other option is lotsa shell in one job....
         #to test in canary add in canary here.....
-        target-branch: [master, release-1.1, canary]
+        target-branch: [main, release-1.1, release-1.2]
     env:
       MESSAGE_PAYLOAD_FILE: /tmp/message
     steps:
@@ -28,8 +28,11 @@ jobs:
       - name: install cargo-audit
         run: cargo install --force cargo-audit
       - name: audit crates
+        # List of ignored RUSTSEC
+        # 1. RUSTSEC-2021-0020 - Not impacted, see #7723
+        # 2. RUSTSEC-2020-0146 - Not impacted, see #7826
         run: |
-          $CARGO $CARGOFLAGS audit --ignore RUSTSEC-2021-0020 >> $MESSAGE_PAYLOAD_FILE
+          cargo audit --ignore RUSTSEC-2021-0020 --ignore RUSTSEC-2020-0146 >> $MESSAGE_PAYLOAD_FILE
       - uses: ./.github/actions/slack-file
         with:
           webhook: ${{ secrets.WEBHOOK_AUDIT }}
@@ -40,7 +43,7 @@ jobs:
   coverage:
     runs-on: ubuntu-latest-xl
     container:
-      image: libra/build_environment:github-1
+      image: diem/build_environment:main
     env:
       CODECOV_OUTPUT: codecov
       MESSAGE_PAYLOAD_FILE: /tmp/message
@@ -77,3 +80,119 @@ jobs:
       #- name: publish to codecov.io
       #  run: bash <(curl -s https://codecov.io/bash) -f $CODECOV_OUTPUT/lcovhtml/lcov.info -F unittest;
       #- uses: ./.github/actions/build-teardown
+
+  transaction-replay:
+    runs-on: ubuntu-latest-xl
+    container:
+      image: diem/build_environment:main
+    env:
+      MESSAGE_PAYLOAD_FILE: /tmp/message
+      ACCOUNT: ${{ secrets.TRANSACTION_REPLAY_ACCOUNT }}
+      CONTAINER: backup
+      SUB_DIR: e2
+      SAS: ""
+      CONFIG: .github/workflows/transaction-replay.toml
+    steps:
+      - uses: actions/checkout@v2
+      - uses: ./.github/actions/build-setup
+      - name: install azcopy
+        run: |
+          # Download AzCopy
+          curl -sL -o downloadazcopy-v10-linux "https://azcopyvnext.azureedge.net/release20210226/azcopy_linux_amd64_10.9.0.tar.gz"
+          # Expand Archive
+          tar -xvf downloadazcopy-v10-linux
+          # Move AzCopy to the destination you want to store it
+          cp ./azcopy_linux_amd64_*/azcopy /usr/bin/
+          rm -rf downloadazcopy-v10-linux azcopy_linux_amd64_*
+      - name: replay transactions
+        run: |
+          cargo run --release --bin db-restore -- --target-db-dir /var/tmp/dbrestore/ auto --replay-all command-adapter --config "$CONFIG"
+      - uses: ./.github/actions/build-teardown
+
+  json-rpc-backward-compat-test:
+    # Test old client from release (prod) and pre-release (rc) branches
+    # against new server in the main branch through cluster-test's
+    # json-rpc interface.
+    runs-on: ubuntu-latest-xl
+    container:
+      image: diem/build_environment:main
+    env:
+      DEVNET_MINT_TEST_KEY: ${{ secrets.DEVNET_MINT_TEST_KEY }}
+      DEVNET_ENDPOINT: dev.testnet.diem.com
+      MESSAGE_PAYLOAD_FILE: /tmp/message
+    strategy:
+      fail-fast: false
+      matrix:
+        release-branch: [release-1.1, release-1.2]
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          ref: ${{ matrix.release-branch }}
+      - uses: ./.github/actions/build-setup
+      - name: Run cluster test diag on devnet
+        run: |
+          echo ${DEVNET_MINT_TEST_KEY} | base64 -d > /tmp/mint_test.key
+          RUST_BACKTRACE=full cargo run -p cluster-test -- --diag --swarm --mint-file=/tmp/mint_test.key --peers=dev.testnet.diem.com:80:80 --chain-id=DEVNET > ${MESSAGE_PAYLOAD_FILE}
+      - name: Run cluster test to submit random txn to devnet
+        run: |
+          RUST_BACKTRACE=full cargo run -p cluster-test -- --emit-tx --swarm --mint-file=/tmp/mint_test.key --peers=dev.testnet.diem.com:80:80 --chain-id=DEVNET --accounts-per-client=2 --workers-per-ac=2 --duration=30 >> ${MESSAGE_PAYLOAD_FILE}
+      - uses: ./.github/actions/slack-file
+        with:
+          webhook: ${{ secrets.WEBHOOK_BREAKING_CHANGE }}
+          payload-file: ${{ env.MESSAGE_PAYLOAD_FILE }}
+        if: ${{ failure() }}
+      - uses: ./.github/actions/build-teardown
+
+  prover-inconsistency-test:
+    runs-on: ubuntu-latest-xl
+    container:
+      image: diem/build_environment:${{ matrix.target-branch }}
+      volumes:
+        - "/home/runner/work/diem/diem:/opt/git/diem"
+    env:
+      MESSAGE_PAYLOAD_FILE: /tmp/message
+    strategy:
+      fail-fast: false
+      matrix:
+        target-branch: [main, release-1.1, release-1.2]
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          ref: ${{ matrix.target-branch }}
+      - uses: ./.github/actions/build-setup
+      - uses: actions/cache@v2.1.4
+        with:
+          path: "/opt/cargo/git\n/opt/cargo/registry\n/opt/cargo/.package-cache"
+          key: crates-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: "crates-${{ runner.os }}"
+      - name: Run the prover tests with the inconsistency check
+        run: |
+          cd /opt/git/diem/
+          MVP_TEST_INCONSISTENCY=1 cargo test -p move-prover --release >> $MESSAGE_PAYLOAD_FILE
+          sccache -s
+      - uses: ./.github/actions/slack-file
+        with:
+          webhook: ${{ secrets.WEBHOOK_MOVE_PROVER }}
+          payload-file: ${{ env.MESSAGE_PAYLOAD_FILE }}
+        if: ${{ failure() }}
+      - uses: ./.github/actions/build-teardown
+
+  prune-docker-images:
+    runs-on: ubuntu-latest
+    environment:
+      name: Docker
+      url: https://hub.docker.com/u/diem
+    steps:
+      - uses: actions/checkout@v2
+      - name: sign in to DockerHub; install image signing cert
+        uses: ./.github/actions/dockerhub_login
+        with:
+          username: ${{ secrets.ENV_DOCKERHUB_USERNAME }}
+          password: ${{ secrets.ENV_DOCKERHUB_PASSWORD }}
+          key_material: ${{ secrets.ENV_DOCKERHUB_KEY_MATERIAL }}
+          key_name: ${{ secrets.ENV_DOCKERHUB_KEY_NAME }}
+          key_password: ${{ secrets.ENV_DOCKERHUB_KEY_PASSWORD }}
+      - name: prune Docker image
+        if: ${{ github.ref != 'refs/heads/auto' }}
+        run: |
+          scripts/dockerhub_prune.sh -u "${{ secrets.ENV_DOCKERHUB_USERNAME }}" -p "${{ secrets.ENV_DOCKERHUB_PASSWORD }}" -x

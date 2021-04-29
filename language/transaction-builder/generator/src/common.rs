@@ -1,7 +1,9 @@
 // Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use diem_types::transaction::{ArgumentABI, ScriptABI, TypeArgumentABI};
+use diem_types::transaction::{
+    ArgumentABI, ScriptABI, ScriptFunctionABI, TransactionScriptABI, TypeArgumentABI,
+};
 use heck::CamelCase;
 use move_core_types::language_storage::TypeTag;
 use serde_reflection::{ContainerFormat, Format, Named, VariantFormat};
@@ -32,7 +34,6 @@ fn quote_type_as_format(type_tag: &TypeTag) -> Format {
             U8 => Format::Bytes,
             _ => type_not_allowed(type_tag),
         },
-
         Struct(_) | Signer => type_not_allowed(type_tag),
     }
 }
@@ -85,7 +86,6 @@ pub(crate) fn mangle_type(type_tag: &TypeTag) -> String {
             U8 => "u8vector".into(),
             _ => type_not_allowed(type_tag),
         },
-
         Struct(_) | Signer => type_not_allowed(type_tag),
     }
 }
@@ -106,7 +106,7 @@ pub(crate) fn get_external_definitions(diem_types: &str) -> serde_generate::Exte
         .collect()
 }
 
-pub(crate) fn get_required_decoding_helper_types(abis: &[ScriptABI]) -> BTreeSet<&TypeTag> {
+pub(crate) fn get_required_helper_types(abis: &[ScriptABI]) -> BTreeSet<&TypeTag> {
     let mut required_types = BTreeSet::new();
     for abi in abis {
         for arg in abi.args() {
@@ -115,4 +115,24 @@ pub(crate) fn get_required_decoding_helper_types(abis: &[ScriptABI]) -> BTreeSet
         }
     }
     required_types
+}
+
+pub(crate) fn transaction_script_abis(abis: &[ScriptABI]) -> Vec<TransactionScriptABI> {
+    abis.iter()
+        .cloned()
+        .filter_map(|abi| match abi {
+            ScriptABI::TransactionScript(abi) => Some(abi),
+            ScriptABI::ScriptFunction(_) => None,
+        })
+        .collect::<Vec<_>>()
+}
+
+pub(crate) fn script_function_abis(abis: &[ScriptABI]) -> Vec<ScriptFunctionABI> {
+    abis.iter()
+        .cloned()
+        .filter_map(|abi| match abi {
+            ScriptABI::ScriptFunction(abi) => Some(abi),
+            ScriptABI::TransactionScript(_) => None,
+        })
+        .collect::<Vec<_>>()
 }

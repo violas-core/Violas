@@ -5,11 +5,11 @@ module TestGlobalInvariants {
         pragma verify = true;
     }
 
-    resource struct R {
+    struct R has key {
         x: u64
     }
 
-    resource struct S {
+    struct S has key {
         x: u64
     }
 
@@ -29,6 +29,10 @@ module TestGlobalInvariants {
     public fun create_R(account: &signer) {
         move_to<S>(account, S{x: 0});
         move_to<R>(account, R{x: 0});
+    }
+    spec fun create_R {
+        requires !exists<R>(Signer::spec_address_of(account));
+        requires !exists<S>(Signer::spec_address_of(account));
     }
 
     public fun create_R_invalid(account: &signer) {

@@ -5,7 +5,7 @@ use crate::{error::Error, storage::StorageWrapper};
 use diem_config::config;
 use diem_types::chain_id::{self, ChainId};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use structopt::StructOpt;
 
 /// A config file for working with management tooling.
@@ -75,7 +75,7 @@ impl Default for Config {
 }
 
 impl Config {
-    pub fn load(path: &PathBuf) -> Result<Config, Error> {
+    pub fn load(path: &Path) -> Result<Config, Error> {
         let reader = std::fs::File::open(path).map_err(|e| Error::ConfigError(e.to_string()))?;
         serde_yaml::from_reader(reader).map_err(|e| Error::ConfigError(e.to_string()))
     }
@@ -178,6 +178,8 @@ mod tests {
                 token: Token::FromConfig("test".to_string()),
                 renew_ttl_secs: None,
                 disable_cas: None,
+                connection_timeout_ms: None,
+                response_timeout_ms: None,
             }),
             validator_backend: SecureBackend::Vault(VaultConfig {
                 namespace: None,
@@ -186,6 +188,8 @@ mod tests {
                 token: Token::FromConfig("test".to_string()),
                 renew_ttl_secs: None,
                 disable_cas: None,
+                connection_timeout_ms: None,
+                response_timeout_ms: None,
             }),
         };
 

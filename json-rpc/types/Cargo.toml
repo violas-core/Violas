@@ -1,28 +1,28 @@
 [package]
 name = "diem-json-rpc-types"
-version = "0.1.0"
+version = "0.0.1"
 authors = ["Diem Association <opensource@diem.com>"]
 description = "Diem JSONRPC Types"
 repository = "https://github.com/diem/diem"
 homepage = "https://diem.com"
 license = "Apache-2.0"
-publish = false
+publish = ["crates-io"]
 edition = "2018"
 
 [dependencies]
-anyhow = "1.0.34"
-hex = "0.4.2"
-serde = { version = "1.0.117", default-features = false }
-serde_json = "1.0.60"
-prost = "0.6.1"
+anyhow = "1.0.38"
+hex = "0.4.3"
+serde = { version = "1.0.124", default-features = false }
+serde_json = "1.0.64"
+prost = "0.7.0"
 
-compiled-stdlib = { path = "../../language/stdlib/compiled",  version = "0.1.0" }
-bcs = "0.1.1"
-diem-types = { path = "../../types", version = "0.1.0" }
-diem-crypto = { path = "../../crypto/crypto", version = "0.1.0" }
-diem-workspace-hack = { path = "../../common/workspace-hack", version = "0.1.0" }
-move-core-types = { path = "../../language/move-core/types", version = "0.1.0" }
-move-explain = { path = "../../language/tools/move-explain", version = "0.1.0" }
+bcs = "0.1.2"
+diem-types = { path = "../../types", version = "0.0.1" }
+diem-crypto = { path = "../../crypto/crypto", version = "0.0.1"  }
+move-core-types = { path = "../../language/move-core/types", version = "0.0.1"  }
+
+[dev-dependencies]
+diem-workspace-hack = { path = "../../common/workspace-hack" }
 
 [build-dependencies]
-prost-build = "0.6.1"
+prost-build = "0.7.0"

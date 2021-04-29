@@ -3,11 +3,14 @@
 
 use crate::{
     errors::*,
-    expansion::{ast as E, translate::is_valid_struct_constant_or_schema_name as is_constant_name},
+    expansion::{
+        ast::{self as E, AbilitySet},
+        translate::is_valid_struct_constant_or_schema_name as is_constant_name,
+    },
     naming::ast as N,
-    parser::ast::{ConstantName, Field, FunctionName, Kind, Kind_, ModuleIdent, StructName, Var},
+    parser::ast::{Ability_, ConstantName, Field, FunctionName, ModuleIdent, StructName, Var},
     shared::{unique_map::UniqueMap, *},
-    typing::core::{self, Subst},
+    FullyCompiledProgram,
 };
 use move_ir_types::location::*;
 use std::collections::BTreeMap;
@@ -37,7 +40,7 @@ impl ResolvedType {
 struct Context {
     errors: Errors,
     current_module: Option<ModuleIdent>,
-    scoped_types: BTreeMap<ModuleIdent, BTreeMap<String, (Loc, ModuleIdent, Option<Kind>, usize)>>,
+    scoped_types: BTreeMap<ModuleIdent, BTreeMap<String, (Loc, ModuleIdent, AbilitySet, usize)>>,
     unscoped_types: BTreeMap<String, ResolvedType>,
     scoped_functions: BTreeMap<ModuleIdent, BTreeMap<String, Loc>>,
     unscoped_constants: BTreeMap<String, Loc>,
@@ -45,51 +48,63 @@ struct Context {
 }
 
 impl Context {
-    fn new(prog: &E::Program, errors: Errors) -> Self {
+    fn new(
+        pre_compiled_lib: Option<&FullyCompiledProgram>,
+        prog: &E::Program,
+        errors: Errors,
+    ) -> Self {
         use ResolvedType as RT;
-        let scoped_types = prog
-            .modules
-            .iter()
+        let all_modules = || {
+            prog.modules.key_cloned_iter().chain(
+                pre_compiled_lib
+                    .iter()
+                    .map(|pre_compiled| {
+                        pre_compiled
+                            .expansion
+                            .modules
+                            .key_cloned_iter()
+                            .filter(|(mident, _m)| !prog.modules.contains_key(mident))
+                    })
+                    .flatten(),
+            )
+        };
+        let scoped_types = all_modules()
             .map(|(mident, mdef)| {
                 let mems = mdef
                     .structs
-                    .iter()
+                    .key_cloned_iter()
                     .map(|(s, sdef)| {
-                        let kopt = sdef.resource_opt.map(|l| sp(l, Kind_::Resource));
+                        let abilities = sdef.abilities.clone();
                         let arity = sdef.type_parameters.len();
                         let sname = s.value().to_string();
-                        (sname, (s.loc(), mident.clone(), kopt, arity))
+                        (sname, (s.loc(), mident.clone(), abilities, arity))
                     })
                     .collect();
                 (mident, mems)
             })
             .collect();
-        let scoped_functions = prog
-            .modules
-            .iter()
+        let scoped_functions = all_modules()
             .map(|(mident, mdef)| {
                 let mems = mdef
                     .functions
                     .iter()
-                    .map(|(n, _)| (n.value().to_string(), n.loc()))
+                    .map(|(nloc, n, _)| (n.clone(), nloc))
                     .collect();
                 (mident, mems)
             })
             .collect();
-        let scoped_constants = prog
-            .modules
-            .iter()
+        let scoped_constants = all_modules()
             .map(|(mident, mdef)| {
                 let mems = mdef
                     .constants
                     .iter()
-                    .map(|(n, _)| (n.value().to_string(), n.loc()))
+                    .map(|(nloc, n, _)| (n.clone(), nloc))
                     .collect();
                 (mident, mems)
             })
             .collect();
         let unscoped_types = N::BuiltinTypeName_::all_names()
-            .into_iter()
+            .iter()
             .map(|s| (s.to_string(), RT::BuiltinType))
             .collect();
         Self {
@@ -116,12 +131,23 @@ impl Context {
         !self.errors.is_empty()
     }
 
+    fn resolve_module(&mut self, loc: Loc, m: &ModuleIdent) -> bool {
+        // NOTE: piggybacking on `scoped_functions` to provide a set of modules in the context。
+        // TODO: a better solution would be to have a single `BTreeMap<ModuleIdent, ModuleInfo>`
+        // in the context that can be used to resolve modules, types, and functions.
+        let resolved = self.scoped_functions.contains_key(m);
+        if !resolved {
+            self.error(vec![(loc, format!("Unbound module '{}'", m,))]);
+        }
+        resolved
+    }
+
     fn resolve_module_type(
         &mut self,
         loc: Loc,
         m: &ModuleIdent,
         n: &Name,
-    ) -> Option<(Loc, StructName, Option<Kind>, usize)> {
+    ) -> Option<(Loc, StructName, AbilitySet, usize)> {
         let types = match self.scoped_types.get(m) {
             None => {
                 self.error(vec![(loc, format!("Unbound module '{}'", m,))]);
@@ -129,7 +155,7 @@ impl Context {
             }
             Some(members) => members,
         };
-        match types.get(&n.value).cloned() {
+        match types.get(&n.value) {
             None => {
                 self.error(vec![(
                     loc,
@@ -140,8 +166,8 @@ impl Context {
                 )]);
                 None
             }
-            Some((decl_loc, _, rloc, arity)) => {
-                Some((decl_loc, StructName(n.clone()), rloc, arity))
+            Some((decl_loc, _, abilities, arity)) => {
+                Some((*decl_loc, StructName(n.clone()), abilities.clone(), *arity))
             }
         }
     }
@@ -217,10 +243,13 @@ impl Context {
 
     fn resolve_struct_name(
         &mut self,
+        loc: Loc,
         verb: &str,
-        sp!(loc, ma_): E::ModuleAccess,
-    ) -> Option<(ModuleIdent, StructName)> {
+        sp!(nloc, ma_): E::ModuleAccess,
+        etys_opt: Option<Vec<E::Type>>,
+    ) -> Option<(ModuleIdent, StructName, Option<Vec<N::Type>>)> {
         use E::ModuleAccess_ as EA;
+
         match ma_ {
             EA::Name(n) => match self.resolve_unscoped_type(&n) {
                 None => {
@@ -229,18 +258,25 @@ impl Context {
                 }
                 Some(rt) => {
                     self.error(vec![
-                        (loc, format!("Invalid {}. Expected a struct name", verb)),
+                        (nloc, format!("Invalid {}. Expected a struct name", verb)),
                         rt.error_msg(&n),
                     ]);
                     None
                 }
             },
-            EA::ModuleAccess(m, n) => match self.resolve_module_type(loc, &m, &n) {
+            EA::ModuleAccess(m, n) => match self.resolve_module_type(nloc, &m, &n) {
                 None => {
                     assert!(self.has_errors());
                     None
                 }
-                Some(_) => Some((m, StructName(n))),
+                Some((_, _, _, arity)) => {
+                    let tys_opt = etys_opt.map(|etys| {
+                        let tys = types(self, etys);
+                        let name_f = || format!("{}::{}", &m, &n);
+                        check_type_argument_arity(self, loc, name_f, tys, arity)
+                    });
+                    Some((m, StructName(n), tys_opt))
+                }
             },
         }
     }
@@ -293,11 +329,18 @@ impl Context {
 // Entry
 //**************************************************************************************************
 
-pub fn program(prog: E::Program, errors: Errors) -> (N::Program, Errors) {
-    let mut context = Context::new(&prog, errors);
-    let mut modules = modules(&mut context, prog.modules);
-    let scripts = scripts(&mut context, prog.scripts);
-    super::uses::verify(&mut context.errors, &mut modules);
+pub fn program(
+    pre_compiled_lib: Option<&FullyCompiledProgram>,
+    prog: E::Program,
+    errors: Errors,
+) -> (N::Program, Errors) {
+    let mut context = Context::new(pre_compiled_lib, &prog, errors);
+    let E::Program {
+        modules: emodules,
+        scripts: escripts,
+    } = prog;
+    let modules = modules(&mut context, emodules);
+    let scripts = scripts(&mut context, escripts);
     (N::Program { modules, scripts }, context.get_errors())
 }
 
@@ -315,6 +358,9 @@ fn module(
 ) -> N::ModuleDefinition {
     context.current_module = Some(ident);
     let is_source_module = mdef.is_source_module;
+    let friends = mdef
+        .friends
+        .filter_map(|mident, f| friend(context, mident, f));
     let unscoped = context.save_unscoped();
     let structs = mdef.structs.map(|name, s| {
         context.restore_unscoped(unscoped.clone());
@@ -331,7 +377,8 @@ fn module(
     context.restore_unscoped(unscoped);
     N::ModuleDefinition {
         is_source_module,
-        dependency_order: 0,
+        dependency_order: mdef.dependency_order,
+        friends,
         structs,
         functions,
         constants,
@@ -357,9 +404,8 @@ fn script(context: &mut Context, escript: E::Script) -> N::Script {
         specs: _specs,
     } = escript;
     let outer_unscoped = context.save_unscoped();
-    for (n, _) in &econstants {
-        let sp!(loc, s) = n.0;
-        context.bind_constant(s, loc)
+    for (loc, s, _) in &econstants {
+        context.bind_constant(s.clone(), loc)
     }
     let inner_unscoped = context.save_unscoped();
     let constants = econstants.map(|name, c| {
@@ -374,6 +420,35 @@ fn script(context: &mut Context, escript: E::Script) -> N::Script {
         constants,
         function_name,
         function,
+    }
+}
+
+//**************************************************************************************************
+// Friends
+//**************************************************************************************************
+fn friend(context: &mut Context, mident: ModuleIdent, loc: Loc) -> Option<Loc> {
+    let current_mident = context.current_module.as_ref().unwrap();
+    if mident.value.0 != current_mident.value.0 {
+        // NOTE: in alignment with the bytecode verifier, this constraint is a policy decision
+        // rather than a technical requirement. The compiler, VM, and bytecode verifier DO NOT
+        // rely on the assumption that friend modules must reside within the same account address.
+        let msg = "Cannot declare modules out of the current address as a friend";
+        context.error(vec![
+            (loc, "Invalid friend declaration"),
+            (mident.loc(), msg),
+        ]);
+        None
+    } else if &mident == current_mident {
+        context.error(vec![
+            (loc, "Invalid friend declaration"),
+            (mident.loc(), "Cannot declare the module itself as a friend"),
+        ]);
+        None
+    } else if context.resolve_module(loc, &mident) {
+        Some(loc)
+    } else {
+        assert!(context.has_errors());
+        None
     }
 }
 
@@ -449,15 +524,15 @@ fn acquires_type(context: &mut Context, sp!(loc, en_): E::ModuleAccess) -> Optio
             context.error(vec![(
                 loc,
                 format!(
-                    "Invalid acquires item. Expected a resource name, but got a {}",
+                    "Invalid acquires item. Expected a struct name, but got a {}",
                     case
                 ),
             )]);
             None
         }
         EN::ModuleAccess(m, n) => {
-            let (decl_loc, _, resource_opt, _) = context.resolve_module_type(loc, &m, &n)?;
-            acquires_type_struct(context, loc, decl_loc, m, StructName(n), resource_opt)
+            let (decl_loc, _, abilities, _) = context.resolve_module_type(loc, &m, &n)?;
+            acquires_type_struct(context, loc, decl_loc, m, StructName(n), &abilities)
         }
     }
 }
@@ -468,12 +543,27 @@ fn acquires_type_struct(
     decl_loc: Loc,
     declared_module: ModuleIdent,
     n: StructName,
-    resource_opt: Option<Kind>,
+    abilities: &AbilitySet,
 ) -> Option<StructName> {
     let declared_in_current = match &context.current_module {
         Some(current_module) => current_module == &declared_module,
         None => false,
     };
+
+    let mut has_errors = false;
+
+    if !abilities.has_ability_(Ability_::Key) {
+        let msg = format!(
+            "Invalid acquires item. Expected a struct with the '{}' ability.",
+            Ability_::KEY
+        );
+        context.error(vec![
+            (loc, msg),
+            (decl_loc, "Declared without the ability here".to_string()),
+        ]);
+        has_errors = true;
+    }
+
     if !declared_in_current {
         let tmsg = format!(
             "The struct '{}' was not declared in the current module. Global storage access is \
@@ -481,18 +571,14 @@ fn acquires_type_struct(
             n
         );
         context.error(vec![(loc, "Invalid acquires item".into()), (n.loc(), tmsg)]);
-        return None;
+        has_errors = true;
     }
 
-    if resource_opt.is_none() {
-        context.error(vec![
-            (loc, "Invalid acquires item. Expected a nominal resource."),
-            (decl_loc, "Declared as a normal struct here"),
-        ]);
-        return None;
+    if has_errors {
+        None
+    } else {
+        Some(n)
     }
-
-    Some(n)
 }
 
 //**************************************************************************************************
@@ -501,22 +587,14 @@ fn acquires_type_struct(
 
 fn struct_def(
     context: &mut Context,
-    name: StructName,
+    _name: StructName,
     sdef: E::StructDefinition,
 ) -> N::StructDefinition {
-    let resource_opt = sdef.resource_opt;
+    let abilities = sdef.abilities;
     let type_parameters = type_parameters(context, sdef.type_parameters);
     let fields = struct_fields(context, sdef.fields);
-    match (&resource_opt, &fields) {
-        (Some(_), _) | (_, N::StructFields::Native(_)) => (),
-        (None, N::StructFields::Defined(fields)) => {
-            for (field, idx_ty) in fields.iter() {
-                check_no_nominal_resources(context, &name, &field, &idx_ty.1);
-            }
-        }
-    }
     N::StructDefinition {
-        resource_opt,
+        abilities,
         type_parameters,
         fields,
     }
@@ -528,39 +606,6 @@ fn struct_fields(context: &mut Context, efields: E::StructFields) -> N::StructFi
         E::StructFields::Defined(em) => {
             N::StructFields::Defined(em.map(|_f, (idx, t)| (idx, type_(context, t))))
         }
-    }
-}
-
-fn check_no_nominal_resources(context: &mut Context, s: &StructName, field: &Field, ty: &N::Type) {
-    use N::Type_ as T;
-    let sp!(tloc, ty_) = ty;
-    match ty_ {
-        T::Apply(Some(sp!(kloc, Kind_::Resource)), _, _) => {
-            let field_msg = format!(
-                "Invalid resource field '{}' for struct '{}'. Structs cannot contain resource \
-                 types, except through type parameters",
-                field, s
-            );
-            let tmsg = format!(
-                "Field '{}' is a resource due to the type: {}",
-                field,
-                core::error_format(ty, &Subst::empty()),
-            );
-            let kmsg = format!(
-                "Type {} was declared as a resource here",
-                core::error_format(ty, &Subst::empty()),
-            );
-            context.error(vec![
-                (field.loc(), field_msg),
-                (*tloc, tmsg),
-                (*kloc, kmsg),
-                (s.loc(), format!("'{}' declared as a `struct` here", s)),
-            ])
-        }
-        T::Apply(None, _, tyl) => tyl
-            .iter()
-            .for_each(|t| check_no_nominal_resources(context, s, field, t)),
-        _ => (),
     }
 }
 
@@ -587,24 +632,27 @@ fn constant(context: &mut Context, _name: ConstantName, econstant: E::Constant) 
 // Types
 //**************************************************************************************************
 
-fn type_parameters(context: &mut Context, type_parameters: Vec<(Name, Kind)>) -> Vec<N::TParam> {
+fn type_parameters(
+    context: &mut Context,
+    type_parameters: Vec<(Name, AbilitySet)>,
+) -> Vec<N::TParam> {
     let mut unique_tparams = UniqueMap::new();
     type_parameters
         .into_iter()
-        .map(|(name, kind)| {
+        .map(|(name, abilities)| {
             let id = N::TParamID::next();
             let user_specified_name = name.clone();
             let tp = N::TParam {
                 id,
                 user_specified_name,
-                kind,
+                abilities,
             };
             let loc = name.loc;
             context.bind_type(
                 name.value.to_string(),
                 ResolvedType::TParam(loc, tp.clone()),
             );
-            if let Err(old_loc) = unique_tparams.add(name.clone(), ()) {
+            if let Err((name, old_loc)) = unique_tparams.add(name, ()) {
                 let msg = format!("Duplicate type parameter declared with name '{}'", name);
                 context.error(vec![
                     (loc, msg),
@@ -665,12 +713,12 @@ fn type_(context: &mut Context, sp!(loc, ety_): E::Type) -> N::Type {
                     assert!(context.has_errors());
                     NT::UnresolvedError
                 }
-                Some((_, _, resource_opt, arity)) => {
+                Some((_, _, _, arity)) => {
                     let tn = sp(nloc, NN::ModuleType(m, StructName(n)));
                     let tys = types(context, tys);
                     let name_f = || format!("{}", tn);
                     let tys = check_type_argument_arity(context, loc, name_f, tys, arity);
-                    NT::Apply(resource_opt, tn, tys)
+                    NT::Apply(None, tn, tys)
                 }
             }
         }
@@ -825,18 +873,20 @@ fn exp_(context: &mut Context, e: E::Exp) -> N::Exp {
         EE::UnaryExp(uop, e) => NE::UnaryExp(uop, exp(context, *e)),
         EE::BinopExp(e1, bop, e2) => NE::BinopExp(exp(context, *e1), bop, exp(context, *e2)),
 
-        EE::Pack(tn, tys_opt, efields) => match context.resolve_struct_name("construction", tn) {
-            None => {
-                assert!(context.has_errors());
-                NE::UnresolvedError
+        EE::Pack(tn, etys_opt, efields) => {
+            match context.resolve_struct_name(eloc, "construction", tn, etys_opt) {
+                None => {
+                    assert!(context.has_errors());
+                    NE::UnresolvedError
+                }
+                Some((m, sn, tys_opt)) => NE::Pack(
+                    m,
+                    sn,
+                    tys_opt,
+                    efields.map(|_, (idx, e)| (idx, exp_(context, e))),
+                ),
             }
-            Some((m, sn)) => NE::Pack(
-                m,
-                sn,
-                tys_opt.map(|tys| types(context, tys)),
-                efields.map(|_, (idx, e)| (idx, exp_(context, e))),
-            ),
-        },
+        }
         EE::ExpList(es) => {
             assert!(es.len() > 1);
             NE::ExpList(exps(context, es))
@@ -908,7 +958,7 @@ fn exp_(context: &mut Context, e: E::Exp) -> N::Exp {
             NE::UnresolvedError
         }
         // `Name` matches name variants only allowed in specs (we handle the allowed ones above)
-        EE::Index(..) | EE::Lambda(..) | EE::Name(_, Some(_)) => {
+        EE::Index(..) | EE::Lambda(..) | EE::Quant(..) | EE::Name(_, Some(_)) => {
             panic!("ICE unexpected specification construct")
         }
     };
@@ -953,18 +1003,18 @@ fn lvalue(context: &mut Context, case: LValueCase, sp!(loc, l_): E::LValue) -> O
     let nl_ = match l_ {
         EL::Var(sp!(_, E::ModuleAccess_::Name(n)), None) => {
             let v = Var(n);
-            if v.starts_with_underscore() {
+            if v.is_underscore() {
                 NL::Ignore
             } else {
                 NL::Var(v)
             }
         }
-        EL::Unpack(tn, tys_opt, efields) => {
+        EL::Unpack(tn, etys_opt, efields) => {
             let msg = match case {
                 C::Bind => "deconstructing binding",
                 C::Assign => "deconstructing assignment",
             };
-            let (m, sn) = context.resolve_struct_name(msg, tn)?;
+            let (m, sn, tys_opt) = context.resolve_struct_name(loc, msg, tn, etys_opt)?;
             let nfields = UniqueMap::maybe_from_opt_iter(
                 efields
                     .into_iter()
@@ -973,11 +1023,11 @@ fn lvalue(context: &mut Context, case: LValueCase, sp!(loc, l_): E::LValue) -> O
             NL::Unpack(
                 m,
                 sn,
-                tys_opt.map(|tys| types(context, tys)),
+                tys_opt,
                 nfields.expect("ICE fields were already unique"),
             )
         }
-        EL::Var(..) => panic!("unexpected specification construct"),
+        EL::Var(_, _) => panic!("unexpected specification construct"),
     };
     Some(sp(loc, nl_))
 }

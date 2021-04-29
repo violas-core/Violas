@@ -7,17 +7,17 @@ use diem_types::{account_address::AccountAddress, transaction::WriteSetPayload};
 pub fn add_currency_to_system(
     executor: &mut FakeExecutor,
     currency_code_to_register: &str,
+    dr_account: &Account,
     current_dr_sequence_number: u64,
 ) -> u64 {
-    let dr_account = Account::new_diem_root();
     let mut dr_sequence_number = current_dr_sequence_number;
 
     {
         let compiled_script = {
             let script = "
             import 0x1.DiemTransactionPublishingOption;
-            main(config: &signer) {
-                DiemTransactionPublishingOption.set_open_module(move(config), false);
+            main(config: signer) {
+                DiemTransactionPublishingOption.set_open_module(&config, false);
                 return;
             }
             ";
@@ -43,7 +43,7 @@ pub fn add_currency_to_system(
             module {} {{
                 import 0x1.Diem;
                 import 0x1.FixedPoint32;
-                resource {currency_code} {{ x: bool }}
+                struct {currency_code} has store {{ x: bool }}
                 public init(dr_account: &signer, tc_account: &signer) {{
                     Diem.register_SCS_currency<Self.{currency_code}>(
                         move(dr_account),
@@ -83,8 +83,8 @@ pub fn add_currency_to_system(
             let script = format!(
                 r#"
             import 0x1.{currency_code};
-            main(dr_account: &signer, tc_account: &signer) {{
-                {currency_code}.init(move(dr_account), move(tc_account));
+            main(dr_account: signer, tc_account: signer) {{
+                {currency_code}.init(&dr_account, &tc_account);
                 return;
             }}
             "#,

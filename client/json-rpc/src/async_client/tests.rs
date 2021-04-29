@@ -3,7 +3,7 @@
 
 use crate::async_client::{
     types as jsonrpc, BroadcastHttpClient, Client, Error, JsonRpcResponse, Request, Response,
-    Retry, State, WaitForTransactionError,
+    Retry, State, UnexpectedError, WaitForTransactionError,
 };
 use diem_types::{account_address::AccountAddress, transaction::SignedTransaction};
 use reqwest::Url;
@@ -126,20 +126,32 @@ async fn test_get_metadata_by_version() {
 #[tokio::test]
 async fn test_network_error() {
     let client = Client::from_url("https://mustnotexisturl.xyz", Retry::default()).unwrap();
-    assert_err!(client.get_metadata().await, Error::NetworkError{..}, true);
+    assert_err!(
+        client.get_metadata().await,
+        Error::NetworkError { .. },
+        true
+    );
 }
 
 #[tokio::test]
 async fn test_invalid_http_status() {
     let client = Client::from_url("https://testnet.diem.com/unknown", Retry::default()).unwrap();
-    assert_err!(client.get_metadata().await, Error::InvalidHTTPStatus{..}, false);
+    assert_err!(
+        client.get_metadata().await,
+        Error::InvalidHTTPStatus { .. },
+        false
+    );
 }
 
 #[tokio::test]
 async fn test_invalid_http_response() {
     let client = setup(("get_metadata", json!([])), json!("invalid"));
 
-    assert_err!(client.get_metadata().await, Error::InvalidHTTPResponse{..}, true);
+    assert_err!(
+        client.get_metadata().await,
+        Error::InvalidHTTPResponse { .. },
+        true
+    );
 }
 
 #[tokio::test]
@@ -155,7 +167,11 @@ async fn test_invalid_rpc_response() {
         }),
     );
 
-    assert_err!(client.get_metadata().await, Error::InvalidRpcResponse{..}, false);
+    assert_err!(
+        client.get_metadata().await,
+        Error::InvalidRpcResponse { .. },
+        false
+    );
 }
 
 #[tokio::test]
@@ -174,7 +190,11 @@ async fn test_deserialize_result_error() {
         }),
     );
 
-    assert_err!(client.get_metadata().await, Error::DeserializeResponseJsonError{..}, true);
+    assert_err!(
+        client.get_metadata().await,
+        Error::DeserializeResponseJsonError { .. },
+        true
+    );
 }
 
 #[tokio::test]
@@ -193,7 +213,11 @@ async fn test_jsonrpc_error() {
         }),
     );
 
-    assert_err!(client.get_metadata().await, Error::JsonRpcError{..}, true);
+    assert_err!(
+        client.get_metadata().await,
+        Error::JsonRpcError { .. },
+        true
+    );
 }
 
 #[tokio::test]
@@ -209,7 +233,11 @@ async fn test_result_not_found() {
         }),
     );
 
-    assert_err!(client.get_metadata().await, Error::ResultNotFound{..}, false);
+    assert_err!(
+        client.get_metadata().await,
+        Error::ResultNotFound { .. },
+        false
+    );
 }
 
 #[tokio::test]
@@ -231,7 +259,11 @@ async fn test_submit_failed() {
         invalid_request_response(),
     );
 
-    assert_err!(client.submit(&signed_txn_sample()).await, Error::JsonRpcError{..}, true);
+    assert_err!(
+        client.submit(&signed_txn_sample()).await,
+        Error::JsonRpcError { .. },
+        true
+    );
 }
 
 #[tokio::test]
@@ -379,6 +411,19 @@ async fn test_get_events() {
 }
 
 #[tokio::test]
+async fn test_get_events_with_proofs() {
+    let result = events_sample();
+    let client = setup(
+        ("get_events_with_proofs", json!(["key", 0, 1])),
+        new_response(result.clone()),
+    );
+
+    let ret = client.get_events_with_proofs("key", 0, 1).await.unwrap();
+
+    assert_eq!(result, to_value(&*ret).unwrap());
+}
+
+#[tokio::test]
 async fn test_get_currencies() {
     let result = currencies_sample();
     let client = setup(("get_currencies", json!([])), new_response(result.clone()));
@@ -457,7 +502,7 @@ async fn test_update_last_known_state() {
 }
 
 #[tokio::test]
-async fn test_submit_method_returns_stale_response() {
+async fn test_retry_stale_response_on_submit_method() {
     let client = setup_multi_requests(vec![
         (
             ("get_metadata", json!([])),
@@ -467,11 +512,20 @@ async fn test_submit_method_returns_stale_response() {
             ("submit", json!([signed_txn_hex_sample()])),
             new_response_with_version(json!(null), 1),
         ),
+        (
+            ("submit", json!([signed_txn_hex_sample()])),
+            new_response_with_version(json!(null), 3),
+        ),
     ]);
 
+    // first call to setup known version
     client.get_metadata().await.expect("some");
+
+    let now = std::time::Instant::now();
     let ret = client.submit(&signed_txn_sample()).await;
-    assert_err!(ret, Error::StaleResponseError{..}, false);
+    assert!(ret.is_ok());
+    assert!(now.elapsed() > Duration::from_millis(10));
+    assert_eq!(client.last_known_state().unwrap(), state_for_version(3))
 }
 
 #[tokio::test]
@@ -562,7 +616,11 @@ async fn test_wait_for_transaction_error_get_transaction_error() {
         .wait_for_transaction(&address, seq, expiration_time_secs, txn_hash, None, None)
         .await;
 
-    assert_err!(err, WaitForTransactionError::GetTransactionError{..}, true);
+    assert_err!(
+        err,
+        WaitForTransactionError::GetTransactionError { .. },
+        true
+    );
 }
 
 #[tokio::test]
@@ -580,7 +638,11 @@ async fn test_wait_for_transaction_error_hash_mismatch() {
         .wait_for_transaction(&address, seq, expiration_time_secs, txn_hash, None, None)
         .await;
 
-    assert_err!(err, WaitForTransactionError::TransactionHashMismatchError {..}, false);
+    assert_err!(
+        err,
+        WaitForTransactionError::TransactionHashMismatchError { .. },
+        false
+    );
 }
 
 #[tokio::test]
@@ -649,11 +711,7 @@ async fn test_wait_for_transaction_error_timeout() {
             Some(Duration::from_millis(20)), // delay
         )
         .await;
-    assert_err!(
-        err,
-        WaitForTransactionError::Timeout { .. },
-        false
-    );
+    assert_err!(err, WaitForTransactionError::Timeout { .. }, false);
 }
 
 #[tokio::test]
@@ -734,8 +792,11 @@ async fn test_batch_send_requests_and_response_id_not_matched_error() {
             .batch_send(vec![Request::get_metadata(), Request::get_currencies()])
             .await;
 
-        assert_eq!("Err(UnexpectedError(InvalidResponseId(JsonRpcResponse { diem_chain_id: 4, diem_ledger_version: 1, diem_ledger_timestampusec: 1602888396000000, jsonrpc: \"2.0\", id: Some(Number(2)), result: Some(Object({\"chain_id\": Number(4), \"timestamp\": Number(234234), \"version\": Number(1)})), error: None })))", format!("{:?}", &err));
-        assert_err!(err, Error::UnexpectedError { .. }, true);
+        assert_err!(
+            err,
+            Error::UnexpectedError(UnexpectedError::InvalidResponseId { .. }),
+            true
+        );
     }
 }
 
@@ -759,8 +820,11 @@ async fn test_batch_send_requests_and_response_id_type_not_matched_error() {
             .batch_send(vec![Request::get_metadata(), Request::get_currencies()])
             .await;
 
-        assert_eq!("Err(UnexpectedError(InvalidResponseIdType(JsonRpcResponse { diem_chain_id: 4, diem_ledger_version: 1, diem_ledger_timestampusec: 1602888396000000, jsonrpc: \"2.0\", id: Some(String(\"1\")), result: Some(Object({\"chain_id\": Number(4), \"timestamp\": Number(234234), \"version\": Number(1)})), error: None })))", format!("{:?}", &err));
-        assert_err!(err, Error::UnexpectedError { .. }, true);
+        assert_err!(
+            err,
+            Error::UnexpectedError(UnexpectedError::InvalidResponseIdType { .. }),
+            true
+        );
     }
 }
 
@@ -784,8 +848,11 @@ async fn test_batch_send_requests_and_response_id_duplicated_error() {
             .batch_send(vec![Request::get_metadata(), Request::get_currencies()])
             .await;
 
-        assert_eq!("Err(UnexpectedError(DuplicatedResponseId(JsonRpcResponse { diem_chain_id: 4, diem_ledger_version: 1, diem_ledger_timestampusec: 1602888396000000, jsonrpc: \"2.0\", id: Some(Number(0)), result: Some(Object({\"chain_id\": Number(4), \"timestamp\": Number(234234), \"version\": Number(1)})), error: None })))", format!("{:?}", &err));
-        assert_err!(err, Error::UnexpectedError { .. }, true);
+        assert_err!(
+            err,
+            Error::UnexpectedError(UnexpectedError::DuplicatedResponseId { .. }),
+            true
+        );
     }
 }
 
@@ -809,8 +876,11 @@ async fn test_batch_send_requests_and_response_id_not_found_error() {
             .batch_send(vec![Request::get_metadata(), Request::get_currencies()])
             .await;
 
-        assert_eq!("Err(UnexpectedError(ResponseIdNotFound(JsonRpcResponse { diem_chain_id: 4, diem_ledger_version: 1, diem_ledger_timestampusec: 1602888396000000, jsonrpc: \"2.0\", id: None, result: Some(Object({\"chain_id\": Number(4), \"timestamp\": Number(234234), \"version\": Number(1)})), error: None })))", format!("{:?}", &err));
-        assert_err!(err, Error::UnexpectedError { .. }, true);
+        assert_err!(
+            err,
+            Error::UnexpectedError(UnexpectedError::ResponseIdNotFound { .. }),
+            true
+        );
     }
 }
 
@@ -835,10 +905,11 @@ async fn test_batch_send_requests_and_responses_more_then_requested() {
             .batch_send(vec![Request::get_metadata(), Request::get_currencies()])
             .await;
 
-        assert!(
-            format!("{:?}", &err).contains("UnexpectedError(InvalidBatchResponse([JsonRpcResponse")
+        assert_err!(
+            err,
+            Error::UnexpectedError(UnexpectedError::InvalidBatchResponse { .. }),
+            true
         );
-        assert_err!(err, Error::UnexpectedError { .. }, true);
     }
 }
 
@@ -859,10 +930,11 @@ async fn test_batch_send_requests_and_responses_less_then_requested() {
             .batch_send(vec![Request::get_metadata(), Request::get_currencies()])
             .await;
 
-        assert!(
-            format!("{:?}", &err).contains("UnexpectedError(InvalidBatchResponse([JsonRpcResponse")
+        assert_err!(
+            err,
+            Error::UnexpectedError(UnexpectedError::InvalidBatchResponse { .. }),
+            true
         );
-        assert_err!(err, Error::UnexpectedError { .. }, true);
     }
 }
 

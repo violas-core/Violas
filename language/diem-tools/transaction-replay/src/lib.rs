@@ -13,12 +13,15 @@ use diem_types::{
 use diem_validator_interface::{
     DBDebuggerInterface, DebuggerStateView, DiemValidatorInterface, JsonRpcDebuggerInterface,
 };
-use diem_vm::{data_cache::RemoteStorage, txn_effects_to_writeset_and_events, DiemVM, VMExecutor};
+use diem_vm::{convert_changeset_and_events, data_cache::RemoteStorage, DiemVM, VMExecutor};
 use move_cli::OnDiskStateView;
-use move_core_types::gas_schedule::{GasAlgebra, GasUnits};
+use move_core_types::{
+    effects::ChangeSet as MoveChanges,
+    gas_schedule::{GasAlgebra, GasUnits},
+};
 use move_lang::{compiled_unit::CompiledUnit, move_compile, shared::Address};
 use move_vm_runtime::{logging::NoContextLog, move_vm::MoveVM, session::Session};
-use move_vm_test_utils::{ChangeSet as MoveChanges, DeltaStorage};
+use move_vm_test_utils::DeltaStorage;
 use move_vm_types::gas_schedule::{zero_cost_schedule, CostStrategy};
 use resource_viewer::{AnnotatedAccountStateBlob, MoveValueAnnotator};
 use std::{
@@ -123,11 +126,10 @@ impl DiemDebugger {
         save_write_set: bool,
     ) -> Result<TransactionOutput> {
         let state_view = DebuggerStateView::new(&*self.debugger, version + 1);
-        let mut vm = DiemVM::new(&state_view);
+        let vm = DiemVM::new(&state_view);
         let cache = diem_vm::data_cache::StateViewCache::new(&state_view);
         let log_context = NoContextLog::new();
-        let mut txn_data = diem_vm::transaction_metadata::TransactionMetadata::default();
-        txn_data.sequence_number = match self
+        let sequence_number = match self
             .debugger
             .get_account_state_by_version(diem_root_address(), version)?
         {
@@ -137,7 +139,11 @@ impl DiemDebugger {
                 .sequence_number(),
             None => bail!("Diem root account blob doesn't exist"),
         };
-        txn_data.sender = diem_root_address();
+        let txn_data = diem_vm::transaction_metadata::TransactionMetadata {
+            sequence_number,
+            sender: diem_root_address(),
+            ..Default::default()
+        };
 
         let (_, output) = vm
             .execute_writeset_transaction(&cache, &payload, txn_data, &log_context)
@@ -155,11 +161,11 @@ impl DiemDebugger {
             match ap.get_path() {
                 access_path::Path::Resource(tag) => match op {
                     WriteOp::Deletion => state_view.delete_resource(addr, tag)?,
-                    WriteOp::Value(bytes) => state_view.save_resource_bytes(addr, tag, bytes)?,
+                    WriteOp::Value(bytes) => state_view.save_resource(addr, tag, bytes)?,
                 },
                 access_path::Path::Code(module_id) => match op {
                     WriteOp::Deletion => state_view.delete_module(&module_id)?,
-                    WriteOp::Value(bytes) => state_view.save_module_bytes(&module_id, bytes)?,
+                    WriteOp::Value(bytes) => state_view.save_module(&module_id, bytes)?,
                 },
             }
         }
@@ -178,9 +184,9 @@ impl DiemDebugger {
         for (key, value) in account_state.iter() {
             let key: access_path::Path = bcs::from_bytes(key)?;
             match key {
-                access_path::Path::Code(m) => disk_view.save_module_bytes(&m, value)?,
+                access_path::Path::Code(m) => disk_view.save_module(&m, value)?,
                 access_path::Path::Resource(struct_tag) => {
-                    disk_view.save_resource_bytes(account, struct_tag, value)?
+                    disk_view.save_resource(account, struct_tag, value)?
                 }
             }
         }
@@ -198,7 +204,9 @@ impl DiemDebugger {
         if save_write_sets {
             let state_view = OnDiskStateView::create(&self.build_dir, &self.storage_dir)?;
             for m in &modules {
-                state_view.save_module(m)?
+                let mut module_bytes = vec![];
+                m.serialize(&mut module_bytes)?;
+                state_view.save_module(&m.self_id(), &module_bytes)?
             }
         }
         Ok(modules)
@@ -277,10 +285,10 @@ impl DiemDebugger {
         let remote_storage = DeltaStorage::new(&state_view_storage, &move_changes);
         let mut session = move_vm.new_session(&remote_storage);
         f(&mut session).map_err(|err| format_err!("Unexpected VM Error: {:?}", err))?;
-        let txn_effect = session
+        let (changeset, events) = session
             .finish()
             .map_err(|err| format_err!("Unexpected VM Error: {:?}", err))?;
-        let (write_set, events) = txn_effects_to_writeset_and_events(txn_effect)
+        let (write_set, events) = convert_changeset_and_events(changeset, events)
             .map_err(|err| format_err!("Unexpected VM Error: {:?}", err))?;
         Ok(ChangeSet::new(write_set, events))
     }
@@ -359,8 +367,13 @@ fn compile_move_script(file_path: &str, sender: AccountAddress) -> Result<Vec<u8
     let cur_path = file_path.to_owned();
     let targets = &vec![cur_path];
     let sender_opt = Some(sender_addr);
-    let (files, units_or_errors) =
-        move_compile(targets, &stdlib::stdlib_files(), sender_opt, None)?;
+    let (files, units_or_errors) = move_compile(
+        targets,
+        &diem_framework::diem_stdlib_files(),
+        sender_opt,
+        None,
+        false,
+    )?;
     let unit = match units_or_errors {
         Err(errors) => {
             let error_buffer = move_lang::errors::report_errors_to_color_buffer(files, errors);

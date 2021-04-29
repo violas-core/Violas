@@ -4,7 +4,8 @@ title: My First Client
 sidebar_label: My First Client
 ---
 
-import Tabs from '@theme/Tabs'; import TabItem from '@theme/TabItem';
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
 const syntax = [
   {label: 'Python', value: 'python'},
   {label: 'Java', value: 'java'},
@@ -15,7 +16,7 @@ _An introduction to client development on testnet using the official SDKs._
 
 ## Getting Started
 
-In this tutorial, we demonstrate the key elements of a basic client using the official SDKs to interact with the Blockchain. The code for the tutorial is available here: [my-first-client](https://github.com/diem/my-first-client). The code in this project can be run from the root of the project directory by issuing the `make` command..
+In this tutorial, we demonstrate the key elements of a basic client using the official SDKs to interact with the Blockchain. The code for the tutorial is available here: [my-first-client](https://github.com/diem/my-first-client). The code in this project can be run from the root of the project directory by issuing the `make` command.
 
 The example code uses the official Client SDKs. Currently, Go, Java, and Python are available. These libraries are developed to simplify aspects of the development process. If your language is not currently supported, or on the upcoming roadmap (Rust), then you will want to  refer to the low-level JSON-RPC API. To request additional functionality or to track when it is implemented, you can submit a GitHub issue on the corresponding project repository.
 
@@ -28,12 +29,11 @@ All code examples are shared in the [my-first-client](https://github.com/diem/my
 
 ### Clone the repo:
 
-_git clone [https://github.com/libra/my-first-client.git](https://github.com/diem/my-first-client.git)_
+_git clone [https://github.com/diem/my-first-client.git](https://github.com/diem/my-first-client.git)_
 
 Each SDK has the following system requirements:
 
 *   Java: Java 8+
-*   Go: Go v1.1+
 *   Python: Python v3.7+, pipenv
 
 ### Run the examples:
@@ -93,25 +93,25 @@ AuthKey senderAuthKey = AuthKey.ed24419(senderPrivateKey.publicKey());
 </TabItem>
 </Tabs>
 
-## Requesting Coin1 from the faucet
+## Requesting XUS from the faucet
 
-A faucet is a blockchain tool for testing blockchain transactions by providing coins for testing. When instructed, the testnet faucet will send the requested amount of Coin1 to the address provided.
+A faucet is a blockchain tool for testing blockchain transactions by providing coins for testing. When instructed, the testnet faucet will send the requested amount of XUS to the address provided.
 
-Here, we request 100 Coin1 from the faucet and deposit it in Wallet A.
+Here, we request 100 XUS from the faucet and deposit it in Wallet A.
 
 <Tabs groupId="syntax" defaultValue="python" values={syntax}>
 <TabItem value="python">
 
 ```python
 faucet = testnet.Faucet(client)
-testnet.Faucet.mint(faucet, sender_auth_key.hex(), 10000000, “Coin1”)
+faucet.mint(sender_auth_key.hex(), 10000000, "XUS")
 ```
 
 </TabItem>
 <TabItem value="java">
 
 ```java
-Testnet.mintCoins(client, 10000000, senderAuthKey.hex(), ”Coin1”);
+Testnet.mintCoins(client, 10000000, senderAuthKey.hex(), "XUS");
 ```
 
 </TabItem>
@@ -120,7 +120,7 @@ Testnet.mintCoins(client, 10000000, senderAuthKey.hex(), ”Coin1”);
 
 ## Getting a balance
 
-In the previous step we requested 100 Coin1 from the faucet. We can verify that our test wallet now has the expected balance.
+In the previous step we requested 100 XUS from the faucet. We can verify that our test wallet now has the expected balance.
 
 <Tabs groupId="syntax" defaultValue="python" values={syntax}>
 <TabItem value="python">
@@ -138,7 +138,7 @@ print(f"Generated address: {utils.account_address_hex(auth_key.account_address()
 
 # create account
 faucet = testnet.Faucet(client)
-testnet.Faucet.mint(faucet, auth_key.hex(), 1340000000, "Coin1")
+faucet.mint(auth_key.hex(), 1340000000, "XUS")
 
 # get account information
 account = client.get_account(auth_key.account_address())
@@ -151,7 +151,7 @@ print(account)
 
 ```java
 //connect to testnet
-LibraClient client = Testnet.createClient();
+DiemClient client = Testnet.createClient();
 
 //generate private key for new account
 PrivateKey privateKey = new Ed25519PrivateKey(new Ed25519PrivateKeyParameters(new SecureRandom()));
@@ -176,7 +176,7 @@ System.out.println(account);
 
 _Note: There are several types of peer to peer transactions. These transactions shall have regulatory and compliance requirements that must be followed. To learn more about requirements, please visit the Prospective VASPs document here._
 
-Next we demonstrate sending 10 units of Coin1 from a Sender wallet to a Receiver wallet.
+Next we demonstrate sending 10 units of XUS from a Sender wallet to a Receiver wallet.
 
 <Tabs groupId="syntax" defaultValue="python" values={syntax}>
 <TabItem value="python">
@@ -194,7 +194,7 @@ print(f"Generated sender address: {utils.account_address_hex(sender_auth_key.acc
 
 # create sender account
 faucet = testnet.Faucet(client)
-testnet.Faucet.mint(faucet, sender_auth_key.hex(), 100000000, "Coin1")
+testnet.Faucet.mint(faucet, sender_auth_key.hex(), 100000000, "XUS")
 
 # get sender account
 sender_account = client.get_account(sender_auth_key.account_address())
@@ -208,7 +208,7 @@ print(f"Generated receiver address: {utils.account_address_hex(receiver_auth_key
 
 # create receiver account
 faucet = testnet.Faucet(client)
-testnet.Faucet.mint(faucet, receiver_auth_key.hex(), 10000000, CURRENCY)
+faucet.mint(receiver_auth_key.hex(), 10000000, CURRENCY)
 
 # create script
 script = stdlib.encode_peer_to_peer_with_metadata_script(
@@ -220,10 +220,10 @@ script = stdlib.encode_peer_to_peer_with_metadata_script(
     )
 
 # create transaction
-raw_transaction = libra_types.RawTransaction(
+raw_transaction = diem_types.RawTransaction(
     sender=sender_auth_key.account_address(),
     sequence_number=sender_account.sequence_number,
-    payload=libra_types.TransactionPayload__Script(script),
+    payload=diem_types.TransactionPayload__Script(script),
     max_gas_amount=1_000_000,
     gas_unit_price=0,
     gas_currency_code=CURRENCY,
@@ -248,7 +248,7 @@ client.wait_for_transaction(signed_txn)
 
 ```java
 //connect to testnet
-LibraClient client = Testnet.createClient();
+DiemClient client = Testnet.createClient();
 
 //generate private key for sender account
 PrivateKey senderPrivateKey = new Ed25519PrivateKey(new Ed25519PrivateKeyParameters(new SecureRandom()));
@@ -256,7 +256,7 @@ PrivateKey senderPrivateKey = new Ed25519PrivateKey(new Ed25519PrivateKeyParamet
 //generate auth key for sender account
 AuthKey senderAuthKey = AuthKey.ed24419(senderPrivateKey.publicKey());
 
-//create sender account with 100 Coin1 balance
+//create sender account with 100 XUS balance
 Testnet.mintCoins(client, 100000000, senderAuthKey.hex(), CURRENCY_CODE);
 
 //get sender account for sequence number
@@ -268,7 +268,7 @@ PrivateKey receiverPrivateKey = new Ed25519PrivateKey(new Ed25519PrivateKeyParam
 //generate auth key for receiver account
 AuthKey receiverAuthKey = AuthKey.ed24419(receiverPrivateKey.publicKey());
 
-//create receiver account with 1 Coin1 balance
+//create receiver account with 1 XUS balance
 Testnet.mintCoins(client, 10000000, receiverAuthKey.hex(), CURRENCY_CODE);
 
 //create script
@@ -280,7 +280,7 @@ TransactionPayload script = new TransactionPayload.Script(
                 new Bytes(new byte[0]),
                 new Bytes(new byte[0])));
 
-//create transaction to send 1 Coin1
+//create transaction to send 1 XUS
 RawTransaction rawTransaction = new RawTransaction(
         senderAuthKey.accountAddress(),
         account.getSequenceNumber(),
@@ -310,7 +310,7 @@ System.out.println(transaction);
 </Tabs>
 
 
-We can verify that 10 Coin1 was sent by verifying the sender’s wallet balance is 90 and receiver’s balance is 10.
+We can verify that 10 XUS was sent by verifying the sender’s wallet balance is 90 and receiver’s balance is 10.
 
 
 ## Transaction Intent (DIP-5)
@@ -355,11 +355,11 @@ auth_key = AuthKey.from_public_key(private_key.public_key())
 
 # create intent identifier
 account_identifier = identifier.encode_account(utils.account_address_hex(auth_key.account_address()), None, identifier.TLB)
-encoded_intent_identifier = identifier.encode_intent(account_identifier, "Coin1", 10000000)
+encoded_intent_identifier = identifier.encode_intent(account_identifier, "XUS", 10000000)
 print(f"Encoded IntentIdentifier: {encoded_intent_identifier}")
 
 # deserialize IntentIdentifier
-intent_identifier = libra.identifier.decode_intent(encoded_intent_identifier, identifier.TLB)
+intent_identifier = diem.identifier.decode_intent(encoded_intent_identifier, identifier.TLB)
 print(f"Account (HEX) from intent: {utils.account_address_hex(intent_identifier.account_address)}")
 print(f"Amount from intent: {intent_identifier.amount}")
 print(f"Currency from intent: {intent_identifier.currency_code}")
@@ -372,19 +372,19 @@ print(f"Currency from intent: {intent_identifier.currency_code}")
 
 To monitor and react to transactions, you may subscribe to events.
 
-In the example below, we will setup a wallet with 100 Coin1 and then call the mint to add 1 Coin1 ten times.
+In the example below, we will setup a wallet with 100 XUS and then call the mint to add 1 XUS ten times.
 
 <Tabs groupId="syntax" defaultValue="python" values={syntax}>
 <TabItem value="python">
 
-```python title="https://github.com/libra/my-first-client/blob/master/python/src/get_events_example.py"
+```python title="https://github.com/diem/my-first-client/blob/master/python/src/get_events_example.py"
 import time
 from random import randrange
 from threading import Thread
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from libra import testnet, AuthKey, utils
+from diem import testnet, AuthKey, utils
 
-CURRENCY = "Coin1"
+CURRENCY = "XUS"
 
 """get_events_example demonstrates how to subscribe to a specific events stream base on events key"""
 
@@ -402,7 +402,7 @@ def main():
 
     # create new account
     faucet = testnet.Faucet(client)
-    testnet.Faucet.mint(faucet, auth_key.hex(), 100000000, CURRENCY)
+    faucet.mint(auth_key.hex(), 100000000, CURRENCY)
 
     # get account events key
     account = client.get_account(auth_key.account_address())
@@ -445,13 +445,13 @@ if __name__ == "__main__":
 </TabItem>
 <TabItem value="java">
 
-```java title="https://github.com/libra/my-first-client/blob/master/java/src/main/java/example/GetEventsExample.java"
+```java title="https://github.com/diem/my-first-client/blob/master/java/src/main/java/example/GetEventsExample.java"
 
 package example;
 import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters;
-import org.libra.*;
-import org.libra.jsonrpctypes.JsonRpc.Account;
-import org.libra.jsonrpctypes.JsonRpc.Event;
+import org.diem.*;
+import org.diem.jsonrpctypes.JsonRpc.Account;
+import org.diem.jsonrpctypes.JsonRpc.Event;
 import java.security.SecureRandom;
 import java.util.List;
 import java.util.concurrent.ThreadLocalRandom;
@@ -461,10 +461,10 @@ import java.util.concurrent.ThreadLocalRandom;
  */
 
 public class GetEventsExample {
-   public static final String CURRENCY_CODE = "Coin1";
-   public static void main(String[] args) throws LibraException {
+   public static final String CURRENCY_CODE = "XUS";
+   public static void main(String[] args) throws DiemException {
        //connect to testnet
-       LibraClient client = Testnet.createClient();
+       DiemClient client = Testnet.createClient();
        //create new account
        SecureRandom random = new SecureRandom();
        Ed25519PrivateKeyParameters privateKeyParams = new Ed25519PrivateKeyParameters(random);
@@ -479,14 +479,14 @@ public class GetEventsExample {
        //demonstrates events subscription
        subscribe(client, eventsKey);
    }
-   public static void subscribe(LibraClient client, String eventsKey) {
+   public static void subscribe(DiemClient client, String eventsKey) {
        Runnable listener = () -> {
            long start = 0;
            for (int i = 0; i &lt; 15; i++) {
                List&lt;Event> events;
                try {
                    events = client.getEvents(eventsKey, start, 10);
-               } catch (LibraException e) {
+               } catch (DiemException e) {
                    throw new RuntimeException(e);
                }
                start += events.size();
@@ -505,7 +505,7 @@ public class GetEventsExample {
        Thread listenerThread = new Thread(listener);
        listenerThread.start();
    }
-   private static void startMinter(LibraClient client, AuthKey authKey) {
+   private static void startMinter(DiemClient client, AuthKey authKey) {
        Runnable minter = () -> {
            for (int i = 0; i &lt; 10; i++) {
                int amount =  1000000;

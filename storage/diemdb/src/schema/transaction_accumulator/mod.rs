@@ -33,10 +33,10 @@ impl KeyCodec<TransactionAccumulatorSchema> for Position {
         Ok(self.to_postorder_index().to_be_bytes().to_vec())
     }
 
-    fn decode_key(data: &[u8]) -> Result<Self> {
+    fn decode_key(mut data: &[u8]) -> Result<Self> {
         ensure_slice_len_eq(data, size_of::<u64>())?;
-        let index = (&data[..]).read_u64::<BigEndian>()?;
-        Ok(Position::from_postorder_index(index)?)
+        let index = data.read_u64::<BigEndian>()?;
+        Position::from_postorder_index(index)
     }
 }
 
@@ -46,7 +46,7 @@ impl ValueCodec<TransactionAccumulatorSchema> for HashValue {
     }
 
     fn decode_value(data: &[u8]) -> Result<Self> {
-        Self::from_slice(data)
+        Self::from_slice(data).map_err(Into::into)
     }
 }
 

@@ -84,8 +84,9 @@ pub enum Tok {
     Native,
     Old,
     Public,
+    Script,
+    Friend,
     Requires,
-    Resource,
     /// Return in the specification language
     SpecReturn,
     /// Return statement in the Move language
@@ -99,7 +100,6 @@ pub enum Tok {
     U64,
     U128,
     Vector,
-    Copyable,
     While,
     LBrace,
     Pipe,
@@ -411,10 +411,12 @@ fn get_name_token(name: &str) -> Tok {
         "bool" => Tok::Bool,
         "break" => Tok::Break,
         "continue" => Tok::Continue,
+        "copy" => Tok::Copy,
         "else" => Tok::Else,
         "ensures" => Tok::Ensures,
         "false" => Tok::False,
         "freeze" => Tok::Freeze,
+        "friend" => Tok::Friend,
         "global" => Tok::Global,              // spec language
         "global_exists" => Tok::GlobalExists, // spec language
         "to_u8" => Tok::ToU8,
@@ -431,9 +433,9 @@ fn get_name_token(name: &str) -> Tok {
         "old" => Tok::Old,
         "public" => Tok::Public,
         "requires" => Tok::Requires,
-        "resource" => Tok::Resource,
         "RET" => Tok::SpecReturn,
         "return" => Tok::Return,
+        "script" => Tok::Script,
         "signer" => Tok::Signer,
         "struct" => Tok::Struct,
         "succeeds_if" => Tok::SucceedsIf,
@@ -442,7 +444,6 @@ fn get_name_token(name: &str) -> Tok {
         "u8" => Tok::U8,
         "u64" => Tok::U64,
         "u128" => Tok::U128,
-        "copyable" => Tok::Copyable,
         "while" => Tok::While,
         _ => Tok::NameValue,
     }

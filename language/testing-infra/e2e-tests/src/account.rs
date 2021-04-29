@@ -16,8 +16,8 @@ use diem_types::{
     chain_id::ChainId,
     event::EventHandle,
     transaction::{
-        authenticator::AuthenticationKey, Module, RawTransaction, Script, SignedTransaction,
-        TransactionPayload, WriteSetPayload,
+        authenticator::AuthenticationKey, Module, RawTransaction, Script, ScriptFunction,
+        SignedTransaction, TransactionPayload, WriteSetPayload,
     },
     write_set::{WriteOp, WriteSet, WriteSetMut},
 };
@@ -121,6 +121,10 @@ impl Account {
     /// the account will use [`GENESIS_KEYPAIR`][struct@GENESIS_KEYPAIR] as its keypair.
     pub fn new_diem_root() -> Self {
         Self::new_genesis_account(account_config::diem_root_address())
+    }
+
+    pub fn new_testing_dd() -> Self {
+        Self::new_genesis_account(account_config::testnet_dd_account_address())
     }
 
     /// Creates a new account representing treasury compliance in memory.
@@ -231,8 +235,18 @@ impl TransactionBuilder {
         self
     }
 
+    pub fn payload(mut self, payload: TransactionPayload) -> Self {
+        self.program = Some(payload);
+        self
+    }
+
     pub fn script(mut self, s: Script) -> Self {
         self.program = Some(TransactionPayload::Script(s));
+        self
+    }
+
+    pub fn script_function(mut self, f: ScriptFunction) -> Self {
+        self.program = Some(TransactionPayload::ScriptFunction(f));
         self
     }
 
@@ -321,7 +335,7 @@ impl Balance {
 
     /// Returns the Move Value for the account balance
     pub fn to_value(&self) -> Value {
-        Value::struct_(Struct::pack(vec![Value::u64(self.coin)], true))
+        Value::struct_(Struct::pack(vec![Value::u64(self.coin)]))
     }
 
     /// Returns the value layout for the account balance
@@ -363,7 +377,7 @@ impl AccountRoleSpecifier {
     }
 
     pub fn to_value(&self) -> Value {
-        Value::struct_(Struct::pack(vec![Value::u64(self.id())], true))
+        Value::struct_(Struct::pack(vec![Value::u64(self.id())]))
     }
 
     pub fn role_id_struct_tag() -> StructTag {
@@ -445,10 +459,10 @@ impl EventHandleGenerator {
     }
 
     pub fn to_value(&self) -> Value {
-        Value::struct_(Struct::pack(
-            vec![Value::u64(self.counter), Value::address(self.addr)],
-            true,
-        ))
+        Value::struct_(Struct::pack(vec![
+            Value::u64(self.counter),
+            Value::address(self.addr),
+        ]))
     }
     pub fn layout() -> MoveStructLayout {
         MoveStructLayout::new(vec![MoveTypeLayout::U64, MoveTypeLayout::Address])
@@ -630,30 +644,21 @@ impl AccountData {
             .collect();
         let event_generator = self.event_generator.to_value();
         let role_id = self.account_role.account_specifier.to_value();
-        let account = Value::struct_(Struct::pack(
-            vec![
-                // TODO: this needs to compute the auth key instead
-                Value::vector_u8(AuthenticationKey::ed25519(&self.account.pubkey).to_vec()),
-                self.withdrawal_capability.as_ref().unwrap().value(),
-                self.key_rotation_capability.as_ref().unwrap().value(),
-                Value::struct_(Struct::pack(
-                    vec![
-                        Value::u64(self.received_events.count()),
-                        Value::vector_u8(self.received_events.key().to_vec()),
-                    ],
-                    true,
-                )),
-                Value::struct_(Struct::pack(
-                    vec![
-                        Value::u64(self.sent_events.count()),
-                        Value::vector_u8(self.sent_events.key().to_vec()),
-                    ],
-                    true,
-                )),
-                Value::u64(self.sequence_number),
-            ],
-            true,
-        ));
+        let account = Value::struct_(Struct::pack(vec![
+            // TODO: this needs to compute the auth key instead
+            Value::vector_u8(AuthenticationKey::ed25519(&self.account.pubkey).to_vec()),
+            self.withdrawal_capability.as_ref().unwrap().value(),
+            self.key_rotation_capability.as_ref().unwrap().value(),
+            Value::struct_(Struct::pack(vec![
+                Value::u64(self.received_events.count()),
+                Value::vector_u8(self.received_events.key().to_vec()),
+            ])),
+            Value::struct_(Struct::pack(vec![
+                Value::u64(self.sent_events.count()),
+                Value::vector_u8(self.sent_events.key().to_vec()),
+            ])),
+            Value::u64(self.sequence_number),
+        ]));
         (account, balances, event_generator, role_id)
     }
 
@@ -795,10 +800,9 @@ impl WithdrawCapability {
     }
 
     pub fn value(&self) -> Value {
-        Value::vector_resource_for_testing_only(vec![Value::struct_(Struct::pack(
-            vec![Value::address(self.account_address)],
-            true,
-        ))])
+        Value::vector_for_testing_only(vec![Value::struct_(Struct::pack(vec![Value::address(
+            self.account_address,
+        )]))])
     }
 }
 
@@ -816,10 +820,9 @@ impl KeyRotationCapability {
     }
 
     pub fn value(&self) -> Value {
-        Value::vector_resource_for_testing_only(vec![Value::struct_(Struct::pack(
-            vec![Value::address(self.account_address)],
-            true,
-        ))])
+        Value::vector_for_testing_only(vec![Value::struct_(Struct::pack(vec![Value::address(
+            self.account_address,
+        )]))])
     }
 }
 
@@ -834,6 +837,6 @@ impl FreezingBit {
     }
 
     pub fn value() -> Value {
-        Value::struct_(Struct::pack(vec![Value::bool(false)], true))
+        Value::struct_(Struct::pack(vec![Value::bool(false)]))
     }
 }

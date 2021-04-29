@@ -2,29 +2,26 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{
-    changed_since::changed_since_impl,
+    cargo::selected_package::{SelectedInclude, SelectedPackages},
     config::CargoConfig,
-    context::XContext,
     utils::{apply_sccache_if_possible, project_root},
     Result,
 };
-use anyhow::anyhow;
-use guppy::graph::DependencyDirection;
+use anyhow::{anyhow, Context};
+use cargo_metadata::Message;
 use indexmap::map::IndexMap;
 use log::{info, warn};
 use std::{
-    collections::BTreeSet,
-    env,
     ffi::{OsStr, OsString},
+    io::Cursor,
     path::Path,
     process::{Command, Output, Stdio},
     time::Instant,
 };
-use structopt::StructOpt;
 
-const RUST_TOOLCHAIN_VERSION: &str = include_str!("../../../rust-toolchain");
-const RUSTUP_TOOLCHAIN: &str = "RUSTUP_TOOLCHAIN";
-const CARGO: &str = "CARGO";
+pub mod build_args;
+pub mod selected_package;
+
 const SECRET_ENVS: &[&str] = &["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"];
 pub struct Cargo {
     inner: Command,
@@ -38,46 +35,7 @@ impl Cargo {
         command: S,
         attempt_sccache: bool,
     ) -> Self {
-        // run rustup to find correct toolchain
-        let output = Command::new("rustup")
-            .arg("which")
-            .arg("--toolchain")
-            .arg(&cargo_config.toolchain)
-            .arg("cargo")
-            .output()
-            .expect("failed to execute rustup which");
-        let (cargo_binary, cargo_flags) = if output.status.success() {
-            (
-                String::from_utf8(output.stdout)
-                    .expect("error parsing rustup which output into utf8"),
-                &cargo_config.flags,
-            )
-        } else {
-            println!(
-                "WARN: Rust toolchain {} not installed; falling back to legacy Cargo resolver.",
-                cargo_config.toolchain,
-            );
-            println!(
-                "WARN: Run `rustup toolchain install {}` to use the new resolver.",
-                cargo_config.toolchain,
-            );
-            ("cargo".to_string(), &None)
-        };
-
-        let mut inner = Command::new(str::trim(&cargo_binary));
-        if let Some(flags) = &cargo_flags {
-            inner.arg(&flags);
-        }
-
-        // The environment is inherited for child processes so we only need to set RUSTUP_TOOLCHAIN
-        // if it isn't already present in the environment
-        if env::var_os(RUSTUP_TOOLCHAIN).is_none() {
-            inner.env(RUSTUP_TOOLCHAIN, RUST_TOOLCHAIN_VERSION.trim());
-        }
-
-        // Set the `CARGO` envvar with the path to the cargo binary being used
-        inner.env(CARGO, cargo_binary.trim());
-
+        let mut inner = Command::new("cargo");
         //sccache apply
         let envs: IndexMap<OsString, Option<OsString>> = if attempt_sccache {
             let result = apply_sccache_if_possible(cargo_config);
@@ -114,11 +72,6 @@ impl Cargo {
 
     pub fn all(&mut self) -> &mut Self {
         self.inner.arg("--all");
-        self
-    }
-
-    pub fn all_targets(&mut self) -> &mut Self {
-        self.inner.arg("--all-targets");
         self
     }
 
@@ -213,12 +166,10 @@ impl Cargo {
     }
 
     /// Runs this command, capturing the standard output into a `Vec<u8>`.
-    /// No logging/timing will be displayed as the result of this call from x.
-    #[allow(dead_code)]
+    /// Standard error is forwarded.
     pub fn run_with_output(&mut self) -> Result<Vec<u8>> {
         self.inner.stderr(Stdio::inherit());
-        // Since system out hijacked don't log for this command
-        self.do_run(false).map(|o| o.stdout)
+        self.do_run(true).map(|o| o.stdout)
     }
 
     /// Internal run command, where the magic happens.
@@ -280,10 +231,7 @@ impl Cargo {
     }
 }
 
-#[derive(Debug, Default)]
-pub struct CargoArgs {
-    pub all_targets: bool,
-}
+// TODO: this should really be a struct instead of an enum with repeated fields.
 
 /// Represents an invocations of cargo that will call multiple other invocations of
 /// cargo based on groupings implied by the contents of <workspace-root>/x.toml.
@@ -294,9 +242,20 @@ pub enum CargoCommand<'a> {
         args: &'a [OsString],
         env: &'a [(&'a str, Option<&'a str>)],
     },
-    Check(&'a CargoConfig),
-    Clippy(&'a CargoConfig, &'a [OsString]),
-    Fix(&'a CargoConfig, &'a [OsString]),
+    Check {
+        cargo_config: &'a CargoConfig,
+        direct_args: &'a [OsString],
+    },
+    Clippy {
+        cargo_config: &'a CargoConfig,
+        direct_args: &'a [OsString],
+        args: &'a [OsString],
+    },
+    Fix {
+        cargo_config: &'a CargoConfig,
+        direct_args: &'a [OsString],
+        args: &'a [OsString],
+    },
     Test {
         cargo_config: &'a CargoConfig,
         direct_args: &'a [OsString],
@@ -315,38 +274,62 @@ impl<'a> CargoCommand<'a> {
     pub fn cargo_config(&self) -> &CargoConfig {
         match self {
             CargoCommand::Bench { cargo_config, .. } => cargo_config,
-            CargoCommand::Check(config) => config,
-            CargoCommand::Clippy(config, _) => config,
-            CargoCommand::Fix(config, _) => config,
+            CargoCommand::Check { cargo_config, .. } => cargo_config,
+            CargoCommand::Clippy { cargo_config, .. } => cargo_config,
+            CargoCommand::Fix { cargo_config, .. } => cargo_config,
             CargoCommand::Test { cargo_config, .. } => cargo_config,
             CargoCommand::Build { cargo_config, .. } => cargo_config,
         }
     }
 
-    pub fn run_on_packages(&self, packages: &SelectedPackages<'_>, args: &CargoArgs) -> Result<()> {
+    pub fn run_on_packages(&self, packages: &SelectedPackages<'_>) -> Result<()> {
         // Early return if we have no packages to run.
         if !packages.should_invoke() {
             info!("no packages to {}: exiting early", self.as_str());
             return Ok(());
         }
 
+        let mut cargo = self.prepare_cargo(packages);
+        cargo.run()
+    }
+
+    /// Runs this command on the selected packages, returning the standard output as a bytestring.
+    pub fn run_capture_messages(
+        &self,
+        packages: &SelectedPackages<'_>,
+    ) -> Result<impl Iterator<Item = Result<Message>>> {
+        // Early return if we have no packages to run.
+        let output = if !packages.should_invoke() {
+            info!("no packages to {}: exiting early", self.as_str());
+            vec![]
+        } else {
+            let mut cargo = self.prepare_cargo(packages);
+            cargo.args(&["--message-format", "json-render-diagnostics"]);
+            cargo.run_with_output()?
+        };
+
+        Ok(Message::parse_stream(Cursor::new(output))
+            .map(|message| message.context("error while parsing message from Cargo")))
+    }
+
+    fn prepare_cargo(&self, packages: &SelectedPackages<'_>) -> Cargo {
         let mut cargo = Cargo::new(self.cargo_config(), self.as_str(), true);
-        Self::apply_args(&mut cargo, args);
         cargo
             .current_dir(project_root())
             .args(self.direct_args())
             .packages(packages)
             .pass_through(self.pass_through_args())
-            .envs(self.get_extra_env().to_owned())
-            .run()
+            .envs(self.get_extra_env().to_owned());
+
+        cargo
     }
 
     pub fn as_str(&self) -> &'static str {
         match self {
             CargoCommand::Bench { .. } => "bench",
-            CargoCommand::Check(_) => "check",
-            CargoCommand::Clippy(_, _) => "clippy",
-            CargoCommand::Fix(_, _) => "fix",
+            CargoCommand::Check { .. } => "check",
+            CargoCommand::Clippy { .. } => "clippy",
+            CargoCommand::Fix { .. } => "fix",
             CargoCommand::Test { .. } => "test",
             CargoCommand::Build { .. } => "build",
         }
@@ -355,9 +338,9 @@ impl<'a> CargoCommand<'a> {
     fn pass_through_args(&self) -> &[OsString] {
         match self {
             CargoCommand::Bench { args, .. } => args,
-            CargoCommand::Check(_) => &[],
-            CargoCommand::Clippy(_, args) => args,
-            CargoCommand::Fix(_, args) => args,
+            CargoCommand::Check { .. } => &[],
+            CargoCommand::Clippy { args, .. } => args,
+            CargoCommand::Fix { args, .. } => args,
             CargoCommand::Test { args, .. } => args,
             CargoCommand::Build { args, .. } => args,
         }
@@ -366,9 +349,9 @@ impl<'a> CargoCommand<'a> {
     fn direct_args(&self) -> &[OsString] {
         match self {
             CargoCommand::Bench { direct_args, .. } => direct_args,
-            CargoCommand::Check(_) => &[],
-            CargoCommand::Clippy(_, _) => &[],
-            CargoCommand::Fix(_, _) => &[],
+            CargoCommand::Check { direct_args, .. } => direct_args,
+            CargoCommand::Clippy { direct_args, .. } => direct_args,
+            CargoCommand::Fix { direct_args, .. } => direct_args,
             CargoCommand::Test { direct_args, .. } => direct_args,
             CargoCommand::Build { direct_args, .. } => direct_args,
         }
@@ -377,190 +360,11 @@ impl<'a> CargoCommand<'a> {
     pub fn get_extra_env(&self) -> &[(&str, Option<&str>)] {
         match self {
             CargoCommand::Bench { env, .. } => env,
-            CargoCommand::Check(_) => &[],
-            CargoCommand::Clippy(_, _) => &[],
-            CargoCommand::Fix(_, _) => &[],
+            CargoCommand::Check { .. } => &[],
+            CargoCommand::Clippy { .. } => &[],
+            CargoCommand::Fix { .. } => &[],
             CargoCommand::Test { env, .. } => env,
             CargoCommand::Build { env, .. } => env,
         }
-    }
-
-    fn apply_args(cargo: &mut Cargo, args: &CargoArgs) {
-        if args.all_targets {
-            cargo.all_targets();
-        }
-    }
-}
-
-/// Arguments for the Cargo package selector.
-#[derive(Debug, StructOpt)]
-pub struct SelectedPackageArgs {
-    #[structopt(long, short, number_of_values = 1)]
-    /// Run on the provided packages
-    pub(crate) package: Vec<String>,
-    #[structopt(long, short)]
-    /// Run on packages changed since the merge base of this commit
-    changed_since: Option<String>,
-    #[structopt(long)]
-    /// Run on all packages in the workspace
-    pub(crate) workspace: bool,
-}
-
-impl SelectedPackageArgs {
-    pub fn to_selected_packages<'a>(&'a self, xctx: &'a XContext) -> Result<SelectedPackages<'a>> {
-        // Mutually exclusive options -- only one of these can be provided.
-        {
-            let mut exclusive = vec![];
-            if self.changed_since.is_some() {
-                exclusive.push("--changed-since");
-            }
-            if !self.package.is_empty() {
-                exclusive.push("--package");
-            }
-            if self.workspace {
-                exclusive.push("--workspace");
-            }
-
-            if exclusive.len() > 1 {
-                let err_msg = exclusive.join(", ");
-                return Err(anyhow!("can only specify one of {}", err_msg));
-            }
-        }
-
-        if self.workspace {
-            Ok(SelectedPackages::workspace())
-        } else if !self.package.is_empty() {
-            Ok(SelectedPackages::includes(
-                self.package.iter().map(|s| s.as_str()),
-            ))
-        } else if let Some(base) = &self.changed_since {
-            let affected_set = changed_since_impl(&xctx, &base)?;
-
-            Ok(SelectedPackages::includes(
-                affected_set
-                    .packages(DependencyDirection::Forward)
-                    .map(|package| package.name()),
-            ))
-        } else {
-            SelectedPackages::default_cwd(xctx)
-        }
-    }
-}
-
-/// Package selector for Cargo commands.
-///
-/// This may represent any of the following:
-/// * the entire workspace
-/// * a single package without arguments
-/// * a list of packages
-///
-/// This may also exclude a set of packages. Note that currently, excludes only work in the "entire
-/// workspace" and "list of packages" situations. They are ignored if a specific local package is
-/// being built. (This is an extension on top of Cargo itself, which only supports --exclude
-/// together with --workspace.)
-///
-/// Excludes are applied after includes. This allows changed-since to support excludes, even if only
-/// a subset of the workspace changes.
-#[derive(Clone, Debug)]
-pub struct SelectedPackages<'a> {
-    includes: SelectedInclude<'a>,
-    excludes: BTreeSet<&'a str>,
-}
-
-impl<'a> SelectedPackages<'a> {
-    /// Returns a new `CargoPackages` that selects all packages in this workspace.
-    pub fn workspace() -> Self {
-        Self {
-            includes: SelectedInclude::Workspace,
-            excludes: BTreeSet::new(),
-        }
-    }
-
-    /// Returns a new `CargoPackages` that selects the default set of packages for the current
-    /// working directory. This may either be the entire workspace or a set of packages inside the
-    /// workspace.
-    pub fn default_cwd(xctx: &'a XContext) -> Result<Self> {
-        let includes = if xctx.core().current_dir_is_root() {
-            SelectedInclude::Workspace
-        } else {
-            // Select all packages that begin with the current rel dir.
-            let rel = xctx.core().current_rel_dir();
-            let workspace = xctx.core().package_graph()?.workspace();
-            let selected = workspace.iter_by_path().filter_map(|(path, package)| {
-                // If we're in devtools, run tests for all packages inside devtools.
-                // If we're in devtools/x/src, run tests for devtools/x.
-                if path.starts_with(rel) || rel.starts_with(path) {
-                    Some(package.name())
-                } else {
-                    None
-                }
-            });
-            SelectedInclude::Includes(selected.collect())
-        };
-        Ok(Self {
-            includes,
-            excludes: BTreeSet::new(),
-        })
-    }
-
-    /// Returns a new `CargoPackages` that selects the specified packages.
-    pub fn includes(package_names: impl IntoIterator<Item = &'a str>) -> Self {
-        Self {
-            includes: SelectedInclude::Includes(package_names.into_iter().collect()),
-            excludes: BTreeSet::new(),
-        }
-    }
-
-    /// Adds excludes for this `CargoPackages`.
-    ///
-    /// The excludes are currently ignored if the local package is built.
-    pub fn add_excludes(&mut self, exclude_names: impl IntoIterator<Item = &'a str>) -> &mut Self {
-        self.excludes.extend(exclude_names);
-        self
-    }
-
-    // ---
-    // Helper methods
-    // ---
-
-    fn should_invoke(&self) -> bool {
-        match &self.includes {
-            SelectedInclude::Workspace => true,
-            SelectedInclude::Includes(includes) => {
-                // If everything in the include set is excluded, a command invocation isn't needed.
-                includes.iter().any(|p| !self.excludes.contains(p))
-            }
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-enum SelectedInclude<'a> {
-    Workspace,
-    Includes(Vec<&'a str>),
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    #[test]
-    fn test_should_invoke() {
-        let packages = SelectedPackages::workspace();
-        assert!(packages.should_invoke(), "workspace => invoke");
-
-        let mut packages = SelectedPackages::includes(vec!["foo", "bar"]);
-        packages.add_excludes(vec!["foo"]);
-        assert!(packages.should_invoke(), "non-empty packages => invoke");
-
-        let packages = SelectedPackages::includes(vec![]);
-        assert!(!packages.should_invoke(), "no packages => do not invoke");
-
-        let mut packages = SelectedPackages::includes(vec!["foo", "bar"]);
-        packages.add_excludes(vec!["foo", "bar"]);
-        assert!(
-            !packages.should_invoke(),
-            "all packages excluded => do not invoke"
-        );
     }
 }

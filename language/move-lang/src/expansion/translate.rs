@@ -9,10 +9,11 @@ use crate::{
         byte_string, hex_string,
     },
     parser::ast::{
-        self as P, ConstantName, Field, FunctionName, FunctionVisibility, Kind, ModuleIdent,
-        ModuleIdent_, ModuleName, StructName, Var,
+        self as P, Ability, ConstantName, Field, FunctionName, FunctionVisibility, ModuleIdent,
+        ModuleName, StructName, Var,
     },
     shared::{unique_map::UniqueMap, *},
+    FullyCompiledProgram,
 };
 use move_ir_types::location::*;
 use std::{
@@ -114,19 +115,47 @@ impl Context {
 // Entry
 //**************************************************************************************************
 
-pub fn program(prog: P::Program, sender: Option<Address>) -> (E::Program, Errors) {
+pub fn program(
+    pre_compiled_lib: Option<&FullyCompiledProgram>,
+    prog: P::Program,
+    sender: Option<Address>,
+) -> (E::Program, Errors) {
     let module_members = {
         let mut members = UniqueMap::new();
         all_module_members(&mut members, sender, &prog.lib_definitions);
         all_module_members(&mut members, sender, &prog.source_definitions);
+        if let Some(pre_compiled) = pre_compiled_lib {
+            assert!(pre_compiled.parser.1.source_definitions.is_empty());
+            for def in pre_compiled.parser.1.lib_definitions.iter() {
+                match def {
+                    P::Definition::Module(_) => {
+                        unimplemented!("top level modules not supported in pre compiled lib")
+                    }
+                    P::Definition::Address(_, a, ms) => {
+                        for m in ms {
+                            if members.contains_key_(&(*a, m.name.value().to_owned())) {
+                                continue;
+                            }
+                            module_members(&mut members, *a, m)
+                        }
+                    }
+                    P::Definition::Script(_) => (),
+                }
+            }
+        }
         members
     };
     let mut context = Context::new(module_members);
     let mut module_map = UniqueMap::new();
     let mut scripts = vec![];
 
+    let P::Program {
+        source_definitions,
+        lib_definitions,
+    } = prog;
+
     context.is_source_module = false;
-    for def in prog.lib_definitions {
+    for def in lib_definitions {
         match def {
             P::Definition::Module(m) => module(&mut context, sender, &mut module_map, m),
             P::Definition::Address(_, addr, ms) => {
@@ -139,7 +168,7 @@ pub fn program(prog: P::Program, sender: Option<Address>) -> (E::Program, Errors
     }
 
     context.is_source_module = true;
-    for def in prog.source_definitions {
+    for def in source_definitions {
         match def {
             P::Definition::Module(m) => module(&mut context, sender, &mut module_map, m),
             P::Definition::Address(_, addr, ms) => {
@@ -177,6 +206,8 @@ pub fn program(prog: P::Program, sender: Option<Address>) -> (E::Program, Errors
         }
         keyed
     };
+
+    super::dependency_ordering::verify(&mut context.errors, &mut module_map);
     let prog = E::Program {
         modules: module_map,
         scripts,
@@ -193,7 +224,7 @@ fn module(
     assert!(context.address == None);
     set_sender_address(context, module_def.loc, address);
     let (mident, mod_) = module_(context, module_def);
-    if let Err((old_loc, _)) = module_map.add(mident.clone(), mod_) {
+    if let Err((mident, (old_loc, _))) = module_map.add(mident, mod_) {
         let mmsg = format!("Duplicate definition for module '{}'", mident);
         context.error(vec![
             (mident.loc(), mmsg),
@@ -222,13 +253,20 @@ fn set_sender_address(context: &mut Context, loc: Loc, sender: Option<Address>) 
 fn module_(context: &mut Context, mdef: P::ModuleDefinition) -> (ModuleIdent, E::ModuleDefinition) {
     let P::ModuleDefinition { loc, name, members } = mdef;
     let _ = check_restricted_self_name(context, "module", &name.0);
+    if name.value().starts_with(|c| c == '_') {
+        let msg = format!(
+            "Invalid module name '{}'. Module names cannot start with '_'",
+            name,
+        );
+        context.error(vec![(name.loc(), msg)]);
+    }
 
-    let name_loc = name.loc();
-    let mident_ = ModuleIdent_ {
-        address: context.cur_address(),
-        name,
+    let name = name.0;
+    let name_loc = name.loc;
+    let current_module = ModuleIdent {
+        locs: (name_loc, name_loc),
+        value: (context.cur_address(), name.value),
     };
-    let current_module = ModuleIdent(sp(name_loc, mident_));
 
     let mut new_scope = AliasMap::new();
     module_self_aliases(&mut new_scope, &current_module);
@@ -242,6 +280,7 @@ fn module_(context: &mut Context, mdef: P::ModuleDefinition) -> (ModuleIdent, E:
         "ICE there should be no aliases entering a module"
     );
 
+    let mut friends = UniqueMap::new();
     let mut functions = UniqueMap::new();
     let mut constants = UniqueMap::new();
     let mut structs = UniqueMap::new();
@@ -249,6 +288,7 @@ fn module_(context: &mut Context, mdef: P::ModuleDefinition) -> (ModuleIdent, E:
     for member in members {
         match member {
             P::ModuleMember::Use(_) => unreachable!(),
+            P::ModuleMember::Friend(f) => friend(context, &mut friends, f),
             P::ModuleMember::Function(mut f) => {
                 if !context.is_source_module {
                     f.body.value = P::FunctionBody_::Native
@@ -256,12 +296,7 @@ fn module_(context: &mut Context, mdef: P::ModuleDefinition) -> (ModuleIdent, E:
                 function(context, &mut functions, f)
             }
             P::ModuleMember::Constant(c) => constant(context, &mut constants, c),
-            P::ModuleMember::Struct(mut s) => {
-                if !context.is_source_module {
-                    s.fields = P::StructFields::Native(s.loc)
-                }
-                struct_def(context, &mut structs, s)
-            }
+            P::ModuleMember::Struct(s) => struct_def(context, &mut structs, s),
             P::ModuleMember::Spec(s) => specs.push(spec(context, s)),
         }
     }
@@ -270,6 +305,8 @@ fn module_(context: &mut Context, mdef: P::ModuleDefinition) -> (ModuleIdent, E:
     let def = E::ModuleDefinition {
         loc,
         is_source_module: context.is_source_module,
+        dependency_order: 0,
+        friends,
         structs,
         constants,
         functions,
@@ -305,13 +342,30 @@ fn script_(context: &mut Context, pscript: P::Script) -> E::Script {
 
     let mut constants = UniqueMap::new();
     for c in pconstants {
+        // TODO remove after Self rework
+        check_valid_module_member_name(context, ModuleMemberKind::Constant, c.name.0.clone());
         constant(context, &mut constants, c);
     }
 
+    // TODO remove after Self rework
+    check_valid_module_member_name(
+        context,
+        ModuleMemberKind::Function,
+        pfunction.name.0.clone(),
+    );
     let (function_name, function) = function_(context, pfunction);
-    if let FunctionVisibility::Public(loc) = &function.visibility {
-        let msg = "Extraneous 'public' modifier. Script functions are always public";
-        context.error(vec![(*loc, msg)]);
+    match &function.visibility {
+        FunctionVisibility::Public(loc)
+        | FunctionVisibility::Script(loc)
+        | FunctionVisibility::Friend(loc) => {
+            let msg = format!(
+                "Extraneous '{}' modifier. Script functions are always '{}'",
+                function.visibility,
+                FunctionVisibility::SCRIPT,
+            );
+            context.error(vec![(*loc, msg)]);
+        }
+        FunctionVisibility::Internal => (),
     }
     match &function.body {
         sp!(_, E::FunctionBody_::Defined(_)) => (),
@@ -336,10 +390,10 @@ fn script_(context: &mut Context, pscript: P::Script) -> E::Script {
 // Aliases
 //**************************************************************************************************
 
-fn all_module_members(
+fn all_module_members<'a>(
     members: &mut UniqueMap<ModuleIdent, ModuleMembers>,
     sender: Option<Address>,
-    defs: &[P::Definition],
+    defs: impl IntoIterator<Item = &'a P::Definition>,
 ) {
     for def in defs {
         match def {
@@ -359,11 +413,10 @@ fn module_members(
     address: Address,
     m: &P::ModuleDefinition,
 ) {
-    let mident_ = ModuleIdent_ {
-        address,
-        name: m.name.clone(),
+    let mident = ModuleIdent {
+        locs: (m.name.loc(), m.name.loc()),
+        value: (address, m.name.value().to_string()),
     };
-    let mident = ModuleIdent(sp(m.name.loc(), mident_));
     let mut cur_members = members.remove(&mident).unwrap_or_else(ModuleMembers::new);
     for mem in &m.members {
         use P::{SpecBlockMember_ as SBM, SpecBlockTarget_ as SBT, SpecBlock_ as SB};
@@ -377,7 +430,16 @@ fn module_members(
             P::ModuleMember::Struct(s) => {
                 cur_members.insert(s.name.0.clone(), ModuleMemberKind::Struct);
             }
-            P::ModuleMember::Spec(sp!(_, SB { target, members, .. })) => match &target.value {
+            P::ModuleMember::Spec(
+                sp!(
+                    _,
+                    SB {
+                        target,
+                        members,
+                        ..
+                    }
+                ),
+            ) => match &target.value {
                 SBT::Schema(n, _) => {
                     cur_members.insert(n.clone(), ModuleMemberKind::Schema);
                 }
@@ -390,7 +452,7 @@ fn module_members(
                 }
                 _ => (),
             },
-            P::ModuleMember::Use(_) => (),
+            P::ModuleMember::Use(_) | P::ModuleMember::Friend(_) => (),
         };
     }
     members.add(mident, cur_members).unwrap();
@@ -426,6 +488,10 @@ fn aliases_from_member(
             use_(context, acc, u);
             None
         }
+        f @ P::ModuleMember::Friend(_) => {
+            // friend declarations do not produce implicit aliases
+            Some(f)
+        }
         P::ModuleMember::Function(f) => {
             let n = f.name.0.clone();
             check_name_and_add_implicit_alias!(ModuleMemberKind::Function, n);
@@ -442,7 +508,14 @@ fn aliases_from_member(
             Some(P::ModuleMember::Struct(s))
         }
         P::ModuleMember::Spec(s) => {
-            let sp!(_, SB { target, members, .. }) = &s;
+            let sp!(
+                _,
+                SB {
+                    target,
+                    members,
+                    ..
+                }
+            ) = &s;
             match &target.value {
                 SBT::Schema(n, _) => {
                     check_name_and_add_implicit_alias!(ModuleMemberKind::Schema, n.clone());
@@ -471,7 +544,8 @@ fn use_(context: &mut Context, acc: &mut AliasMap, u: P::Use) {
     };
     macro_rules! add_module_alias {
         ($ident:expr, $alias_opt:expr) => {{
-            let alias: Name = $alias_opt.unwrap_or_else(|| $ident.0.value.name.0.clone());
+            let alias: Name =
+                $alias_opt.unwrap_or_else(|| sp($ident.locs.1, $ident.value.1.clone()));
             if let Err(()) = check_restricted_self_name(context, "module alias", &alias) {
                 return;
             }
@@ -480,7 +554,7 @@ fn use_(context: &mut Context, acc: &mut AliasMap, u: P::Use) {
                 duplicate_module_alias(context, old_loc, alias)
             }
         }};
-    };
+    }
     match u {
         P::Use::Module(mident, alias_opt) => {
             if !context.module_members.contains_key(&mident) {
@@ -598,16 +672,17 @@ fn struct_def_(
     let P::StructDefinition {
         loc,
         name,
-        resource_opt,
+        abilities: abilities_vec,
         type_parameters: pty_params,
         fields: pfields,
     } = pstruct;
     let old_aliases = context.new_alias_scope(AliasMap::new());
     let type_parameters = type_parameters(context, pty_params);
+    let abilities = ability_set(context, "modifier", abilities_vec);
     let fields = struct_fields(context, &name, pfields);
     let sdef = E::StructDefinition {
         loc,
-        resource_opt,
+        abilities,
         type_parameters,
         fields,
     };
@@ -627,7 +702,7 @@ fn struct_fields(
     let mut field_map = UniqueMap::new();
     for (idx, (field, pt)) in pfields_vec.into_iter().enumerate() {
         let t = type_(context, pt);
-        if let Err(old_loc) = field_map.add(field.clone(), (idx, t)) {
+        if let Err((field, old_loc)) = field_map.add(field, (idx, t)) {
             context.error(vec![
                 (
                     field.loc(),
@@ -641,6 +716,50 @@ fn struct_fields(
         }
     }
     E::StructFields::Defined(field_map)
+}
+
+//**************************************************************************************************
+// Friends
+//**************************************************************************************************
+
+fn friend(context: &mut Context, friends: &mut UniqueMap<ModuleIdent, Loc>, pfriend: P::Friend) {
+    match friend_(context, pfriend) {
+        Some((mident, loc)) => {
+            if let Err((mident, (old_friend_loc, _))) = friends.add(mident, loc) {
+                let msg = format!(
+                    "Duplicate friend declaration '{}'. Friend declarations in a module must be \
+                     unique",
+                    mident
+                );
+                context.error(vec![
+                    (loc, msg),
+                    (old_friend_loc, "Previously declared here".into()),
+                ]);
+            }
+        }
+        None => assert!(context.has_errors()),
+    };
+}
+
+fn friend_(context: &mut Context, sp!(loc, pfriend): P::Friend) -> Option<(ModuleIdent, Loc)> {
+    assert!(context.exp_specs.is_empty());
+    let mident_opt = match pfriend {
+        P::Friend_::Module(mname) => match context.aliases.module_alias_get(&mname.0).cloned() {
+            None => {
+                context.error(vec![(
+                    mname.loc(),
+                    format!("Unbound module alias '{}'", mname),
+                )]);
+                None
+            }
+            Some(mident) => {
+                let (_, value) = mident.drop_loc();
+                Some(ModuleIdent::add_loc((mname.loc(), mname.loc()), value))
+            }
+        },
+        P::Friend_::QualifiedModule(mident) => Some(mident),
+    };
+    mident_opt.map(|mident| (mident, loc))
 }
 
 //**************************************************************************************************
@@ -782,13 +901,7 @@ fn spec(context: &mut Context, sp!(loc, pspec): P::SpecBlock) -> E::SpecBlock {
 
     let members = pmembers
         .into_iter()
-        .filter_map(|m| {
-            let m = spec_member(context, m);
-            if m.is_none() {
-                assert!(context.has_errors())
-            };
-            m
-        })
+        .map(|m| spec_member(context, m))
         .collect();
 
     context.set_to_outer_scope(old_aliases);
@@ -797,10 +910,7 @@ fn spec(context: &mut Context, sp!(loc, pspec): P::SpecBlock) -> E::SpecBlock {
     sp(loc, E::SpecBlock_ { target, members })
 }
 
-fn spec_member(
-    context: &mut Context,
-    sp!(loc, pm): P::SpecBlockMember,
-) -> Option<E::SpecBlockMember> {
+fn spec_member(context: &mut Context, sp!(loc, pm): P::SpecBlockMember) -> E::SpecBlockMember {
     use E::SpecBlockMember_ as EM;
     use P::SpecBlockMember_ as PM;
     let em = match pm {
@@ -896,7 +1006,7 @@ fn spec_member(
             EM::Pragma { properties }
         }
     };
-    Some(sp(loc, em))
+    sp(loc, em)
 }
 
 fn pragma_property(context: &mut Context, sp!(loc, pp_): P::PragmaProperty) -> E::PragmaProperty {
@@ -904,23 +1014,53 @@ fn pragma_property(context: &mut Context, sp!(loc, pp_): P::PragmaProperty) -> E
         name,
         value: pv_opt,
     } = pp_;
-    let value = pv_opt.and_then(|pv| value(context, pv));
+    let value = pv_opt.and_then(|pv| pragma_value(context, pv));
     sp(loc, E::PragmaProperty_ { name, value })
+}
+
+fn pragma_value(context: &mut Context, pv: P::PragmaValue) -> Option<E::PragmaValue> {
+    match pv {
+        P::PragmaValue::Literal(v) => value(context, v).map(E::PragmaValue::Literal),
+        P::PragmaValue::Ident(ma) => {
+            module_access(context, Access::Term, ma).map(E::PragmaValue::Ident)
+        }
+    }
 }
 
 //**************************************************************************************************
 // Types
 //**************************************************************************************************
 
-fn type_parameters(context: &mut Context, pty_params: Vec<(Name, Kind)>) -> Vec<(Name, Kind)> {
+fn ability_set(context: &mut Context, case: &str, abilities_vec: Vec<Ability>) -> E::AbilitySet {
+    let mut set = E::AbilitySet::empty();
+    for ability in abilities_vec {
+        let loc = ability.loc;
+        if let Err(prev_loc) = set.add(ability) {
+            context.error(vec![
+                (loc, format!("Duplicate '{}' ability {}", ability, case)),
+                (prev_loc, "Previously given".to_string()),
+            ])
+        }
+    }
+    set
+}
+
+fn type_parameters(
+    context: &mut Context,
+    pty_params: Vec<(Name, Vec<Ability>)>,
+) -> Vec<(Name, E::AbilitySet)> {
     assert!(
         context.aliases.current_scope_is_empty(),
         "ICE alias scope should be cleared before handling type parameters"
     );
-    for (name, _) in &pty_params {
-        context.aliases.remove_member_alias(name)
-    }
     pty_params
+        .into_iter()
+        .map(|(name, constraints_vec)| {
+            context.aliases.remove_member_alias(&name);
+            let constraints = ability_set(context, "constraint", constraints_vec);
+            (name, constraints)
+        })
+        .collect()
 }
 
 fn type_(context: &mut Context, sp!(loc, pt_): P::Type) -> E::Type {
@@ -1181,6 +1321,27 @@ fn exp_(context: &mut Context, sp!(loc, pe_): P::Exp) -> E::Exp {
                 }
             }
         }
+        PE::Quant(k, prs, ptrs, pc, pe) => {
+            if !context.require_spec_context(loc, "expression only allowed in specifications") {
+                assert!(context.has_errors());
+                EE::UnresolvedError
+            } else {
+                let rs_opt = bind_with_range_list(context, prs);
+                let rtrs = ptrs
+                    .into_iter()
+                    .map(|trs| trs.into_iter().map(|tr| exp_(context, tr)).collect())
+                    .collect();
+                let rc = pc.map(|c| Box::new(exp_(context, *c)));
+                let re = exp_(context, *pe);
+                match rs_opt {
+                    Some(rs) => EE::Quant(k, rs, rtrs, rc, Box::new(re)),
+                    None => {
+                        assert!(context.has_errors());
+                        EE::UnresolvedError
+                    }
+                }
+            }
+        }
         PE::ExpList(pes) => {
             assert!(pes.len() > 1);
             EE::ExpList(exps(context, pes))
@@ -1246,6 +1407,13 @@ fn exp_(context: &mut Context, sp!(loc, pe_): P::Exp) -> E::Exp {
             }
         }
         PE::Annotate(e, ty) => EE::Annotate(exp(context, *e), type_(context, ty)),
+        PE::Spec(_) if context.in_spec_context => {
+            context.error(vec![(
+                loc,
+                "'spec' blocks cannot be used inside of a spec context",
+            )]);
+            EE::UnresolvedError
+        }
         PE::Spec(spec_block) => {
             let (spec_id, unbound_names) = context.bind_exp_spec(spec_block);
             EE::Spec(spec_id, unbound_names)
@@ -1308,7 +1476,7 @@ fn fields<T>(
 ) -> Fields<T> {
     let mut fmap = UniqueMap::new();
     for (idx, (field, x)) in xs.into_iter().enumerate() {
-        if let Err(old_loc) = fmap.add(field.clone(), (idx, x)) {
+        if let Err((field, old_loc)) = fmap.add(field, (idx, x)) {
             context.error(vec![
                 (loc, format!("Invalid {}", case)),
                 (
@@ -1329,6 +1497,21 @@ fn fields<T>(
 fn bind_list(context: &mut Context, sp!(loc, pbs_): P::BindList) -> Option<E::LValueList> {
     let bs_: Option<Vec<E::LValue>> = pbs_.into_iter().map(|pb| bind(context, pb)).collect();
     Some(sp(loc, bs_?))
+}
+
+fn bind_with_range_list(
+    context: &mut Context,
+    sp!(loc, prs_): P::BindWithRangeList,
+) -> Option<E::LValueWithRangeList> {
+    let rs_: Option<Vec<E::LValueWithRange>> = prs_
+        .into_iter()
+        .map(|sp!(loc, (pb, pr))| -> Option<E::LValueWithRange> {
+            let r = exp_(context, pr);
+            let b = bind(context, pb)?;
+            Some(sp(loc, (b, r)))
+        })
+        .collect();
+    Some(sp(loc, rs_?))
 }
 
 fn bind(context: &mut Context, sp!(loc, pb_): P::Bind) -> Option<E::LValue> {
@@ -1386,21 +1569,53 @@ fn assign(context: &mut Context, sp!(loc, e_): P::Exp) -> Option<E::LValue> {
     use E::LValue_ as EL;
     use P::Exp_ as PE;
     let a_ = match e_ {
-        PE::Name(sp!(_, P::ModuleAccess_::ModuleAccess(..)), _)
-        | PE::Name(sp!(_, P::ModuleAccess_::QualifiedModuleAccess(..)), _)
-        | PE::Name(_, Some(_))
-            if !context.require_spec_context(
-                loc,
-                "only simple names allowed in assignment outside of specifications",
-            ) =>
+        PE::Name(n @ sp!(_, P::ModuleAccess_::ModuleAccess(_, _)), _)
+        | PE::Name(n @ sp!(_, P::ModuleAccess_::QualifiedModuleAccess(_, _)), _)
+            if !context.in_spec_context =>
         {
-            assert!(context.has_errors());
+            let msg = format!(
+                "Unexpected assignment of module access without fields outside of a spec \
+                 context.\nIf you are trying to unpack a struct, try adding fields, e.g. '{} {{}}'",
+                n
+            );
+            context.error(vec![(loc, msg)]);
+
+            // For unused alias warnings and unbound modules
+            module_access(context, Access::Term, n);
+
+            return None;
+        }
+        PE::Name(n, Some(_)) if !context.in_spec_context => {
+            let msg = format!(
+                "Unexpected assignment of instantiated type without fields outside of a spec \
+                 context.\nIf you are trying to unpack a struct, try adding fields, e.g. '{} {{}}'",
+                n
+            );
+            context.error(vec![(loc, msg)]);
+
+            // For unused alias warnings and unbound modules
+            module_access(context, Access::Term, n);
+
             return None;
         }
         PE::Name(pn, ptys_opt) => {
             let en = module_access(context, Access::Term, pn)?;
-            let tys_opt = optional_types(context, ptys_opt);
-            EL::Var(en, tys_opt)
+            match &en.value {
+                E::ModuleAccess_::ModuleAccess(m, n) if !context.in_spec_context => {
+                    let msg = format!(
+                        "Unexpected assignment of module access without fields outside of a spec \
+                         context.\nIf you are trying to unpack a struct, try adding fields, e.g. \
+                         '{}::{} {{}}'",
+                        m, n,
+                    );
+                    context.error(vec![(loc, msg)]);
+                    return None;
+                }
+                _ => {
+                    let tys_opt = optional_types(context, ptys_opt);
+                    EL::Var(en, tys_opt)
+                }
+            }
         }
         PE::Pack(pn, ptys_opt, pfields) => {
             let en = module_access(context, Access::ApplyNamed, pn)?;
@@ -1489,7 +1704,7 @@ fn unbound_names_exp(unbound: &mut BTreeSet<Name>, sp!(_, e_): &E::Exp) {
             unbound.insert(n.clone());
         }
         EE::Call(_, _, sp!(_, es_)) => unbound_names_exps(unbound, es_),
-        EE::Pack(_, _, es) => unbound_names_exps(unbound, es.iter().map(|(_, (_, e))| e)),
+        EE::Pack(_, _, es) => unbound_names_exps(unbound, es.iter().map(|(_, _, (_, e))| e)),
         EE::IfElse(econd, et, ef) => {
             unbound_names_exp(unbound, ef);
             unbound_names_exp(unbound, et);
@@ -1506,6 +1721,17 @@ fn unbound_names_exp(unbound: &mut BTreeSet<Name>, sp!(_, e_): &E::Exp) {
             unbound_names_exp(unbound, er);
             // remove anything in `ls`
             unbound_names_binds(unbound, ls);
+        }
+        EE::Quant(_, rs, trs, cr_opt, er) => {
+            unbound_names_exp(unbound, er);
+            if let Some(cr) = cr_opt {
+                unbound_names_exp(unbound, cr);
+            }
+            for tr in trs {
+                unbound_names_exps(unbound, tr);
+            }
+            // remove anything in `rs`
+            unbound_names_binds_with_range(unbound, rs);
         }
         EE::Assign(ls, er) => {
             unbound_names_exp(unbound, er);
@@ -1567,6 +1793,16 @@ fn unbound_names_binds(unbound: &mut BTreeSet<Name>, sp!(_, ls_): &E::LValueList
         .for_each(|l| unbound_names_bind(unbound, l))
 }
 
+fn unbound_names_binds_with_range(
+    unbound: &mut BTreeSet<Name>,
+    sp!(_, rs_): &E::LValueWithRangeList,
+) {
+    rs_.iter().rev().for_each(|sp!(_, (b, r))| {
+        unbound_names_bind(unbound, b);
+        unbound_names_exp(unbound, r)
+    })
+}
+
 fn unbound_names_bind(unbound: &mut BTreeSet<Name>, sp!(_, l_): &E::LValue) {
     use E::LValue_ as EL;
     match l_ {
@@ -1578,7 +1814,7 @@ fn unbound_names_bind(unbound: &mut BTreeSet<Name>, sp!(_, l_): &E::LValue) {
         }
         EL::Unpack(_, _, efields) => efields
             .iter()
-            .for_each(|(_, (_, l))| unbound_names_bind(unbound, l)),
+            .for_each(|(_, _, (_, l))| unbound_names_bind(unbound, l)),
     }
 }
 
@@ -1599,7 +1835,7 @@ fn unbound_names_assign(unbound: &mut BTreeSet<Name>, sp!(_, l_): &E::LValue) {
         }
         EL::Unpack(_, _, efields) => efields
             .iter()
-            .for_each(|(_, (_, l))| unbound_names_assign(unbound, l)),
+            .for_each(|(_, _, (_, l))| unbound_names_assign(unbound, l)),
     }
 }
 
@@ -1621,7 +1857,8 @@ fn check_valid_local_name(context: &mut Context, v: &Var) {
     }
     if !is_valid(v.value()) {
         let msg = format!(
-            "Invalid local name '{}'. Local names must start with 'a'..'z' (or '_')",
+            "Invalid local variable name '{}'. Local variable names must start with 'a'..'z' (or \
+             '_')",
             v,
         );
         context.error(vec![(v.loc(), msg)])
@@ -1689,14 +1926,26 @@ fn check_valid_module_member_name_impl(
         }
     }
     let lcase = case;
-    let ucase = &upper_first_letter(case);
     match member {
-        M::Function => (),
+        M::Function => {
+            if n.value.starts_with(|c| c == '_') {
+                let msg = format!(
+                    "Invalid {} name '{}'. {} names cannot start with '_'",
+                    lcase,
+                    n,
+                    upper_first_letter(case),
+                );
+                context.error(vec![(n.loc, msg)]);
+                return Err(());
+            }
+        }
         M::Constant | M::Struct | M::Schema => {
             if !is_valid_struct_constant_or_schema_name(&n.value) {
                 let msg = format!(
                     "Invalid {} name '{}'. {} names must start with 'A'..'Z'",
-                    lcase, n, ucase,
+                    lcase,
+                    n,
+                    upper_first_letter(case),
                 );
                 context.error(vec![(n.loc, msg)]);
                 return Err(());
@@ -1705,16 +1954,22 @@ fn check_valid_module_member_name_impl(
     }
 
     // TODO move these names to a more central place?
-    for restricted in crate::naming::ast::BuiltinFunction_::all_names() {
-        check_restricted_name(context, "module member", n, restricted)?;
-    }
-    for restricted in crate::naming::ast::BuiltinTypeName_::all_names() {
-        check_restricted_name(context, "module member", n, restricted)?;
-    }
+    check_restricted_names(
+        context,
+        lcase,
+        n,
+        crate::naming::ast::BuiltinFunction_::all_names(),
+    )?;
+    check_restricted_names(
+        context,
+        lcase,
+        n,
+        crate::naming::ast::BuiltinTypeName_::all_names(),
+    )?;
 
     // Restricting Self for now in the case where we ever have impls
     // Otherwise, we could allow it
-    check_restricted_self_name(context, "module member", n)?;
+    check_restricted_self_name(context, lcase, n)?;
 
     Ok(())
 }
@@ -1724,24 +1979,34 @@ pub fn is_valid_struct_constant_or_schema_name(s: &str) -> bool {
 }
 
 fn check_restricted_self_name(context: &mut Context, case: &str, n: &Name) -> Result<(), ()> {
-    check_restricted_name(context, case, n, ModuleName::SELF_NAME)
+    if n.value == ModuleName::SELF_NAME {
+        context.error(restricted_name_error(case, n.loc, ModuleName::SELF_NAME));
+        Err(())
+    } else {
+        Ok(())
+    }
 }
 
-fn check_restricted_name(
+fn check_restricted_names(
     context: &mut Context,
     case: &str,
     sp!(loc, n_): &Name,
-    restricted: &str,
+    all_names: &BTreeSet<&str>,
 ) -> Result<(), ()> {
-    if n_ != restricted {
-        return Ok(());
+    if all_names.contains(n_.as_str()) {
+        context.error(restricted_name_error(case, *loc, n_));
+        Err(())
+    } else {
+        Ok(())
     }
+}
+
+fn restricted_name_error(case: &str, loc: Loc, restricted: &str) -> Error {
     let msg = format!(
         "Invalid {case} name '{restricted}'. '{restricted}' is restricted and cannot be used to \
          name a {case}",
         case = case,
         restricted = restricted,
     );
-    context.error(vec![(*loc, msg)]);
-    Err(())
+    vec![(loc, msg)]
 }

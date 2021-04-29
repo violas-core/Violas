@@ -15,6 +15,8 @@ pub enum Metadata {
     GeneralMetadata(GeneralMetadata),
     TravelRuleMetadata(TravelRuleMetadata),
     UnstructuredBytesMetadata(UnstructuredBytesMetadata),
+    RefundMetadata(RefundMetadata),
+    CoinTradeMetadata(CoinTradeMetadata),
 }
 
 /// List of supported transaction metadata format versions for regular
@@ -42,6 +44,32 @@ pub struct GeneralMetadataV0 {
     referenced_event: Option<u64>,
 }
 
+impl GeneralMetadataV0 {
+    pub fn new(
+        to_subaddress: Option<Vec<u8>>,
+        from_subaddress: Option<Vec<u8>>,
+        referenced_event: Option<u64>,
+    ) -> Self {
+        GeneralMetadataV0 {
+            to_subaddress,
+            from_subaddress,
+            referenced_event,
+        }
+    }
+
+    pub fn to_subaddress(&self) -> &Option<Vec<u8>> {
+        &self.to_subaddress
+    }
+
+    pub fn from_subaddress(&self) -> &Option<Vec<u8>> {
+        &self.from_subaddress
+    }
+
+    pub fn referenced_event(&self) -> &Option<u64> {
+        &self.referenced_event
+    }
+}
+
 /// List of supported transaction metadata format versions for transactions
 /// subject to travel rule
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -63,4 +91,40 @@ pub struct UnstructuredBytesMetadata {
     /// Unstructured byte vector metadata
     #[serde(with = "serde_bytes")]
     metadata: Option<Vec<u8>>,
+}
+
+/// List of supported transaction metadata format versions for refund transaction
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum RefundMetadata {
+    RefundMetadataV0(RefundMetadataV0),
+}
+
+/// Transaction metadata format for transactions subject to refund transaction
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct RefundMetadataV0 {
+    /// Transaction version that is refunded
+    pub transaction_version: u64,
+    /// The reason of the refund
+    pub reason: RefundReason,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum RefundReason {
+    OtherReason,
+    InvalidSubaddress,
+    UserInitiatedPartialRefund,
+    UserInitiatedFullRefund,
+}
+
+/// List of supported transaction metadata format versions for coin trade transaction
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum CoinTradeMetadata {
+    CoinTradeMetadataV0(CoinTradeMetadataV0),
+}
+
+/// Transaction metadata format for coin trades (purchases/sells)
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct CoinTradeMetadataV0 {
+    /// A list of trade_ids this transaction wants to settle
+    pub trade_ids: Vec<String>,
 }

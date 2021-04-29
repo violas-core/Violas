@@ -2,7 +2,7 @@ name: JSON-RPC Compat Warning
 
 on:
   pull_request:
-    types: [opened, synchronize]
+    types: [opened, synchronized]
     paths: ["json-rpc/**.rs"]
 
 jobs:

@@ -1,7 +1,7 @@
 module ApprovalGroup {
     use 0x1::Signature;
 
-    resource struct ApprovalGroup {
+    struct ApprovalGroup has store {
         // we do not have collection support in Move now, so illustrate
         // using 2 out-of 3
 
@@ -67,7 +67,7 @@ module ColdWallet {
     use 0x1::Signer;
     use {{default}}::ApprovalGroup;
 
-    resource struct ColdWallet {
+    struct ColdWallet has key {
         balance: Diem::Diem<XUS>,
         sequence_num: u64,
         genesis_group: ApprovalGroup::ApprovalGroup,
@@ -192,7 +192,8 @@ module ColdWallet {
 script {
 use {{default}}::ApprovalGroup;
 use {{default}}::ColdWallet;
-fun main(account: &signer) {
+fun main(account: signer) {
+    let account = &account;
     let genesis_group = ApprovalGroup::create(x"1234", x"5678", x"abc123");
     ColdWallet::create(account, genesis_group);
 }

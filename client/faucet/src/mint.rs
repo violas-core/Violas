@@ -2,10 +2,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::Result;
+use diem_client::{Client, MethodRequest};
 use diem_crypto::traits::SigningKey;
-use diem_types::account_config::{
-    testnet_dd_account_address, treasury_compliance_account_address, type_tag_for_currency_code,
-    XUS_NAME,
+use diem_logger::prelude::warn;
+use diem_types::{
+    account_config::{
+        testnet_dd_account_address, treasury_compliance_account_address,
+        type_tag_for_currency_code, XUS_NAME,
+    },
+    transaction::metadata,
 };
 use std::{convert::From, fmt};
 
@@ -33,6 +38,7 @@ pub struct MintParams {
     pub auth_key: diem_types::transaction::authenticator::AuthenticationKey,
     pub return_txns: Option<bool>,
     pub is_designated_dealer: Option<bool>,
+    pub trade_id: Option<String>,
 }
 
 impl MintParams {
@@ -45,7 +51,7 @@ impl MintParams {
         seq: u64,
     ) -> diem_types::transaction::TransactionPayload {
         diem_types::transaction::TransactionPayload::Script(
-            transaction_builder_generated::stdlib::encode_create_parent_vasp_account_script(
+            diem_transaction_builder::stdlib::encode_create_parent_vasp_account_script(
                 self.currency_code(),
                 0, // sliding nonce
                 self.receiver(),
@@ -61,7 +67,7 @@ impl MintParams {
         seq: u64,
     ) -> diem_types::transaction::TransactionPayload {
         diem_types::transaction::TransactionPayload::Script(
-            transaction_builder_generated::stdlib::encode_create_designated_dealer_script(
+            diem_transaction_builder::stdlib::encode_create_designated_dealer_script(
                 self.currency_code(),
                 0, // sliding nonce
                 self.receiver(),
@@ -74,14 +80,33 @@ impl MintParams {
 
     fn p2p_script(&self) -> diem_types::transaction::TransactionPayload {
         diem_types::transaction::TransactionPayload::Script(
-            transaction_builder_generated::stdlib::encode_peer_to_peer_with_metadata_script(
+            diem_transaction_builder::stdlib::encode_peer_to_peer_with_metadata_script(
                 self.currency_code(),
                 self.receiver(),
                 self.amount,
-                vec![],
+                self.bcs_metadata(),
                 vec![],
             ),
         )
+    }
+
+    fn bcs_metadata(&self) -> Vec<u8> {
+        match self.trade_id.clone() {
+            Some(trade_id) => {
+                let metadata = metadata::Metadata::CoinTradeMetadata(
+                    metadata::CoinTradeMetadata::CoinTradeMetadataV0(
+                        metadata::CoinTradeMetadataV0 {
+                            trade_ids: vec![trade_id],
+                        },
+                    ),
+                );
+                bcs::to_bytes(&metadata).unwrap_or_else(|e| {
+                    warn!("Unable to serialize trade_id: {}", e);
+                    vec![]
+                })
+            }
+            _ => vec![],
+        }
     }
 
     fn receiver(&self) -> diem_types::account_address::AccountAddress {
@@ -92,7 +117,7 @@ impl MintParams {
 pub struct Service {
     chain_id: diem_types::chain_id::ChainId,
     private_key: diem_crypto::ed25519::Ed25519PrivateKey,
-    client: diem_json_rpc_client::JsonRpcAsyncClient,
+    client: Client,
 }
 
 impl Service {
@@ -101,9 +126,8 @@ impl Service {
         chain_id: diem_types::chain_id::ChainId,
         private_key_file: String,
     ) -> Self {
-        let url = reqwest::Url::parse(server_url.as_str()).expect("invalid server url");
         let private_key = generate_key::load_key(private_key_file);
-        let client = diem_json_rpc_client::JsonRpcAsyncClient::new(url);
+        let client = Client::new(server_url);
         Service {
             chain_id,
             private_key,
@@ -125,11 +149,11 @@ impl Service {
         }
         txns.push(self.create_txn(params.p2p_script(), testnet_dd_account_address(), dd_seq)?);
 
-        let mut batch = diem_json_rpc_client::JsonRpcBatch::new();
-        for txn in &txns {
-            batch.add_submit_request(txn.clone())?;
-        }
-        self.client.execute(batch).await?;
+        let batch = txns
+            .iter()
+            .map(|txn| MethodRequest::submit(txn))
+            .collect::<Result<_, _>>()?;
+        self.client.batch(batch).await?;
 
         if let Some(return_txns) = params.return_txns {
             if return_txns {
@@ -167,7 +191,19 @@ impl Service {
             testnet_dd_account_address(),
             receiver,
         ];
-        let responses = self.client.get_accounts(&accounts).await?;
+        let responses = self
+            .client
+            .batch(
+                accounts
+                    .into_iter()
+                    .map(MethodRequest::get_account)
+                    .collect(),
+            )
+            .await?
+            .into_iter()
+            .map(|r| r.map_err(anyhow::Error::new))
+            .map(|r| r.map(|response| response.into_inner().unwrap_get_account()))
+            .collect::<Result<Vec<_>>>()?;
 
         let treasury_compliance = responses
             .get(0)

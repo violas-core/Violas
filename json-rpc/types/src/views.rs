@@ -2,35 +2,31 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::{format_err, Error, Result};
-use compiled_stdlib::transaction_scripts::StdlibScript;
 use diem_crypto::HashValue;
 use diem_types::{
     account_config::{
         AccountResource, AccountRole, AdminTransactionEvent, BalanceResource, BaseUrlRotationEvent,
         BurnEvent, CancelBurnEvent, ComplianceKeyRotationEvent, CreateAccountEvent,
-        CurrencyInfoResource, FreezingBit, MintEvent, NewBlockEvent, NewEpochEvent, PreburnEvent,
-        ReceivedMintEvent, ReceivedPaymentEvent, SentPaymentEvent, ToXDXExchangeRateUpdateEvent,
+        CurrencyInfoResource, DesignatedDealerPreburns, FreezingBit, MintEvent, NewBlockEvent,
+        NewEpochEvent, PreburnEvent, ReceivedMintEvent, ReceivedPaymentEvent, SentPaymentEvent,
+        ToXDXExchangeRateUpdateEvent,
     },
     account_state_blob::AccountStateWithProof,
     contract_event::ContractEvent,
     epoch_change::EpochChangeProof,
+    event::EventKey,
     ledger_info::LedgerInfoWithSignatures,
     proof::{AccountStateProof, AccumulatorConsistencyProof},
-    transaction::{Script, Transaction, TransactionArgument, TransactionPayload},
-    vm_status::KeptVMStatus,
 };
+use hex::FromHex;
 use move_core_types::{
-    account_address::AccountAddress,
-    identifier::Identifier,
-    language_storage::{StructTag, TypeTag},
+    account_address::AccountAddress, identifier::Identifier, language_storage::TypeTag,
     move_resource::MoveResource,
-    vm_status::AbortLocation,
 };
-use serde::{Deserialize, Serialize};
+use serde::{de::Error as _, Deserialize, Deserializer, Serialize, Serializer};
 use std::{
     collections::BTreeMap,
     convert::{TryFrom, TryInto},
-    default::Default,
 };
 
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
@@ -54,7 +50,7 @@ pub enum AccountRoleView {
     #[serde(rename = "unknown")]
     Unknown,
     #[serde(rename = "child_vasp")]
-    ChildVASP { parent_vasp_address: BytesView },
+    ChildVASP { parent_vasp_address: AccountAddress },
     #[serde(rename = "parent_vasp")]
     ParentVASP {
         human_name: String,
@@ -62,8 +58,8 @@ pub enum AccountRoleView {
         expiration_time: u64,
         compliance_key: BytesView,
         num_children: u64,
-        compliance_key_rotation_events_key: BytesView,
-        base_url_rotation_events_key: BytesView,
+        compliance_key_rotation_events_key: EventKey,
+        base_url_rotation_events_key: EventKey,
     },
     #[serde(rename = "designated_dealer")]
     DesignatedDealer {
@@ -72,36 +68,104 @@ pub enum AccountRoleView {
         expiration_time: u64,
         compliance_key: BytesView,
         preburn_balances: Vec<AmountView>,
-        received_mint_events_key: BytesView,
-        compliance_key_rotation_events_key: BytesView,
-        base_url_rotation_events_key: BytesView,
+        received_mint_events_key: EventKey,
+        compliance_key_rotation_events_key: EventKey,
+        base_url_rotation_events_key: EventKey,
+        preburn_queues: Option<Vec<PreburnQueueView>>,
     },
+}
+
+impl AccountRoleView {
+    pub(crate) fn convert_preburn_balances(
+        preburn_balances: DesignatedDealerPreburns,
+    ) -> (Vec<AmountView>, Option<Vec<PreburnQueueView>>) {
+        match preburn_balances {
+            DesignatedDealerPreburns::Preburn(preburn_balances) => {
+                let preburn_balances: Vec<_> = preburn_balances
+                    .iter()
+                    .map(|(currency_code, balance)| {
+                        AmountView::new(balance.coin(), &currency_code.as_str())
+                    })
+                    .collect();
+                let preburn_queues = preburn_balances
+                    .iter()
+                    .cloned()
+                    .map(|amt_view| {
+                        PreburnQueueView::new(
+                            amt_view.currency.clone(),
+                            vec![PreburnWithMetadataView {
+                                preburn: amt_view,
+                                metadata: None,
+                            }],
+                        )
+                    })
+                    .collect();
+                (preburn_balances, Some(preburn_queues))
+            }
+            DesignatedDealerPreburns::PreburnQueue(preburn_queues) => {
+                let preburn_balances = preburn_queues
+                    .iter()
+                    .map(|(currency_code, preburns)| {
+                        let total_balance =
+                            preburns.preburns().iter().fold(0, |acc: u64, preburn| {
+                                acc.checked_add(preburn.preburn().coin()).unwrap()
+                            });
+                        AmountView::new(total_balance, &currency_code.as_str())
+                    })
+                    .collect();
+                let preburn_queues = preburn_queues
+                    .into_iter()
+                    .map(|(currency_code, preburns)| {
+                        PreburnQueueView::new(
+                            currency_code.to_string(),
+                            preburns
+                                .preburns()
+                                .iter()
+                                .map(|preburn| PreburnWithMetadataView {
+                                    preburn: AmountView::new(
+                                        preburn.preburn().coin(),
+                                        &currency_code.as_str(),
+                                    ),
+                                    metadata: Some(BytesView::new(preburn.metadata())),
+                                })
+                                .collect::<Vec<_>>(),
+                        )
+                    })
+                    .collect();
+                (preburn_balances, Some(preburn_queues))
+            }
+        }
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
 pub struct AccountView {
-    pub address: BytesView,
+    pub address: AccountAddress,
     pub balances: Vec<AmountView>,
     pub sequence_number: u64,
     pub authentication_key: BytesView,
-    pub sent_events_key: BytesView,
-    pub received_events_key: BytesView,
+    pub sent_events_key: EventKey,
+    pub received_events_key: EventKey,
     pub delegated_key_rotation_capability: bool,
     pub delegated_withdrawal_capability: bool,
     pub is_frozen: bool,
     pub role: AccountRoleView,
+    // the transaction version of the account data
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<u64>,
 }
 
 impl AccountView {
     pub fn new(
-        address: &AccountAddress,
+        address: AccountAddress,
         account: &AccountResource,
         balances: BTreeMap<Identifier, BalanceResource>,
         account_role: AccountRole,
         freezing_bit: FreezingBit,
+        version: u64,
     ) -> Self {
         Self {
-            address: BytesView::from(address.to_vec()),
+            address,
             balances: balances
                 .iter()
                 .map(|(currency_code, balance)| {
@@ -110,22 +174,46 @@ impl AccountView {
                 .collect(),
             sequence_number: account.sequence_number(),
             authentication_key: BytesView::from(account.authentication_key()),
-            sent_events_key: BytesView::from(account.sent_events().key().as_bytes()),
-            received_events_key: BytesView::from(account.received_events().key().as_bytes()),
+            sent_events_key: *account.sent_events().key(),
+            received_events_key: *account.received_events().key(),
             delegated_key_rotation_capability: account.has_delegated_key_rotation_capability(),
             delegated_withdrawal_capability: account.has_delegated_withdrawal_capability(),
             is_frozen: freezing_bit.is_frozen(),
             role: AccountRoleView::from(account_role),
+            version: Some(version),
         }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+pub struct PreburnQueueView {
+    pub currency: String,
+    pub preburns: Vec<PreburnWithMetadataView>,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+pub struct PreburnWithMetadataView {
+    pub preburn: AmountView,
+    pub metadata: Option<BytesView>,
+}
+
+impl PreburnQueueView {
+    pub fn new(currency: String, preburns: Vec<PreburnWithMetadataView>) -> Self {
+        Self { currency, preburns }
     }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct EventView {
-    pub key: BytesView,
+    pub key: EventKey,
     pub sequence_number: u64,
     pub transaction_version: u64,
     pub data: EventDataView,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct EventWithProofView {
+    pub event_with_proof: BytesView,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -134,12 +222,12 @@ pub enum EventDataView {
     #[serde(rename = "burn")]
     Burn {
         amount: AmountView,
-        preburn_address: BytesView,
+        preburn_address: AccountAddress,
     },
     #[serde(rename = "cancelburn")]
     CancelBurn {
         amount: AmountView,
-        preburn_address: BytesView,
+        preburn_address: AccountAddress,
     },
     #[serde(rename = "mint")]
     Mint { amount: AmountView },
@@ -151,20 +239,20 @@ pub enum EventDataView {
     #[serde(rename = "preburn")]
     Preburn {
         amount: AmountView,
-        preburn_address: BytesView,
+        preburn_address: AccountAddress,
     },
     #[serde(rename = "receivedpayment")]
     ReceivedPayment {
         amount: AmountView,
-        sender: BytesView,
-        receiver: BytesView,
+        sender: AccountAddress,
+        receiver: AccountAddress,
         metadata: BytesView,
     },
     #[serde(rename = "sentpayment")]
     SentPayment {
         amount: AmountView,
-        receiver: BytesView,
-        sender: BytesView,
+        receiver: AccountAddress,
+        sender: AccountAddress,
         metadata: BytesView,
     },
     #[serde(rename = "admintransaction")]
@@ -174,13 +262,13 @@ pub enum EventDataView {
     #[serde(rename = "newblock")]
     NewBlock {
         round: u64,
-        proposer: BytesView,
+        proposer: AccountAddress,
         proposed_time: u64,
     },
     #[serde(rename = "receivedmint")]
     ReceivedMint {
         amount: AmountView,
-        destination_address: BytesView,
+        destination_address: AccountAddress,
     },
     #[serde(rename = "compliancekeyrotation")]
     ComplianceKeyRotation {
@@ -194,7 +282,7 @@ pub enum EventDataView {
     },
     #[serde(rename = "createaccount")]
     CreateAccount {
-        created_address: BytesView,
+        created_address: AccountAddress,
         role_id: u64,
     },
     #[serde(rename = "unknown")]
@@ -213,8 +301,8 @@ impl TryFrom<ContractEvent> for EventDataView {
             );
             EventDataView::ReceivedPayment {
                 amount: amount_view,
-                sender: BytesView::from(received_event.sender().as_ref()),
-                receiver: BytesView::from(&event.key().get_creator_address().to_vec()),
+                sender: received_event.sender(),
+                receiver: event.key().get_creator_address(),
                 metadata: BytesView::from(received_event.metadata()),
             }
         } else if event.type_tag() == &TypeTag::Struct(SentPaymentEvent::struct_tag()) {
@@ -223,8 +311,8 @@ impl TryFrom<ContractEvent> for EventDataView {
                 AmountView::new(sent_event.amount(), sent_event.currency_code().as_str());
             EventDataView::SentPayment {
                 amount: amount_view,
-                receiver: BytesView::from(sent_event.receiver().as_ref()),
-                sender: BytesView::from(&event.key().get_creator_address().to_vec()),
+                receiver: sent_event.receiver(),
+                sender: event.key().get_creator_address(),
                 metadata: BytesView::from(sent_event.metadata()),
             }
         } else if event.type_tag() == &TypeTag::Struct(PreburnEvent::struct_tag()) {
@@ -233,19 +321,17 @@ impl TryFrom<ContractEvent> for EventDataView {
                 preburn_event.amount(),
                 preburn_event.currency_code().as_str(),
             );
-            let preburn_address = BytesView::from(preburn_event.preburn_address().as_ref());
             EventDataView::Preburn {
                 amount: amount_view,
-                preburn_address,
+                preburn_address: preburn_event.preburn_address(),
             }
         } else if event.type_tag() == &TypeTag::Struct(BurnEvent::struct_tag()) {
             let burn_event = BurnEvent::try_from(&event)?;
             let amount_view =
                 AmountView::new(burn_event.amount(), burn_event.currency_code().as_str());
-            let preburn_address = BytesView::from(burn_event.preburn_address().as_ref());
             EventDataView::Burn {
                 amount: amount_view,
-                preburn_address,
+                preburn_address: burn_event.preburn_address(),
             }
         } else if event.type_tag() == &TypeTag::Struct(CancelBurnEvent::struct_tag()) {
             let cancel_burn_event = CancelBurnEvent::try_from(&event)?;
@@ -253,10 +339,9 @@ impl TryFrom<ContractEvent> for EventDataView {
                 cancel_burn_event.amount(),
                 cancel_burn_event.currency_code().as_str(),
             );
-            let preburn_address = BytesView::from(cancel_burn_event.preburn_address().as_ref());
             EventDataView::CancelBurn {
                 amount: amount_view,
-                preburn_address,
+                preburn_address: cancel_burn_event.preburn_address(),
             }
         } else if event.type_tag() == &TypeTag::Struct(ToXDXExchangeRateUpdateEvent::struct_tag()) {
             let update_event = ToXDXExchangeRateUpdateEvent::try_from(&event)?;
@@ -277,11 +362,9 @@ impl TryFrom<ContractEvent> for EventDataView {
                 received_mint_event.amount(),
                 received_mint_event.currency_code().as_str(),
             );
-            let destination_address =
-                BytesView::from(received_mint_event.destination_address().as_ref());
             EventDataView::ReceivedMint {
                 amount: amount_view,
-                destination_address,
+                destination_address: received_mint_event.destination_address(),
             }
         } else if event.type_tag() == &TypeTag::Struct(ComplianceKeyRotationEvent::struct_tag()) {
             let rotation_event = ComplianceKeyRotationEvent::try_from(&event)?;
@@ -300,7 +383,7 @@ impl TryFrom<ContractEvent> for EventDataView {
         } else if event.type_tag() == &TypeTag::Struct(NewBlockEvent::struct_tag()) {
             let new_block_event = NewBlockEvent::try_from(&event)?;
             EventDataView::NewBlock {
-                proposer: BytesView::from(new_block_event.proposer().as_ref()),
+                proposer: new_block_event.proposer(),
                 round: new_block_event.round(),
                 proposed_time: new_block_event.proposed_time(),
             }
@@ -311,7 +394,7 @@ impl TryFrom<ContractEvent> for EventDataView {
             }
         } else if event.type_tag() == &TypeTag::Struct(CreateAccountEvent::struct_tag()) {
             let create_account_event = CreateAccountEvent::try_from(&event)?;
-            let created_address = BytesView::from(create_account_event.created().as_ref());
+            let created_address = create_account_event.created();
             let role_id = create_account_event.role_id();
             EventDataView::CreateAccount {
                 created_address,
@@ -337,7 +420,7 @@ impl TryFrom<(u64, ContractEvent)> for EventView {
 
     fn try_from((txn_version, event): (u64, ContractEvent)) -> Result<Self> {
         Ok(EventView {
-            key: BytesView::from(event.key().as_bytes()),
+            key: *event.key(),
             sequence_number: event.sequence_number(),
             transaction_version: txn_version,
             data: event.try_into()?,
@@ -348,137 +431,163 @@ impl TryFrom<(u64, ContractEvent)> for EventView {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct MetadataView {
     pub version: u64,
-    pub accumulator_root_hash: BytesView,
+    pub accumulator_root_hash: HashValue,
     pub timestamp: u64,
     pub chain_id: u8,
-    pub script_hash_allow_list: Option<Vec<BytesView>>,
+    pub script_hash_allow_list: Option<Vec<HashValue>>,
     pub module_publishing_allowed: Option<bool>,
     pub diem_version: Option<u64>,
     pub dual_attestation_limit: Option<u64>,
 }
 
-#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
-pub struct BytesView(pub String);
+#[derive(Clone, Debug, PartialEq)]
+pub struct BytesView(Box<[u8]>);
 
 impl BytesView {
-    pub fn into_bytes(self) -> Result<Vec<u8>, Error> {
-        Ok(hex::decode(self.0)?)
+    pub fn new<T: Into<Box<[u8]>>>(bytes: T) -> Self {
+        Self(bytes.into())
+    }
+
+    pub fn into_inner(self) -> Box<[u8]> {
+        self.0
+    }
+
+    pub fn inner(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl std::ops::Deref for BytesView {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::convert::AsRef<[u8]> for BytesView {
+    fn as_ref(&self) -> &[u8] {
+        self.inner()
     }
 }
 
 impl std::fmt::Display for BytesView {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{}", self.0)
+        for byte in self.inner() {
+            write!(f, "{:02x}", byte)?;
+        }
+
+        Ok(())
     }
 }
 
 impl From<&[u8]> for BytesView {
     fn from(bytes: &[u8]) -> Self {
-        Self(hex::encode(bytes))
-    }
-}
-
-impl From<&Vec<u8>> for BytesView {
-    fn from(bytes: &Vec<u8>) -> Self {
-        Self(hex::encode(bytes))
+        Self(bytes.into())
     }
 }
 
 impl From<Vec<u8>> for BytesView {
     fn from(bytes: Vec<u8>) -> Self {
-        Self(hex::encode(bytes))
+        Self(bytes.into_boxed_slice())
     }
 }
 
-impl From<AccountAddress> for BytesView {
-    fn from(address: AccountAddress) -> Self {
-        address.to_vec().into()
+impl<'de> Deserialize<'de> for BytesView {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = <String>::deserialize(deserializer)?;
+        <Vec<u8>>::from_hex(s)
+            .map_err(D::Error::custom)
+            .map(Into::into)
     }
 }
 
-impl From<&AccountAddress> for BytesView {
-    fn from(address: &AccountAddress) -> Self {
-        address.to_vec().into()
-    }
-}
-
-impl From<HashValue> for BytesView {
-    fn from(hash: HashValue) -> Self {
-        hash.to_vec().into()
+impl Serialize for BytesView {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        hex::encode(self).serialize(serializer)
     }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct MoveAbortExplanationView {
-    category: String,
-    category_description: String,
-    reason: String,
-    reason_description: String,
+    pub category: String,
+    pub category_description: String,
+    pub reason: String,
+    pub reason_description: String,
 }
 
-impl TryFrom<&KeptVMStatus> for MoveAbortExplanationView {
-    type Error = ();
-    fn try_from(status: &KeptVMStatus) -> Result<MoveAbortExplanationView, Self::Error> {
-        match status {
-            KeptVMStatus::MoveAbort(AbortLocation::Module(module_id), abort_code) => {
-                let error_context = move_explain::get_explanation(module_id, *abort_code);
-                error_context
-                    .map(|context| MoveAbortExplanationView {
-                        category: context.category.code_name,
-                        category_description: context.category.code_description,
-                        reason: context.reason.code_name,
-                        reason_description: context.reason.code_description,
-                    })
-                    .ok_or(())
-            }
-            _ => Err(()),
-        }
+impl std::fmt::Display for MoveAbortExplanationView {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "Error Category: {}", self.category)?;
+        writeln!(f, "\tCategory Description: {}", self.category_description)?;
+        writeln!(f, "Error Reason: {}", self.reason)?;
+        writeln!(f, "\tReason Description: {}", self.reason_description)
     }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(tag = "type")]
+#[serde(rename_all = "snake_case")]
 pub enum VMStatusView {
-    #[serde(rename = "executed")]
     Executed,
-    #[serde(rename = "out_of_gas")]
     OutOfGas,
-    #[serde(rename = "move_abort")]
     MoveAbort {
         location: String,
         abort_code: u64,
         explanation: Option<MoveAbortExplanationView>,
     },
-    #[serde(rename = "execution_failure")]
     ExecutionFailure {
         location: String,
         function_index: u16,
         code_offset: u16,
     },
-    #[serde(rename = "miscellaneous_error")]
     MiscellaneousError,
+    VerificationError,
+    DeserializationError,
+    PublishingFailure,
 }
 
-impl From<&KeptVMStatus> for VMStatusView {
-    fn from(status: &KeptVMStatus) -> Self {
-        match status {
-            KeptVMStatus::Executed => VMStatusView::Executed,
-            KeptVMStatus::OutOfGas => VMStatusView::OutOfGas,
-            KeptVMStatus::MoveAbort(loc, abort_code) => VMStatusView::MoveAbort {
-                explanation: MoveAbortExplanationView::try_from(status).ok(),
-                location: loc.to_string(),
-                abort_code: *abort_code,
-            },
-            KeptVMStatus::ExecutionFailure {
+impl VMStatusView {
+    pub fn is_executed(&self) -> bool {
+        matches!(self, Self::Executed)
+    }
+}
+
+impl std::fmt::Display for VMStatusView {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            VMStatusView::Executed => write!(f, "Executed"),
+            VMStatusView::OutOfGas => write!(f, "Out of Gas"),
+            VMStatusView::MoveAbort {
                 location,
-                function,
+                abort_code,
+                explanation,
+            } => {
+                write!(f, "Move Abort: {} at {}", abort_code, location)?;
+                if let Some(explanation) = explanation {
+                    write!(f, "\nExplanation:\n{}", explanation)?
+                }
+                Ok(())
+            }
+            VMStatusView::ExecutionFailure {
+                location,
+                function_index,
                 code_offset,
-            } => VMStatusView::ExecutionFailure {
-                location: location.to_string(),
-                function_index: *function,
-                code_offset: *code_offset,
-            },
-            KeptVMStatus::MiscellaneousError => VMStatusView::MiscellaneousError,
+            } => write!(
+                f,
+                "Execution failure: {} {} {}",
+                location, function_index, code_offset
+            ),
+            VMStatusView::MiscellaneousError => write!(f, "Miscellaneous Error"),
+            VMStatusView::VerificationError => write!(f, "Verification Error"),
+            VMStatusView::DeserializationError => write!(f, "Deserialization Error"),
+            VMStatusView::PublishingFailure => write!(f, "Publishing Failure"),
         }
     }
 }
@@ -487,7 +596,7 @@ impl From<&KeptVMStatus> for VMStatusView {
 pub struct TransactionView {
     pub version: u64,
     pub transaction: TransactionDataView,
-    pub hash: BytesView,
+    pub hash: HashValue,
     pub bytes: BytesView,
     pub events: Vec<EventView>,
     pub vm_status: VMStatusView,
@@ -515,7 +624,7 @@ pub enum TransactionDataView {
     WriteSet {},
     #[serde(rename = "user")]
     UserTransaction {
-        sender: BytesView,
+        sender: AccountAddress,
         signature_scheme: String,
         signature: BytesView,
         public_key: BytesView,
@@ -525,7 +634,7 @@ pub enum TransactionDataView {
         gas_unit_price: u64,
         gas_currency: String,
         expiration_timestamp_secs: u64,
-        script_hash: BytesView,
+        script_hash: HashValue,
         script_bytes: BytesView,
         script: ScriptView,
     },
@@ -541,9 +650,12 @@ pub struct ScriptView {
     // script code bytes
     #[serde(skip_serializing_if = "Option::is_none")]
     pub code: Option<BytesView>,
-    // script arguments, converted into string with type information.
+    // script arguments, converted into string with type information
     #[serde(skip_serializing_if = "Option::is_none")]
     pub arguments: Option<Vec<String>>,
+    // script function arguments, converted into hex encoded BCS bytes
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arguments_bcs: Option<Vec<BytesView>>,
     // script type arguments, converted into string
     #[serde(skip_serializing_if = "Option::is_none")]
     pub type_arguments: Option<Vec<String>>,
@@ -557,7 +669,7 @@ pub struct ScriptView {
 
     // peer_to_peer_transaction
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub receiver: Option<BytesView>,
+    pub receiver: Option<AccountAddress>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub amount: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -566,57 +678,24 @@ pub struct ScriptView {
     pub metadata: Option<BytesView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata_signature: Option<BytesView>,
+
+    // Script functions
+    // The address that the module is published under
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub module_address: Option<AccountAddress>,
+    // The name of the module that the called function is defined in
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub module_name: Option<String>,
+    // The (unqualified) name of the function being called.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub function_name: Option<String>,
 }
 
 impl ScriptView {
-    fn unknown() -> Self {
+    pub fn unknown() -> Self {
         ScriptView {
             r#type: "unknown".to_string(),
             ..Default::default()
-        }
-    }
-}
-
-impl From<Transaction> for TransactionDataView {
-    fn from(tx: Transaction) -> Self {
-        match tx {
-            Transaction::BlockMetadata(t) => TransactionDataView::BlockMetadata {
-                timestamp_usecs: t.timestamp_usec(),
-            },
-            Transaction::GenesisTransaction(_) => TransactionDataView::WriteSet {},
-            Transaction::UserTransaction(t) => {
-                let script_hash = match t.payload() {
-                    TransactionPayload::Script(s) => HashValue::sha3_256_of(s.code()),
-                    _ => HashValue::zero(),
-                };
-
-                let script_bytes: BytesView = match t.payload() {
-                    TransactionPayload::Script(s) => bcs::to_bytes(s).unwrap_or_default(),
-                    _ => vec![],
-                }
-                .into();
-
-                let script: ScriptView = match t.payload() {
-                    TransactionPayload::Script(s) => s.into(),
-                    _ => ScriptView::unknown(),
-                };
-
-                TransactionDataView::UserTransaction {
-                    sender: t.sender().into(),
-                    signature_scheme: t.authenticator().scheme().to_string(),
-                    signature: t.authenticator().signature_bytes().into(),
-                    public_key: t.authenticator().public_key_bytes().into(),
-                    sequence_number: t.sequence_number(),
-                    chain_id: t.chain_id().id(),
-                    max_gas_amount: t.max_gas_amount(),
-                    gas_unit_price: t.gas_unit_price(),
-                    gas_currency: t.gas_currency_code().to_string(),
-                    expiration_timestamp_secs: t.expiration_timestamp_secs(),
-                    script_hash: script_hash.into(),
-                    script_bytes,
-                    script,
-                }
-            }
         }
     }
 }
@@ -626,7 +705,7 @@ impl From<AccountRole> for AccountRoleView {
         match role {
             AccountRole::Unknown => AccountRoleView::Unknown,
             AccountRole::ChildVASP(child_vasp) => AccountRoleView::ChildVASP {
-                parent_vasp_address: BytesView::from(&child_vasp.parent_vasp_addr().to_vec()),
+                parent_vasp_address: child_vasp.parent_vasp_addr(),
             },
             AccountRole::ParentVASP { vasp, credential } => AccountRoleView::ParentVASP {
                 human_name: credential.human_name().to_string(),
@@ -634,90 +713,33 @@ impl From<AccountRole> for AccountRoleView {
                 expiration_time: credential.expiration_date(),
                 compliance_key: BytesView::from(credential.compliance_public_key()),
                 num_children: vasp.num_children(),
-                compliance_key_rotation_events_key: BytesView::from(
-                    credential.compliance_key_rotation_events().key().as_bytes(),
-                ),
-                base_url_rotation_events_key: BytesView::from(
-                    credential.base_url_rotation_events().key().as_bytes(),
-                ),
+                compliance_key_rotation_events_key: *credential
+                    .compliance_key_rotation_events()
+                    .key(),
+                base_url_rotation_events_key: *credential.base_url_rotation_events().key(),
             },
             AccountRole::DesignatedDealer {
                 dd_credential,
                 preburn_balances,
                 designated_dealer,
-            } => AccountRoleView::DesignatedDealer {
-                human_name: dd_credential.human_name().to_string(),
-                base_url: dd_credential.base_url().to_string(),
-                expiration_time: dd_credential.expiration_date(),
-                compliance_key: BytesView::from(dd_credential.compliance_public_key()),
-                preburn_balances: preburn_balances
-                    .iter()
-                    .map(|(currency_code, balance)| {
-                        AmountView::new(balance.coin(), &currency_code.as_str())
-                    })
-                    .collect(),
-                received_mint_events_key: BytesView::from(
-                    designated_dealer.received_mint_events().key().as_bytes(),
-                ),
-                compliance_key_rotation_events_key: BytesView::from(
-                    dd_credential
+            } => {
+                let (preburn_balances, preburn_queues) =
+                    AccountRoleView::convert_preburn_balances(preburn_balances);
+                AccountRoleView::DesignatedDealer {
+                    human_name: dd_credential.human_name().to_string(),
+                    base_url: dd_credential.base_url().to_string(),
+                    expiration_time: dd_credential.expiration_date(),
+                    compliance_key: BytesView::from(dd_credential.compliance_public_key()),
+                    preburn_balances,
+                    received_mint_events_key: *designated_dealer.received_mint_events().key(),
+                    compliance_key_rotation_events_key: *dd_credential
                         .compliance_key_rotation_events()
-                        .key()
-                        .as_bytes(),
-                ),
-                base_url_rotation_events_key: BytesView::from(
-                    dd_credential.base_url_rotation_events().key().as_bytes(),
-                ),
-            },
-        }
-    }
-}
-
-impl From<&Script> for ScriptView {
-    fn from(script: &Script) -> Self {
-        let name = StdlibScript::try_from(script.code())
-            .map_or("unknown".to_string(), |name| format!("{}", name));
-        let ty_args: Vec<String> = script
-            .ty_args()
-            .iter()
-            .map(|type_tag| match type_tag {
-                TypeTag::Struct(StructTag { module, .. }) => module.to_string(),
-                tag => format!("{}", tag),
-            })
-            .collect();
-        let mut view = ScriptView {
-            r#type: name.clone(),
-            code: Some(script.code().into()),
-            arguments: Some(
-                script
-                    .args()
-                    .iter()
-                    .map(|arg| format!("{:?}", &arg))
-                    .collect(),
-            ),
-            type_arguments: Some(ty_args.clone()),
-            ..Default::default()
-        };
-
-        // handle legacy fields, backward compatible
-        if name == "peer_to_peer_with_metadata" {
-            if let [TransactionArgument::Address(receiver), TransactionArgument::U64(amount), TransactionArgument::U8Vector(metadata), TransactionArgument::U8Vector(metadata_signature)] =
-                &script.args()[..]
-            {
-                view.receiver = Some(receiver.into());
-                view.amount = Some(*amount);
-                view.currency = Some(
-                    ty_args
-                        .get(0)
-                        .unwrap_or(&"unknown_currency".to_string())
-                        .to_string(),
-                );
-                view.metadata = Some(BytesView::from(metadata));
-                view.metadata_signature = Some(BytesView::from(metadata_signature));
+                        .key(),
+                    base_url_rotation_events_key: *dd_credential.base_url_rotation_events().key(),
+                    preburn_queues,
+                }
             }
         }
-
-        view
     }
 }
 
@@ -727,11 +749,11 @@ pub struct CurrencyInfoView {
     pub scaling_factor: u64,
     pub fractional_part: u64,
     pub to_xdx_exchange_rate: f32,
-    pub mint_events_key: BytesView,
-    pub burn_events_key: BytesView,
-    pub preburn_events_key: BytesView,
-    pub cancel_burn_events_key: BytesView,
-    pub exchange_rate_update_events_key: BytesView,
+    pub mint_events_key: EventKey,
+    pub burn_events_key: EventKey,
+    pub preburn_events_key: EventKey,
+    pub cancel_burn_events_key: EventKey,
+    pub exchange_rate_update_events_key: EventKey,
 }
 
 impl From<&CurrencyInfoResource> for CurrencyInfoView {
@@ -741,13 +763,11 @@ impl From<&CurrencyInfoResource> for CurrencyInfoView {
             scaling_factor: info.scaling_factor(),
             fractional_part: info.fractional_part(),
             to_xdx_exchange_rate: info.exchange_rate(),
-            mint_events_key: BytesView::from(info.mint_events().key().as_bytes()),
-            burn_events_key: BytesView::from(info.burn_events().key().as_bytes()),
-            preburn_events_key: BytesView::from(info.preburn_events().key().as_bytes()),
-            cancel_burn_events_key: BytesView::from(info.cancel_burn_events().key().as_bytes()),
-            exchange_rate_update_events_key: BytesView::from(
-                info.exchange_rate_update_events().key().as_bytes(),
-            ),
+            mint_events_key: *info.mint_events().key(),
+            burn_events_key: *info.burn_events().key(),
+            preburn_events_key: *info.preburn_events().key(),
+            cancel_burn_events_key: *info.cancel_burn_events().key(),
+            exchange_rate_update_events_key: *info.exchange_rate_update_events().key(),
         }
     }
 }
@@ -776,11 +796,11 @@ impl
         ),
     ) -> Result<StateProofView, Self::Error> {
         Ok(StateProofView {
-            ledger_info_with_signatures: BytesView::from(&bcs::to_bytes(
+            ledger_info_with_signatures: BytesView::new(bcs::to_bytes(
                 &ledger_info_with_signatures,
             )?),
-            epoch_change_proof: BytesView::from(&bcs::to_bytes(&epoch_change_proof)?),
-            ledger_consistency_proof: BytesView::from(&bcs::to_bytes(&ledger_consistency_proof)?),
+            epoch_change_proof: BytesView::new(bcs::to_bytes(&epoch_change_proof)?),
+            ledger_consistency_proof: BytesView::new(bcs::to_bytes(&ledger_consistency_proof)?),
         })
     }
 }
@@ -799,7 +819,7 @@ impl TryFrom<AccountStateWithProof> for AccountStateWithProofView {
         account_state_with_proof: AccountStateWithProof,
     ) -> Result<AccountStateWithProofView, Error> {
         let blob = if let Some(account_blob) = account_state_with_proof.blob {
-            Some(BytesView::from(&bcs::to_bytes(&account_blob)?))
+            Some(BytesView::new(bcs::to_bytes(&account_blob)?))
         } else {
             None
         };
@@ -823,17 +843,17 @@ impl TryFrom<AccountStateProof> for AccountStateProofView {
 
     fn try_from(account_state_proof: AccountStateProof) -> Result<AccountStateProofView, Error> {
         Ok(AccountStateProofView {
-            ledger_info_to_transaction_info_proof: BytesView::from(&bcs::to_bytes(
+            ledger_info_to_transaction_info_proof: BytesView::new(bcs::to_bytes(
                 account_state_proof
                     .transaction_info_with_proof()
                     .ledger_info_to_transaction_info_proof(),
             )?),
-            transaction_info: BytesView::from(&bcs::to_bytes(
+            transaction_info: BytesView::new(bcs::to_bytes(
                 account_state_proof
                     .transaction_info_with_proof()
                     .transaction_info(),
             )?),
-            transaction_info_to_account_proof: BytesView::from(&bcs::to_bytes(
+            transaction_info_to_account_proof: BytesView::new(bcs::to_bytes(
                 account_state_proof.transaction_info_to_account_proof(),
             )?),
         })

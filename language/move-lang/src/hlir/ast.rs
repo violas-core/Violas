@@ -2,11 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{
-    expansion::ast::{SpecId, Value},
+    expansion::ast::{ability_modifiers_ast_debug, AbilitySet, SpecId, Value},
     naming::ast::{BuiltinTypeName, BuiltinTypeName_, TParam},
     parser::ast::{
-        BinOp, ConstantName, Field, FunctionName, FunctionVisibility, Kind, Kind_, ModuleIdent,
-        ResourceLoc, StructName, UnaryOp, Var,
+        BinOp, ConstantName, Field, FunctionName, FunctionVisibility, ModuleIdent, StructName,
+        UnaryOp, Var,
     },
     shared::{ast_debug::*, unique_map::UniqueMap},
 };
@@ -19,7 +19,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 // Program
 //**************************************************************************************************
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Program {
     pub modules: UniqueMap<ModuleIdent, ModuleDefinition>,
     pub scripts: BTreeMap<String, Script>,
@@ -29,7 +29,7 @@ pub struct Program {
 // Scripts
 //**************************************************************************************************
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Script {
     pub loc: Loc,
     pub constants: UniqueMap<ConstantName, Constant>,
@@ -41,11 +41,12 @@ pub struct Script {
 // Modules
 //**************************************************************************************************
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ModuleDefinition {
     pub is_source_module: bool,
     /// `dependency_order` is the topological order/rank in the dependency graph.
     pub dependency_order: usize,
+    pub friends: UniqueMap<ModuleIdent, Loc>,
     pub structs: UniqueMap<StructName, StructDefinition>,
     pub constants: UniqueMap<ConstantName, Constant>,
     pub functions: UniqueMap<FunctionName, Function>,
@@ -57,7 +58,7 @@ pub struct ModuleDefinition {
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct StructDefinition {
-    pub resource_opt: ResourceLoc,
+    pub abilities: AbilitySet,
     pub type_parameters: Vec<TParam>,
     pub fields: StructFields,
 }
@@ -72,7 +73,7 @@ pub enum StructFields {
 // Constants
 //**************************************************************************************************
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub struct Constant {
     pub loc: Loc,
     pub signature: BaseType,
@@ -90,7 +91,7 @@ pub struct FunctionSignature {
     pub return_type: Type,
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub enum FunctionBody_ {
     Native,
     Defined {
@@ -100,7 +101,7 @@ pub enum FunctionBody_ {
 }
 pub type FunctionBody = Spanned<FunctionBody_>;
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub struct Function {
     pub visibility: FunctionVisibility,
     pub signature: FunctionSignature,
@@ -123,7 +124,7 @@ pub type TypeName = Spanned<TypeName_>;
 #[allow(clippy::large_enum_variant)]
 pub enum BaseType_ {
     Param(TParam),
-    Apply(Kind, TypeName, Vec<BaseType>),
+    Apply(AbilitySet, TypeName, Vec<BaseType>),
     Unreachable,
     UnresolvedError,
 }
@@ -149,7 +150,7 @@ pub type Type = Spanned<Type_>;
 // Statements
 //**************************************************************************************************
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 #[allow(clippy::large_enum_variant)]
 pub enum Statement_ {
     Command(Command),
@@ -165,7 +166,6 @@ pub enum Statement_ {
     Loop {
         block: Block,
         has_break: bool,
-        has_return_abort: bool,
     },
 }
 pub type Statement = Spanned<Statement_>;
@@ -183,20 +183,26 @@ pub struct Label(pub usize);
 // Commands
 //**************************************************************************************************
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 #[allow(clippy::large_enum_variant)]
 pub enum Command_ {
     Assign(Vec<LValue>, Box<Exp>),
     Mutate(Box<Exp>, Box<Exp>),
     Abort(Exp),
-    Return(Exp),
+    Return {
+        from_user: bool,
+        exp: Exp,
+    },
     Break,
     Continue,
     IgnoreAndPop {
         pop_num: usize,
         exp: Exp,
     },
-    Jump(Label),
+    Jump {
+        from_user: bool,
+        target: Label,
+    },
     JumpIf {
         cond: Exp,
         if_true: Label,
@@ -205,7 +211,7 @@ pub enum Command_ {
 }
 pub type Command = Spanned<Command_>;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum LValue_ {
     Ignore,
     Var(Var, Box<SingleType>),
@@ -217,7 +223,14 @@ pub type LValue = Spanned<LValue_>;
 // Expressions
 //**************************************************************************************************
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum UnitCase {
+    Trailing,
+    Implicit,
+    FromUser,
+}
+
+#[derive(Debug, PartialEq, Clone)]
 pub struct ModuleCall {
     pub module: ModuleIdent,
     pub name: FunctionName,
@@ -226,7 +239,7 @@ pub struct ModuleCall {
     pub acquires: BTreeMap<StructName, Loc>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum BuiltinFunction_ {
     MoveTo(BaseType),
     MoveFrom(BaseType),
@@ -235,9 +248,9 @@ pub enum BuiltinFunction_ {
 }
 pub type BuiltinFunction = Spanned<BuiltinFunction_>;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum UnannotatedExp_ {
-    Unit { trailing: bool },
+    Unit { case: UnitCase },
     Value(Value),
     Move { from_user: bool, var: Var },
     Copy { from_user: bool, var: Var },
@@ -266,7 +279,7 @@ pub enum UnannotatedExp_ {
     UnresolvedError,
 }
 pub type UnannotatedExp = Spanned<UnannotatedExp_>;
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct Exp {
     pub ty: Type,
     pub exp: UnannotatedExp,
@@ -275,7 +288,7 @@ pub fn exp(ty: Type, exp: UnannotatedExp) -> Exp {
     Exp { ty, exp }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum ExpListItem {
     Single(Exp, Box<SingleType>),
     Splat(Loc, Exp, Vec<SingleType>),
@@ -299,7 +312,7 @@ impl Command_ {
         match self {
             Break | Continue => panic!("ICE break/continue not translated to jumps"),
             Assign(_, _) | Mutate(_, _) | IgnoreAndPop { .. } => false,
-            Abort(_) | Return(_) | Jump(_) | JumpIf { .. } => true,
+            Abort(_) | Return { .. } | Jump { .. } | JumpIf { .. } => true,
         }
     }
 
@@ -307,8 +320,10 @@ impl Command_ {
         use Command_::*;
         match self {
             Break | Continue => panic!("ICE break/continue not translated to jumps"),
-            Assign(_, _) | Mutate(_, _) | IgnoreAndPop { .. } | Jump(_) | JumpIf { .. } => false,
-            Abort(_) | Return(_) => true,
+            Assign(_, _) | Mutate(_, _) | IgnoreAndPop { .. } | Jump { .. } | JumpIf { .. } => {
+                false
+            }
+            Abort(_) | Return { .. } => true,
         }
     }
 
@@ -319,7 +334,7 @@ impl Command_ {
             Assign(ls, e) => ls.is_empty() && e.is_unit(),
             IgnoreAndPop { exp: e, .. } => e.is_unit(),
 
-            Mutate(_, _) | Return(_) | Abort(_) | JumpIf { .. } | Jump(_) => false,
+            Mutate(_, _) | Return { .. } | Abort(_) | JumpIf { .. } | Jump { .. } => false,
         }
     }
 
@@ -332,9 +347,9 @@ impl Command_ {
             Mutate(_, _) | Assign(_, _) | IgnoreAndPop { .. } => {
                 panic!("ICE Should not be last command in block")
             }
-            Abort(_) | Return(_) => (),
-            Jump(lbl) => {
-                successors.insert(*lbl);
+            Abort(_) | Return { .. } => (),
+            Jump { target, .. } => {
+                successors.insert(*target);
             }
             JumpIf {
                 if_true, if_false, ..
@@ -355,12 +370,7 @@ impl Exp {
 
 impl UnannotatedExp_ {
     pub fn is_unit(&self) -> bool {
-        matches!(
-            self,
-            UnannotatedExp_::Unit {
-                trailing: _trailing,
-            }
-        )
+        matches!(self, UnannotatedExp_::Unit { case: _case })
     }
 }
 
@@ -369,28 +379,32 @@ impl BaseType_ {
         use BuiltinTypeName_::*;
 
         let kind = match b_ {
-            U8 | U64 | U128 | Bool | Address => sp(loc, Kind_::Copyable),
-            Signer => sp(loc, Kind_::Resource),
+            U8 | U64 | U128 | Bool | Address => AbilitySet::primitives(loc),
+            Signer => AbilitySet::signer(loc),
             Vector => {
-                assert!(
-                    ty_args.len() == 1,
-                    "ICE vector should have exactly 1 type argument."
-                );
-                ty_args[0].value.kind()
+                let declared_abilities = AbilitySet::collection(loc);
+                let ty_arg_abilities = {
+                    assert!(ty_args.len() == 1);
+                    ty_args[0].value.abilities(ty_args[0].loc)
+                };
+                AbilitySet::from_abilities(
+                    declared_abilities
+                        .into_iter()
+                        .filter(|ab| ty_arg_abilities.has_ability_(ab.value.requires())),
+                )
+                .unwrap()
             }
         };
         let n = sp(loc, TypeName_::Builtin(sp(loc, b_)));
         sp(loc, BaseType_::Apply(kind, n, ty_args))
     }
 
-    pub fn kind(&self) -> Kind {
+    pub fn abilities(&self, loc: Loc) -> AbilitySet {
         match self {
-            BaseType_::Apply(k, _, _) => k.clone(),
-            BaseType_::Param(TParam { kind, .. }) => kind.clone(),
-            BaseType_::Unreachable | BaseType_::UnresolvedError => panic!(
-                "ICE unreachable/unresolved error has no kind. Should only exist in dead code \
-                 that should not be analyzed"
-            ),
+            BaseType_::Apply(abilities, _, _) | BaseType_::Param(TParam { abilities, .. }) => {
+                abilities.clone()
+            }
+            BaseType_::Unreachable | BaseType_::UnresolvedError => AbilitySet::all(loc),
         }
     }
 
@@ -440,10 +454,10 @@ impl SingleType_ {
         Self::base(BaseType_::u128(loc))
     }
 
-    pub fn kind(&self, loc: Loc) -> Kind {
+    pub fn abilities(&self, loc: Loc) -> AbilitySet {
         match self {
-            SingleType_::Ref(_, _) => sp(loc, Kind_::Copyable),
-            SingleType_::Base(b) => b.value.kind(),
+            SingleType_::Ref(_, _) => AbilitySet::references(loc),
+            SingleType_::Base(b) => b.value.abilities(loc),
         }
     }
 }
@@ -528,7 +542,7 @@ impl std::fmt::Display for Label {
 impl AstDebug for Program {
     fn ast_debug(&self, w: &mut AstWriter) {
         let Program { modules, scripts } = self;
-        for (m, mdef) in modules {
+        for (m, mdef) in modules.key_cloned_iter() {
             w.write(&format!("module {}", m));
             w.block(|w| mdef.ast_debug(w));
             w.new_line();
@@ -550,7 +564,7 @@ impl AstDebug for Script {
             function_name,
             function,
         } = self;
-        for cdef in constants {
+        for cdef in constants.key_cloned_iter() {
             cdef.ast_debug(w);
             w.new_line();
         }
@@ -563,6 +577,7 @@ impl AstDebug for ModuleDefinition {
         let ModuleDefinition {
             is_source_module,
             dependency_order,
+            friends,
             structs,
             constants,
             functions,
@@ -573,15 +588,19 @@ impl AstDebug for ModuleDefinition {
             w.writeln("source module")
         }
         w.writeln(&format!("dependency order #{}", dependency_order));
-        for sdef in structs {
+        for (mident, _loc) in friends.key_cloned_iter() {
+            w.write(&format!("friend {};", mident));
+            w.new_line();
+        }
+        for sdef in structs.key_cloned_iter() {
             sdef.ast_debug(w);
             w.new_line();
         }
-        for cdef in constants {
+        for cdef in constants.key_cloned_iter() {
             cdef.ast_debug(w);
             w.new_line();
         }
-        for fdef in functions {
+        for fdef in functions.key_cloned_iter() {
             fdef.ast_debug(w);
             w.new_line();
         }
@@ -593,7 +612,7 @@ impl AstDebug for (StructName, &StructDefinition) {
         let (
             name,
             StructDefinition {
-                resource_opt,
+                abilities,
                 type_parameters,
                 fields,
             },
@@ -601,11 +620,10 @@ impl AstDebug for (StructName, &StructDefinition) {
         if let StructFields::Native(_) = fields {
             w.write("native ");
         }
-        if resource_opt.is_some() {
-            w.write("resource ");
-        }
+
         w.write(&format!("struct {}", name));
         type_parameters.ast_debug(w);
+        ability_modifiers_ast_debug(w, abilities);
         if let StructFields::Defined(fields) = fields {
             w.block(|w| {
                 w.list(fields, ";", |w, (f, bt)| {
@@ -659,7 +677,7 @@ impl AstDebug for (&UniqueMap<Var, SingleType>, &Block) {
         let (locals, body) = self;
         w.write("locals:");
         w.indent(4, |w| {
-            w.list(*locals, ",", |w, (v, st)| {
+            w.list(*locals, ",", |w, (_, v, st)| {
                 w.write(&format!("{}: ", v));
                 st.ast_debug(w);
                 true
@@ -719,8 +737,8 @@ impl AstDebug for BaseType_ {
     fn ast_debug(&self, w: &mut AstWriter) {
         match self {
             BaseType_::Param(tp) => tp.ast_debug(w),
-            BaseType_::Apply(k, m, ss) => {
-                w.annotate(
+            BaseType_::Apply(abilities, m, ss) => {
+                w.annotate_gen(
                     |w| {
                         m.ast_debug(w);
                         if !ss.is_empty() {
@@ -729,7 +747,13 @@ impl AstDebug for BaseType_ {
                             w.write(">");
                         }
                     },
-                    k,
+                    abilities,
+                    |w, abilities| {
+                        w.list(abilities, "+", |w, ab| {
+                            ab.ast_debug(w);
+                            false
+                        })
+                    },
                 );
             }
             BaseType_::Unreachable => w.write("_|_"),
@@ -823,17 +847,10 @@ impl AstDebug for Statement_ {
                 w.write(")");
                 w.block(|w| block.ast_debug(w))
             }
-            S::Loop {
-                block,
-                has_break,
-                has_return_abort,
-            } => {
+            S::Loop { block, has_break } => {
                 w.write("loop");
                 if *has_break {
                     w.write("#has_break");
-                }
-                if *has_return_abort {
-                    w.write("#has_return_abort");
                 }
                 w.write(" ");
                 w.block(|w| block.ast_debug(w))
@@ -861,7 +878,11 @@ impl AstDebug for Command_ {
                 w.write("abort ");
                 e.ast_debug(w);
             }
-            C::Return(e) => {
+            C::Return { exp: e, from_user } if *from_user => {
+                w.write("return@");
+                e.ast_debug(w);
+            }
+            C::Return { exp: e, .. } => {
                 w.write("return ");
                 e.ast_debug(w);
             }
@@ -873,7 +894,8 @@ impl AstDebug for Command_ {
                 w.write(" = ");
                 exp.ast_debug(w);
             }
-            C::Jump(lbl) => w.write(&format!("jump {}", lbl.0)),
+            C::Jump { target, from_user } if *from_user => w.write(&format!("jump@{}", target.0)),
+            C::Jump { target, .. } => w.write(&format!("jump {}", target.0)),
             C::JumpIf {
                 cond,
                 if_true,
@@ -898,10 +920,15 @@ impl AstDebug for UnannotatedExp_ {
     fn ast_debug(&self, w: &mut AstWriter) {
         use UnannotatedExp_ as E;
         match self {
-            E::Unit { trailing } if !trailing => w.write("()"),
             E::Unit {
-                trailing: _trailing,
+                case: UnitCase::FromUser,
+            } => w.write("()"),
+            E::Unit {
+                case: UnitCase::Implicit,
             } => w.write("/*()*/"),
+            E::Unit {
+                case: UnitCase::Trailing,
+            } => w.write("/*;()*/"),
             E::Value(v) => v.ast_debug(w),
             E::Move {
                 from_user: false,

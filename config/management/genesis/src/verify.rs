@@ -10,11 +10,11 @@ use diem_management::{
     config::ConfigPath, error::Error, secure_backend::ValidatorBackend,
     storage::StorageWrapper as Storage,
 };
-use diem_network_address::NetworkAddress;
 use diem_temppath::TempPath;
 use diem_types::{
     account_address::AccountAddress, account_config, account_state::AccountState,
-    on_chain_config::ValidatorSet, validator_config::ValidatorConfig, waypoint::Waypoint,
+    network_address::NetworkAddress, on_chain_config::ValidatorSet,
+    validator_config::ValidatorConfig, waypoint::Waypoint,
 };
 use diem_vm::DiemVM;
 use diemdb::DiemDB;
@@ -146,7 +146,7 @@ fn write_waypoint(storage: &Storage, buffer: &mut String, key: &'static str) {
 fn compare_genesis(
     storage: Storage,
     buffer: &mut String,
-    genesis_path: &PathBuf,
+    genesis_path: &Path,
 ) -> Result<(), Error> {
     // Compute genesis and waypoint and compare to given waypoint
     let db_path = TempPath::new();
@@ -203,7 +203,7 @@ fn compare_genesis(
 /// Compute the ledger given a genesis writeset transaction and return access to that ledger and
 /// the waypoint for that state.
 fn compute_genesis(
-    genesis_path: &PathBuf,
+    genesis_path: &Path,
     db_path: &Path,
 ) -> Result<(DbReaderWriter, Waypoint), Error> {
     let diemdb = DiemDB::open(db_path, false, None, RocksdbConfig::default())

@@ -234,10 +234,12 @@ impl Worker {
             .db
             .iter::<StaleNodeIndexSchema>(ReadOptions::default())?;
         iter.seek_to_first();
-        Ok(iter
-            .next()
-            .transpose()?
-            .map_or(0, |(index, _)| index.stale_since_version))
+        Ok(iter.next().transpose()?.map_or(0, |(index, _)| {
+            index
+                .stale_since_version
+                .checked_sub(1)
+                .expect("Nothing is stale since version 0.")
+        }))
     }
 
     /// Log the progress.
@@ -399,8 +401,7 @@ pub fn prune_state(
         let mut batch = SchemaBatch::new();
         indices
             .into_iter()
-            .map(|index| batch.delete::<JellyfishMerkleNodeSchema>(&index.node_key))
-            .collect::<Result<_>>()?;
+            .try_for_each(|index| batch.delete::<JellyfishMerkleNodeSchema>(&index.node_key))?;
         db.write_schemas(batch)?;
         Ok(new_least_readable_version)
     }

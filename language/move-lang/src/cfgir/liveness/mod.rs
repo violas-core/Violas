@@ -91,11 +91,12 @@ fn command(state: &mut LivenessState, sp!(_, cmd_): &Command) {
             exp(state, er);
             exp(state, el)
         }
-        C::Return(e) | C::Abort(e) | C::IgnoreAndPop { exp: e, .. } | C::JumpIf { cond: e, .. } => {
-            exp(state, e)
-        }
+        C::Return { exp: e, .. }
+        | C::Abort(e)
+        | C::IgnoreAndPop { exp: e, .. }
+        | C::JumpIf { cond: e, .. } => exp(state, e),
 
-        C::Jump(_) => (),
+        C::Jump { .. } => (),
         C::Break | C::Continue => panic!("ICE break/continue not translated to jumps"),
     }
 }
@@ -163,7 +164,7 @@ fn exp_list_item(state: &mut LivenessState, item: &ExpListItem) {
 /// - Switches the last inferred `copy` to a `move`.
 ///   It will error if the `copy` was specified by the user
 /// - Reports an error if an assignment/let was not used
-///   Switches it to an `Ignore` if it is not a resource (helps with error messages for borrows)
+///   Switches it to an `Ignore` if it has the drop ability (helps with error messages for borrows)
 
 pub fn last_usage(
     errors: &mut Errors,
@@ -187,7 +188,7 @@ mod last_usage {
             ast::*,
             translate::{display_var, DisplayVar},
         },
-        parser::ast::Var,
+        parser::ast::{Ability_, Var},
         shared::{unique_map::*, *},
     };
     use move_ir_types::location::*;
@@ -215,10 +216,9 @@ mod last_usage {
             }
         }
 
-        fn is_resourceful(&self, local: &Var) -> bool {
+        fn has_drop(&self, local: &Var) -> bool {
             let ty = self.locals.get(local).unwrap();
-            let k = ty.value.kind(ty.loc);
-            k.value.is_resourceful()
+            ty.value.abilities(ty.loc).has_ability_(Ability_::Drop)
         }
 
         fn error(&mut self, e: Vec<(Loc, impl Into<String>)>) {
@@ -270,12 +270,12 @@ mod last_usage {
                 exp(context, el);
                 exp(context, er)
             }
-            C::Return(e)
+            C::Return { exp: e, .. }
             | C::Abort(e)
             | C::IgnoreAndPop { exp: e, .. }
             | C::JumpIf { cond: e, .. } => exp(context, e),
 
-            C::Jump(_) => (),
+            C::Jump { .. } => (),
             C::Break | C::Continue => panic!("ICE break/continue not translated to jumps"),
         }
     }
@@ -294,13 +294,16 @@ mod last_usage {
                     match display_var(v.value()) {
                         DisplayVar::Tmp => (),
                         DisplayVar::Orig(v_str) => {
-                            let msg = format!(
-                                "Unused assignment or binding for local '{}'. Consider removing \
-                                 or replacing it with '_'",
-                                v_str
-                            );
-                            context.error(vec![(l.loc, msg)]);
-                            if !context.is_resourceful(v) {
+                            if !v.starts_with_underscore() {
+                                let msg = format!(
+                                    "Unused assignment or binding for local '{}'. Consider \
+                                     removing, replacing with '_', or prefixing with '_' (e.g., \
+                                     '_{}')",
+                                    v_str, v_str
+                                );
+                                context.error(vec![(l.loc, msg)]);
+                            }
+                            if context.has_drop(v) {
                                 l.value = L::Ignore
                             }
                         }

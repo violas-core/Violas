@@ -15,7 +15,6 @@ mod move_vm;
 mod network;
 mod proof;
 mod safety_rules;
-mod secure_json_rpc_client;
 mod secure_storage_vault;
 mod state_sync;
 mod storage;
@@ -55,7 +54,6 @@ static ALL_TARGETS: Lazy<BTreeMap<&'static str, Box<dyn FuzzTargetImpl>>> = Lazy
         Box::new(proof::EventProofFuzzer::default()),
         Box::new(proof::TransactionListProofFuzzer::default()),
         // Network
-        Box::new(network::RpcInboundRequest::default()),
         Box::new(network::NetworkNoiseInitiator::default()),
         Box::new(network::NetworkNoiseResponder::default()),
         Box::new(network::NetworkNoiseStream::default()),
@@ -68,10 +66,6 @@ static ALL_TARGETS: Lazy<BTreeMap<&'static str, Box<dyn FuzzTargetImpl>>> = Lazy
         Box::new(safety_rules::SafetyRulesHandleMessage::default()),
         Box::new(safety_rules::SafetyRulesSignProposal::default()),
         Box::new(safety_rules::SafetyRulesSignTimeout::default()),
-        // Secure JSON RPC Client
-        Box::new(secure_json_rpc_client::SecureJsonRpcSubmitTransaction::default()),
-        Box::new(secure_json_rpc_client::SecureJsonRpcGetAccountState::default()),
-        Box::new(secure_json_rpc_client::SecureJsonRpcGetAccountTransaction::default()),
         // Secure Storage Vault
         Box::new(secure_storage_vault::VaultGenericResponse::default()),
         Box::new(secure_storage_vault::VaultPolicyReadResponse::default()),

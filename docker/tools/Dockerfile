@@ -1,4 +1,4 @@
-FROM debian:buster-20201117@sha256:f520e4a80b736389c3de162b8f60608d11c9fa3b2ec619bd40aabfd7e70d3455 AS toolchain
+FROM debian:buster-20210329@sha256:5c1daf79a2d6202cf1b80a80f522fa0aaec4dc1c0520135ed277627c12171c3b AS toolchain
 
 # To use http/https proxy while building, use:
 # docker build --build-arg https_proxy=http://fwdproxy:8080 --build-arg http_proxy=http://fwdproxy:8080
@@ -12,9 +12,6 @@ WORKDIR /diem
 COPY rust-toolchain /diem/rust-toolchain
 RUN rustup install $(cat rust-toolchain)
 
-COPY cargo-toolchain /diem/cargo-toolchain
-RUN rustup install $(cat cargo-toolchain)
-
 FROM toolchain AS builder
 
 ARG ENABLE_FAILPOINTS
@@ -23,7 +20,7 @@ COPY . /diem
 RUN ./docker/build-common.sh
 
 ### Production Image ###
-FROM debian:buster-20200803-slim@sha256:e0a33348ac8cace6b4294885e6e0bb57ecdfe4b6e415f1a7f4c5da5fe3116e02 AS prod
+FROM debian:buster-20210329@sha256:5c1daf79a2d6202cf1b80a80f522fa0aaec4dc1c0520135ed277627c12171c3b AS prod
 
 RUN echo "deb http://deb.debian.org/debian bullseye main" > /etc/apt/sources.list.d/bullseye.list && \
     echo "Package: *\nPin: release n=bullseye\nPin-Priority: 50" > /etc/apt/preferences.d/bullseye
@@ -36,7 +33,7 @@ RUN apt-get update && \
 RUN ln -s /usr/bin/python3 /usr/local/bin/python
 COPY docker/tools/boto.cfg /etc
 
-RUN cd /usr/local/bin && wget https://aka.ms/downloadazcopy-v10-linux -O- | tar --gzip --wildcards --extract '*/azcopy' --strip-components=1 --no-same-owner && chmod +x azcopy
+RUN cd /usr/local/bin && wget https://azcopyvnext.azureedge.net/release20210226/azcopy_linux_amd64_10.9.0.tar.gz -O- | tar --gzip --wildcards --extract '*/azcopy' --strip-components=1 --no-same-owner && chmod +x azcopy
 RUN wget https://storage.googleapis.com/pub/gsutil.tar.gz -O- | tar --gzip --directory /opt --extract && ln -s /opt/gsutil/gsutil /usr/local/bin
 
 COPY --from=builder /diem/target/release/diem-genesis-tool /usr/local/bin
@@ -45,6 +42,8 @@ COPY --from=builder /diem/target/release/db-bootstrapper /usr/local/bin
 COPY --from=builder /diem/target/release/db-backup /usr/local/bin
 COPY --from=builder /diem/target/release/db-backup-verify /usr/local/bin
 COPY --from=builder /diem/target/release/db-restore /usr/local/bin
+COPY --from=builder /diem/target/release/diem-transaction-replay /usr/local/bin
+COPY --from=builder /diem/target/release/diem-writeset-generator /usr/local/bin
 
 ARG BUILD_DATE
 ARG GIT_REV

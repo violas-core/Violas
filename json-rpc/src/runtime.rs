@@ -6,13 +6,14 @@ use crate::{
     errors::{is_internal_error, JsonRpcError},
     methods::{build_registry, JsonRpcRequest, JsonRpcService, RpcRegistry},
     response::{JsonRpcResponse, X_DIEM_CHAIN_ID, X_DIEM_TIMESTAMP_USEC_ID, X_DIEM_VERSION_ID},
+    util::{sdk_info_from_user_agent, SdkInfo},
 };
 use anyhow::{ensure, Result};
 use diem_config::config::{NodeConfig, RoleType};
-use diem_logger::{debug, Level, Schema};
+use diem_logger::{debug, Schema};
 use diem_mempool::MempoolClientSender;
 use diem_types::{chain_id::ChainId, ledger_info::LedgerInfoWithSignatures};
-use futures::future::join_all;
+use futures::future::{join_all, Either};
 use rand::{rngs::OsRng, RngCore};
 use serde_json::{map::Map, Value};
 use std::{
@@ -75,21 +76,18 @@ struct HealthCheckParams {
 #[macro_export]
 macro_rules! log_response {
     ($trace_id: expr, $resp: expr, $is_batch: expr) => {
-        let mut level = Level::Trace;
-        if let Some(ref error) = $resp.error {
-            if is_internal_error(&error.code) {
-                level = Level::Error
+        let log = RpcResponseLog {
+            trace_id: $trace_id,
+            is_batch: $is_batch,
+            response_error: $resp.error.is_some(),
+            response: $resp,
+        };
+        match &$resp.error {
+            Some(error) if is_internal_error(&error.code) => {
+                diem_logger::error!(log)
             }
+            _ => diem_logger::trace!(log),
         }
-        diem_logger::log!(
-            level,
-            RpcResponseLog {
-                trace_id: $trace_id,
-                is_batch: $is_batch,
-                response_error: $resp.error.is_some(),
-                response: $resp,
-            }
-        );
     };
 }
 
@@ -100,14 +98,15 @@ pub fn bootstrap(
     batch_size_limit: u16,
     page_size_limit: u16,
     content_len_limit: usize,
+    tls_cert_path: &Option<String>,
+    tls_key_path: &Option<String>,
     diem_db: Arc<dyn DbReader>,
     mp_sender: MempoolClientSender,
     role: RoleType,
     chain_id: ChainId,
 ) -> Runtime {
-    let runtime = Builder::new()
+    let runtime = Builder::new_multi_thread()
         .thread_name("json-rpc")
-        .threaded_scheduler()
         .enable_all()
         .build()
         .expect("[json-rpc] failed to create runtime");
@@ -129,6 +128,7 @@ pub fn bootstrap(
         .and(warp::body::json())
         .and(warp::any().map(move || service.clone()))
         .and(warp::any().map(move || Arc::clone(&registry)))
+        .and(warp::filters::header::optional::<String>("user-agent"))
         .and_then(rpc_endpoint)
         .with(warp::log::custom(|info| {
             debug!(HttpRequestLog {
@@ -179,7 +179,17 @@ pub fn bootstrap(
     //
     // Note: we need to enter the runtime context first to actually bind, since
     //       tokio TcpListener can only be bound inside a tokio context.
-    let server = runtime.enter(move || warp::serve(full_route).bind(address));
+    let _guard = runtime.enter();
+    let server = match tls_cert_path {
+        None => Either::Left(warp::serve(full_route).bind(address)),
+        Some(cert_path) => Either::Right(
+            warp::serve(full_route)
+                .tls()
+                .cert_path(cert_path)
+                .key_path(tls_key_path.as_ref().unwrap())
+                .bind(address),
+        ),
+    };
     runtime.handle().spawn(server);
     runtime
 }
@@ -196,6 +206,8 @@ pub fn bootstrap_from_config(
         config.json_rpc.batch_size_limit,
         config.json_rpc.page_size_limit,
         config.json_rpc.content_length_limit,
+        &config.json_rpc.tls_cert_path,
+        &config.json_rpc.tls_key_path,
         diem_db,
         mp_sender,
         config.base.role,
@@ -229,10 +241,7 @@ pub fn check_latest_ledger_info_timestamp(
     let expectation = now
         .sub(Duration::from_secs(duration_sec))
         .duration_since(UNIX_EPOCH)?;
-    ensure!(
-        timestamp >= expectation,
-        "Blockchain timestamp delta with current time"
-    );
+    ensure!(timestamp >= expectation);
     Ok(())
 }
 
@@ -243,6 +252,7 @@ pub(crate) async fn rpc_endpoint(
     data: Value,
     service: JsonRpcService,
     registry: Arc<RpcRegistry>,
+    user_agent: Option<String>,
 ) -> Result<warp::reply::Response, warp::Rejection> {
     let label = match data {
         Value::Array(_) => LABEL_BATCH,
@@ -252,7 +262,7 @@ pub(crate) async fn rpc_endpoint(
     let timer = counters::RPC_REQUEST_LATENCY
         .with_label_values(&[label])
         .start_timer();
-    let ret = rpc_endpoint_without_metrics(data, service, registry).await;
+    let ret = rpc_endpoint_without_metrics(data, service, registry, user_agent.as_deref()).await;
     timer.stop_and_record();
     ret
 }
@@ -261,6 +271,7 @@ async fn rpc_endpoint_without_metrics(
     data: Value,
     service: JsonRpcService,
     registry: Arc<RpcRegistry>,
+    user_agent: Option<&str>,
 ) -> Result<warp::reply::Response, warp::Rejection> {
     // take snapshot of latest version of DB to be used across all requests, especially for batched requests
     let ledger_info = service
@@ -276,6 +287,7 @@ async fn rpc_endpoint_without_metrics(
     let chain_id = service.chain_id();
     let latest_ledger_version = ledger_info.ledger_info().version();
     let latest_ledger_timestamp_usecs = ledger_info.ledger_info().timestamp_usecs();
+    let sdk_info = sdk_info_from_user_agent(user_agent);
 
     let resp = Ok(if let Value::Array(requests) = data {
         match service.validate_batch_size_limit(requests.len()) {
@@ -289,6 +301,7 @@ async fn rpc_endpoint_without_metrics(
                         ledger_info.clone(),
                         LABEL_BATCH,
                         trace_id.clone(),
+                        sdk_info,
                     )
                 });
                 let responses = join_all(futures).await;
@@ -303,7 +316,7 @@ async fn rpc_endpoint_without_metrics(
                     latest_ledger_version,
                     latest_ledger_timestamp_usecs,
                 );
-                set_response_error(&mut resp, err, LABEL_BATCH, "unknown");
+                set_response_error(&mut resp, err, LABEL_BATCH, "unknown", sdk_info);
                 log_response!(trace_id.clone(), &resp, true);
 
                 warp::reply::json(&resp)
@@ -318,6 +331,7 @@ async fn rpc_endpoint_without_metrics(
             ledger_info,
             LABEL_SINGLE,
             trace_id.clone(),
+            sdk_info,
         )
         .await;
         log_response!(trace_id, &resp, false);
@@ -353,6 +367,7 @@ async fn rpc_request_handler(
     ledger_info: LedgerInfoWithSignatures,
     request_type_label: &str,
     trace_id: String,
+    sdk_info: SdkInfo,
 ) -> JsonRpcResponse {
     let request: Map<String, Value>;
     let mut response = JsonRpcResponse::new(
@@ -371,6 +386,7 @@ async fn rpc_request_handler(
                 JsonRpcError::invalid_format(),
                 request_type_label,
                 "unknown",
+                sdk_info,
             );
             return response;
         }
@@ -382,33 +398,24 @@ async fn rpc_request_handler(
             response.id = Some(request_id);
         }
         Err(err) => {
-            set_response_error(&mut response, err, request_type_label, "unknown");
+            set_response_error(&mut response, err, request_type_label, "unknown", sdk_info);
             return response;
         }
     };
 
     // verify protocol version
     if let Err(err) = verify_protocol(&request) {
-        set_response_error(&mut response, err, request_type_label, "unknown");
+        set_response_error(&mut response, err, request_type_label, "unknown", sdk_info);
         return response;
     }
 
     // parse parameters
-    let params;
-    match request.get("params") {
-        Some(Value::Array(parameters)) => {
-            params = parameters.to_vec();
-        }
+    let params = match request.get("params") {
+        Some(Value::Array(parameters)) => parameters.to_vec(),
         _ => {
-            set_response_error(
-                &mut response,
-                JsonRpcError::invalid_params(None),
-                request_type_label,
-                "unknown",
-            );
-            return response;
+            vec![]
         }
-    }
+    };
 
     let request_params = JsonRpcRequest {
         trace_id,
@@ -426,7 +433,13 @@ async fn rpc_request_handler(
                     Ok(result) => {
                         response.result = Some(result);
                         counters::REQUESTS
-                            .with_label_values(&[request_type_label, name, LABEL_SUCCESS])
+                            .with_label_values(&[
+                                request_type_label,
+                                name,
+                                LABEL_SUCCESS,
+                                sdk_info.language.as_str(),
+                                &sdk_info.version.to_string(),
+                            ])
                             .inc();
                     }
                     Err(err) => {
@@ -438,9 +451,16 @@ async fn rpc_request_handler(
                                 .unwrap_or_else(|| JsonRpcError::internal_error(err.to_string())),
                             request_type_label,
                             &name,
+                            sdk_info,
                         );
                         counters::REQUESTS
-                            .with_label_values(&[request_type_label, name, LABEL_FAIL])
+                            .with_label_values(&[
+                                request_type_label,
+                                name,
+                                LABEL_FAIL,
+                                sdk_info.language.as_str(),
+                                &sdk_info.version.to_string(),
+                            ])
                             .inc();
                     }
                 }
@@ -451,6 +471,7 @@ async fn rpc_request_handler(
                 JsonRpcError::method_not_found(),
                 request_type_label,
                 "not_found",
+                sdk_info,
             ),
         },
         _ => set_response_error(
@@ -458,6 +479,7 @@ async fn rpc_request_handler(
             JsonRpcError::method_not_found(),
             request_type_label,
             "not_found",
+            sdk_info,
         ),
     }
 
@@ -471,11 +493,18 @@ fn set_response_error(
     error: JsonRpcError,
     request_type: &str,
     method: &str,
+    sdk_info: SdkInfo,
 ) {
     let err_code = error.code;
     if is_internal_error(&error.code) {
         counters::INTERNAL_ERRORS
-            .with_label_values(&[request_type, method, &err_code.to_string()])
+            .with_label_values(&[
+                request_type,
+                method,
+                &err_code.to_string(),
+                sdk_info.language.as_str(),
+                &sdk_info.version.to_string(),
+            ])
             .inc();
     } else {
         let label = match err_code {
@@ -486,7 +515,13 @@ fn set_response_error(
             _ => "unexpected_code",
         };
         counters::INVALID_REQUESTS
-            .with_label_values(&[request_type, method, label])
+            .with_label_values(&[
+                request_type,
+                method,
+                label,
+                sdk_info.language.as_str(),
+                &sdk_info.version.to_string(),
+            ])
             .inc();
     }
 

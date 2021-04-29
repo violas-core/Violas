@@ -7,7 +7,7 @@ module AlicePays {
     use 0x1::XUS::XUS;
     use 0x1::DiemAccount;
 
-    resource struct T {
+    struct T has key {
         cap: DiemAccount::WithdrawCapability,
     }
 
@@ -35,7 +35,8 @@ module AlicePays {
 //! sender: alice
 script {
 use {{alice}}::AlicePays;
-fun main(sender: &signer) {
+fun main(sender: signer) {
+    let sender = &sender;
     AlicePays::create(sender)
 }
 }

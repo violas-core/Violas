@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 pub mod backup_service_client;
+pub(crate) mod error_notes;
 pub mod read_record_bytes;
 pub mod storage_ext;
 pub(crate) mod stream;
@@ -14,7 +15,7 @@ use diem_config::config::RocksdbConfig;
 use diem_crypto::HashValue;
 use diem_infallible::duration_since_epoch;
 use diem_jellyfish_merkle::{restore::JellyfishMerkleRestore, NodeBatch, TreeWriter};
-use diem_types::{transaction::Version, waypoint::Waypoint};
+use diem_types::{account_state_blob::AccountStateBlob, transaction::Version, waypoint::Waypoint};
 use diemdb::{backup::restore_handler::RestoreHandler, DiemDB, GetRestoreHandler};
 use std::{
     collections::HashMap,
@@ -88,6 +89,9 @@ pub struct GlobalRestoreOpt {
 
     #[structopt(flatten)]
     pub rocksdb_opt: RocksdbOpt,
+
+    #[structopt(flatten)]
+    pub concurernt_downloads: ConcurrentDownloadsOpt,
 }
 
 pub enum RestoreRunMode {
@@ -97,8 +101,8 @@ pub enum RestoreRunMode {
 
 struct MockTreeWriter;
 
-impl TreeWriter for MockTreeWriter {
-    fn write_node_batch(&self, _node_batch: &NodeBatch) -> Result<()> {
+impl TreeWriter<AccountStateBlob> for MockTreeWriter {
+    fn write_node_batch(&self, _node_batch: &NodeBatch<AccountStateBlob>) -> Result<()> {
         Ok(())
     }
 }
@@ -122,7 +126,7 @@ impl RestoreRunMode {
         &self,
         version: Version,
         expected_root_hash: HashValue,
-    ) -> Result<JellyfishMerkleRestore> {
+    ) -> Result<JellyfishMerkleRestore<AccountStateBlob>> {
         match self {
             Self::Restore { restore_handler } => {
                 restore_handler.get_state_restore_receiver(version, expected_root_hash)
@@ -141,6 +145,7 @@ pub struct GlobalRestoreOptions {
     pub target_version: Version,
     pub trusted_waypoints: Arc<HashMap<Version, Waypoint>>,
     pub run_mode: Arc<RestoreRunMode>,
+    pub concurrent_downloads: usize,
 }
 
 impl TryFrom<GlobalRestoreOpt> for GlobalRestoreOptions {
@@ -148,6 +153,7 @@ impl TryFrom<GlobalRestoreOpt> for GlobalRestoreOptions {
 
     fn try_from(opt: GlobalRestoreOpt) -> Result<Self> {
         let target_version = opt.target_version.unwrap_or(Version::max_value());
+        let concurrent_downloads = opt.concurernt_downloads.get();
         let run_mode = if let Some(db_dir) = &opt.db_dir {
             let restore_handler = Arc::new(DiemDB::open(
                 db_dir,
@@ -164,6 +170,7 @@ impl TryFrom<GlobalRestoreOpt> for GlobalRestoreOptions {
             target_version,
             trusted_waypoints: Arc::new(opt.trusted_waypoints.verify()?),
             run_mode: Arc::new(run_mode),
+            concurrent_downloads,
         })
     }
 }
@@ -199,12 +206,28 @@ impl TrustedWaypointOpt {
     }
 }
 
+#[derive(Clone, Copy, Default, StructOpt)]
+pub struct ConcurrentDownloadsOpt {
+    #[structopt(
+        long,
+        help = "[Defaults to number of CPUs] \
+        number of concurrent downloads including metadata files from the backup storage."
+    )]
+    concurrent_downloads: Option<usize>,
+}
+
+impl ConcurrentDownloadsOpt {
+    pub fn get(&self) -> usize {
+        self.concurrent_downloads.unwrap_or_else(num_cpus::get)
+    }
+}
+
 pub(crate) fn should_cut_chunk(chunk: &[u8], record: &[u8], max_chunk_size: usize) -> bool {
     !chunk.is_empty() && chunk.len() + record.len() + size_of::<u32>() > max_chunk_size
 }
 
 // TODO: use Path::exists() when Rust 1.5 stabilizes.
-pub(crate) async fn path_exists(path: &PathBuf) -> bool {
+pub(crate) async fn path_exists(path: &Path) -> bool {
     metadata(&path).await.is_ok()
 }
 

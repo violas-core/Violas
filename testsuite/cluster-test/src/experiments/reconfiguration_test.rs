@@ -9,11 +9,15 @@ use crate::{
     instance::Instance,
     tx_emitter::{execute_and_wait_transactions, gen_submit_transaction_request, EmitJobRequest},
 };
-use anyhow::{bail, ensure};
+use anyhow::ensure;
 use async_trait::async_trait;
-use diem_json_rpc_client::{JsonRpcAsyncClient, JsonRpcBatch, JsonRpcResponse};
+use diem_client::Client;
 use diem_logger::prelude::*;
 use diem_operational_tool::json_rpc::JsonRpcClientWrapper;
+use diem_transaction_builder::stdlib::{
+    encode_add_validator_and_reconfigure_script, encode_remove_validator_and_reconfigure_script,
+    encode_update_diem_version_script,
+};
 use diem_types::{
     account_address::AccountAddress, chain_id::ChainId, ledger_info::LedgerInfoWithSignatures,
 };
@@ -23,10 +27,6 @@ use std::{
     time::{Duration, Instant},
 };
 use structopt::StructOpt;
-use transaction_builder::{
-    encode_add_validator_and_reconfigure_script, encode_remove_validator_and_reconfigure_script,
-    encode_update_diem_version_script,
-};
 
 #[derive(StructOpt, Debug)]
 pub struct ReconfigurationParams {
@@ -68,19 +68,12 @@ impl ExperimentParam for ReconfigurationParams {
 }
 
 async fn expect_epoch(
-    client: &JsonRpcAsyncClient,
+    client: &Client,
     known_version: u64,
     expected_epoch: u64,
 ) -> anyhow::Result<u64> {
-    let mut batch = JsonRpcBatch::new();
-    batch.add_get_state_proof_request(known_version);
-    let resp = client.execute(batch).await?.pop().unwrap()?;
-    let state_proof = match resp {
-        JsonRpcResponse::StateProofResponse(state_proof) => state_proof,
-        _ => bail!("unexpected response"),
-    };
-    let li: LedgerInfoWithSignatures =
-        bcs::from_bytes(&state_proof.ledger_info_with_signatures.into_bytes()?)?;
+    let state_proof = client.get_state_proof(known_version).await?.into_inner();
+    let li: LedgerInfoWithSignatures = bcs::from_bytes(&state_proof.ledger_info_with_signatures)?;
     let epoch = li.ledger_info().next_block_epoch();
     ensure!(
         epoch == expected_epoch,
@@ -123,6 +116,7 @@ impl Experiment for Reconfiguration {
                     .start_job(EmitJobRequest::for_instances(
                         instances,
                         context.global_emit_job_request,
+                        0,
                         0,
                     ))
                     .await?,

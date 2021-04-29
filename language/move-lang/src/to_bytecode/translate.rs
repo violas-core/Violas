@@ -6,20 +6,21 @@ use crate::{
     cfgir::ast as G,
     compiled_unit::*,
     errors::*,
-    expansion::ast::{SpecId, Value_},
+    expansion::ast::{AbilitySet, SpecId, Value_},
     hlir::{
         ast::{self as H},
         translate::{display_var, DisplayVar},
     },
     naming::ast::{BuiltinTypeName_, TParam},
     parser::ast::{
-        BinOp, BinOp_, ConstantName, Field, FunctionName, FunctionVisibility, Kind, Kind_,
+        Ability, Ability_, BinOp, BinOp_, ConstantName, Field, FunctionName, FunctionVisibility,
         ModuleIdent, StructName, UnaryOp, UnaryOp_, Var,
     },
     shared::{unique_map::UniqueMap, *},
+    FullyCompiledProgram,
 };
 use bytecode_source_map::source_map::SourceMap;
-use diem_types::account_address::AccountAddress as DiemAddress;
+use move_core_types::account_address::AccountAddress as MoveAddress;
 use move_ir_types::{ast as IR, location::*};
 use move_vm::file_format as F;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -30,35 +31,61 @@ type CollectedInfo = (
     BTreeMap<SpecId, (IR::NopLabel, BTreeMap<Var, H::SingleType>)>,
 );
 
-//**************************************************************************************************
-// Entry
-//**************************************************************************************************
+fn extract_decls(
+    pre_compiled_lib: Option<&FullyCompiledProgram>,
+    prog: &G::Program,
+) -> (
+    HashMap<ModuleIdent, usize>,
+    HashMap<
+        (ModuleIdent, StructName),
+        (
+            BTreeSet<IR::Ability>,
+            Vec<(IR::TypeVar, BTreeSet<IR::Ability>)>,
+        ),
+    >,
+    HashMap<
+        (ModuleIdent, FunctionName),
+        (BTreeSet<(ModuleIdent, StructName)>, IR::FunctionSignature),
+    >,
+) {
+    let pre_compiled_modules = || {
+        pre_compiled_lib
+            .iter()
+            .map(|pre_compiled| {
+                pre_compiled
+                    .cfgir
+                    .modules
+                    .key_cloned_iter()
+                    .filter(|(mident, _m)| !prog.modules.contains_key(mident))
+            })
+            .flatten()
+    };
 
-pub fn program(prog: G::Program) -> Result<Vec<CompiledUnit>, Errors> {
-    let mut units = vec![];
-    let mut errors = vec![];
-    let orderings = prog
-        .modules
-        .iter()
-        .map(|(m, mdef)| (m, mdef.dependency_order))
+    let mut max_ordering = 0;
+    let mut orderings: HashMap<ModuleIdent, usize> = pre_compiled_modules()
+        .map(|(m, mdef)| {
+            max_ordering = std::cmp::max(max_ordering, mdef.dependency_order);
+            (m, mdef.dependency_order)
+        })
         .collect();
-    let sdecls = prog
-        .modules
-        .iter()
+    for (m, mdef) in prog.modules.key_cloned_iter() {
+        orderings.insert(m, mdef.dependency_order + 1 + max_ordering);
+    }
+
+    let all_modules = || prog.modules.key_cloned_iter().chain(pre_compiled_modules());
+    let sdecls = all_modules()
         .flat_map(|(m, mdef)| {
-            mdef.structs.iter().map(move |(s, sdef)| {
+            mdef.structs.key_cloned_iter().map(move |(s, sdef)| {
                 let key = (m.clone(), s);
-                let is_nominal_resource = sdef.resource_opt.is_some();
-                let kinds = type_parameters(sdef.type_parameters.clone());
-                (key, (is_nominal_resource, kinds))
+                let abilities = abilities(&sdef.abilities);
+                let type_parameters = type_parameters(sdef.type_parameters.clone());
+                (key, (abilities, type_parameters))
             })
         })
         .collect();
-    let fdecls = prog
-        .modules
-        .iter()
+    let fdecls = all_modules()
         .flat_map(|(m, mdef)| {
-            mdef.functions.iter().map(move |(f, fdef)| {
+            mdef.functions.key_cloned_iter().map(move |(f, fdef)| {
                 let key = (m.clone(), f);
                 let seen = seen_structs(&fdef.signature);
                 let sig = function_signature(&mut Context::new(None), fdef.signature.clone());
@@ -66,9 +93,27 @@ pub fn program(prog: G::Program) -> Result<Vec<CompiledUnit>, Errors> {
             })
         })
         .collect();
+    (orderings, sdecls, fdecls)
+}
 
-    let mut source_modules = prog
-        .modules
+//**************************************************************************************************
+// Entry
+//**************************************************************************************************
+
+pub fn program(
+    pre_compiled_lib: Option<&FullyCompiledProgram>,
+    prog: G::Program,
+) -> Result<Vec<CompiledUnit>, Errors> {
+    let mut units = vec![];
+    let mut errors = vec![];
+
+    let (orderings, sdecls, fdecls) = extract_decls(pre_compiled_lib, &prog);
+    let G::Program {
+        modules: gmodules,
+        scripts: gscripts,
+    } = prog;
+
+    let mut source_modules = gmodules
         .into_iter()
         .filter(|(_, mdef)| mdef.is_source_module)
         .collect::<Vec<_>>();
@@ -79,7 +124,7 @@ pub fn program(prog: G::Program) -> Result<Vec<CompiledUnit>, Errors> {
             Err(err) => errors.push(err),
         }
     }
-    for (key, s) in prog.scripts {
+    for (key, s) in gscripts {
         let G::Script {
             loc: _,
             constants,
@@ -107,7 +152,13 @@ fn module(
     ident: ModuleIdent,
     mdef: G::ModuleDefinition,
     dependency_orderings: &HashMap<ModuleIdent, usize>,
-    struct_declarations: &HashMap<(ModuleIdent, StructName), (bool, Vec<(IR::TypeVar, IR::Kind)>)>,
+    struct_declarations: &HashMap<
+        (ModuleIdent, StructName),
+        (
+            BTreeSet<IR::Ability>,
+            Vec<(IR::TypeVar, BTreeSet<IR::Ability>)>,
+        ),
+    >,
     function_declarations: &HashMap<
         (ModuleIdent, FunctionName),
         (BTreeSet<(ModuleIdent, StructName)>, IR::FunctionSignature),
@@ -136,15 +187,22 @@ fn module(
         })
         .collect();
 
-    let addr = DiemAddress::new(ident.0.value.address.to_u8());
-    let mname = ident.0.value.name.clone();
+    let addr = MoveAddress::new(ident.value.0.to_u8());
+    let mname = ident.value.1.clone();
+    let friends = mdef
+        .friends
+        .into_iter()
+        .map(|(mident, _loc)| Context::translate_module_ident(mident))
+        .collect();
     let (imports, explicit_dependency_declarations) = context.materialize(
         dependency_orderings,
         struct_declarations,
         function_declarations,
     );
+
     let ir_module = IR::ModuleDefinition {
-        name: IR::ModuleName::new(mname.0.value),
+        name: IR::ModuleName::new(mname),
+        friends,
         imports,
         explicit_dependency_declarations,
         structs,
@@ -170,7 +228,13 @@ fn script(
     name: FunctionName,
     fdef: G::Function,
     dependency_orderings: &HashMap<ModuleIdent, usize>,
-    struct_declarations: &HashMap<(ModuleIdent, StructName), (bool, Vec<(IR::TypeVar, IR::Kind)>)>,
+    struct_declarations: &HashMap<
+        (ModuleIdent, StructName),
+        (
+            BTreeSet<IR::Ability>,
+            Vec<(IR::TypeVar, BTreeSet<IR::Ability>)>,
+        ),
+    >,
     function_declarations: &HashMap<
         (ModuleIdent, FunctionName),
         (BTreeSet<(ModuleIdent, StructName)>, IR::FunctionSignature),
@@ -329,20 +393,20 @@ fn struct_def(
     sdef: H::StructDefinition,
 ) -> IR::StructDefinition {
     let H::StructDefinition {
-        resource_opt,
+        abilities: abs,
         type_parameters: tys,
         fields,
     } = sdef;
     let loc = s.loc();
     let name = context.struct_definition_name(m, s);
-    let is_nominal_resource = resource_opt.is_some();
+    let abilities = abilities(&abs);
     let type_formals = type_parameters(tys);
     let fields = struct_fields(context, loc, fields);
     sp(
         loc,
         IR::StructDefinition_ {
             name,
-            is_nominal_resource,
+            abilities,
             type_formals,
             fields,
             invariants: vec![],
@@ -425,9 +489,17 @@ fn function(
         G::FunctionBody_::Defined {
             locals,
             start,
+            loop_heads,
             blocks,
         } => {
-            let (locals, code) = function_body(context, parameters.clone(), locals, start, blocks);
+            let (locals, code) = function_body(
+                context,
+                parameters.clone(),
+                locals,
+                loop_heads,
+                start,
+                blocks,
+            );
             IR::FunctionBody::Bytecode { locals, code }
         }
     };
@@ -449,6 +521,8 @@ fn function(
 fn visibility(v: FunctionVisibility) -> IR::FunctionVisibility {
     match v {
         FunctionVisibility::Public(_) => IR::FunctionVisibility::Public,
+        FunctionVisibility::Script(_) => IR::FunctionVisibility::Script,
+        FunctionVisibility::Friend(_) => IR::FunctionVisibility::Friend,
         FunctionVisibility::Internal => IR::FunctionVisibility::Internal,
     }
 }
@@ -519,6 +593,7 @@ fn function_body(
     context: &mut Context,
     parameters: Vec<(Var, H::SingleType)>,
     mut locals_map: UniqueMap<Var, H::SingleType>,
+    loop_heads: BTreeSet<H::Label>,
     start: H::Label,
     blocks_map: H::BasicBlocks,
 ) -> (Vec<(IR::Var, IR::Type)>, IR::BytecodeBlocks) {
@@ -545,7 +620,8 @@ fn function_body(
         bytecode_blocks.push((label(lbl), code));
     }
 
-    remove_fallthrough_jumps::code(&mut bytecode_blocks);
+    let loop_heads = loop_heads.into_iter().map(label).collect();
+    remove_fallthrough_jumps::code(&loop_heads, &mut bytecode_blocks);
 
     (locals, bytecode_blocks)
 }
@@ -605,19 +681,24 @@ fn struct_definition_name_base(
 // Types
 //**************************************************************************************************
 
-fn kind(sp!(_, k_): &Kind) -> IR::Kind {
-    use Kind_ as GK;
-    use IR::Kind as IRK;
-    match k_ {
-        GK::Unknown => IRK::All,
-        GK::Resource => IRK::Resource,
-        GK::Affine | GK::Copyable => IRK::Copyable,
+fn ability(sp!(_, a_): Ability) -> IR::Ability {
+    use Ability_ as A;
+    use IR::Ability as IRA;
+    match a_ {
+        A::Copy => IRA::Copy,
+        A::Drop => IRA::Drop,
+        A::Store => IRA::Store,
+        A::Key => IRA::Key,
     }
 }
 
-fn type_parameters(tps: Vec<TParam>) -> Vec<(IR::TypeVar, IR::Kind)> {
+fn abilities(set: &AbilitySet) -> BTreeSet<IR::Ability> {
+    set.iter().map(ability).collect()
+}
+
+fn type_parameters(tps: Vec<TParam>) -> Vec<(IR::TypeVar, BTreeSet<IR::Ability>)> {
     tps.into_iter()
-        .map(|tp| (type_var(tp.user_specified_name), kind(&tp.kind)))
+        .map(|tp| (type_var(tp.user_specified_name), abilities(&tp.abilities)))
         .collect()
 }
 
@@ -702,7 +783,7 @@ fn command(context: &mut Context, code: &mut IR::BytecodeBlock, sp!(loc, cmd_): 
             exp_(context, code, ecode);
             code.push(sp(loc, B::Abort));
         }
-        C::Return(e) => {
+        C::Return { exp: e, .. } => {
             exp_(context, code, e);
             code.push(sp(loc, B::Ret));
         }
@@ -712,7 +793,7 @@ fn command(context: &mut Context, code: &mut IR::BytecodeBlock, sp!(loc, cmd_): 
                 code.push(sp(loc, B::Pop));
             }
         }
-        C::Jump(lbl) => code.push(sp(loc, B::Branch(label(lbl)))),
+        C::Jump { target, .. } => code.push(sp(loc, B::Branch(label(target)))),
         C::JumpIf {
             cond,
             if_true,
@@ -789,7 +870,7 @@ fn exp_(context: &mut Context, code: &mut IR::BytecodeBlock, e: H::Exp) {
             code.push(sp(
                 loc,
                 match v.value {
-                    V::Address(a) => B::LdAddr(DiemAddress::new(a.to_u8())),
+                    V::Address(a) => B::LdAddr(MoveAddress::new(a.to_u8())),
                     V::Bytearray(bytes) => B::LdByteArray(bytes),
                     V::U8(u) => B::LdU8(u),
                     V::U64(u) => B::LdU64(u),
@@ -815,6 +896,7 @@ fn exp_(context: &mut Context, code: &mut IR::BytecodeBlock, e: H::Exp) {
             exp(context, code, mcall.arguments);
             module_call(
                 context,
+                loc,
                 code,
                 mcall.module,
                 mcall.name,
@@ -912,13 +994,13 @@ fn exp_(context: &mut Context, code: &mut IR::BytecodeBlock, e: H::Exp) {
 
 fn module_call(
     context: &mut Context,
+    loc: Loc,
     code: &mut IR::BytecodeBlock,
     mident: ModuleIdent,
     fname: FunctionName,
     tys: Vec<H::BaseType>,
 ) {
     use IR::Bytecode_ as B;
-    let loc = fname.loc();
     let (m, n) = context.qualified_function_name(&mident, fname);
     code.push(sp(loc, B::Call(m, n, base_types(context, tys))))
 }

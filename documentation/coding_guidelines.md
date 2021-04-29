@@ -18,7 +18,7 @@ diem$ cargo xfmt
 [Clippy](https://github.com/rust-lang/rust-clippy) is used to catch common mistakes and is run as a part of continuous integration.  Before submitting your code for review, you can run clippy with our configuration:
 
 ```
-diem$ cargo xclippy --all-features
+diem$ cargo xclippy --all-targets
 ```
 
 In general, we follow the recommendations from [rust-lang-nursery](https://rust-lang-nursery.github.io/api-guidelines/about.html) and [The Rust Programming Language](https://doc.rust-lang.org/book/).  The remainder of this guide provides detailed guidelines on specific topics in order to achieve uniformity of the codebase.
@@ -84,8 +84,8 @@ This file should contain:
 
  * The *conceptual* *documentation* of the component.
  * A link to the external API documentation for the component.
- * A link to the master license of the project.
- * A link to the master contributing guide for the project.
+ * A link to the main license of the project.
+ * A link to the main contributing guide for the project.
 
 A template for readmes:
 

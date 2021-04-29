@@ -29,7 +29,7 @@ Before we jump into the code, let's install the Move CLI and talk briefly about 
 To install the Move CLI just use `cargo install`. If you don't already have a Rust toolchain installed, you should install [Rustup](https://rustup.rs/) which will install the latest stable toolchain.
 
 ```shell
-$ cargo install --git https://github.com/libra/libra move-cli
+$ cargo install --git https://github.com/diem/diem move-cli
 ```
 
 This will install the `move` binary in your Cargo binary directory. On macOS and Linux this is usually `~/.cargo/bin`. You'll want to make sure this location is in your `PATH` environment variable.
@@ -129,7 +129,7 @@ Let's create a function in `Coin.move` to create coins. We'll call our function 
 
 
 ```=
-address 0x1 {
+address 0x2 {
     module Coin {
 
         struct Coin {
@@ -148,13 +148,15 @@ We declare the function public to indicate that other modules and scripts are al
 
 Our function takes a `u64` value and returns the constructed `Coin`.
 
+Remember to always re-publish your module after making changes, otherwise our script won't be able to catch those changes.
+
 With this change, we should be able to update our script `test-coin.move` to call our new constructor:
 
 
 ```=
 script {
 
-    use 0x1::Coin;
+    use 0x2::Coin;
 
     fun main() {
         let _coin = Coin::mint(100);

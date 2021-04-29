@@ -8,7 +8,7 @@
 //! new-transaction
 //! sender: diemroot
 //! args: 0, {{alice}}, {{alice::auth_key}}, b"alice"
-stdlib_script::create_validator_operator_account
+stdlib_script::AccountCreationScripts::create_validator_operator_account
 // check: "Keep(EXECUTED)"
 
 //! new-transaction
@@ -16,7 +16,8 @@ stdlib_script::create_validator_operator_account
 script {
     use 0x1::ValidatorConfig;
     use 0x1::DiemSystem;
-    fun main(account: &signer) {
+    fun main(account: signer) {
+    let account = &account;
         // register alice as bob's delegate
         ValidatorConfig::set_operator(account, {{alice}});
 
@@ -40,7 +41,8 @@ script {
 script {
     use 0x1::DiemSystem;
     use 0x1::ValidatorConfig;
-    fun main(account: &signer) {
+    fun main(account: signer) {
+    let account = &account;
         // assert bob is a validator
         assert(ValidatorConfig::is_valid({{bob}}) == true, 98);
         assert(DiemSystem::is_validator({{bob}}) == true, 98);

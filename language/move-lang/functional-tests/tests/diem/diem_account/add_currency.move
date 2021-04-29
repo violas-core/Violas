@@ -12,7 +12,8 @@
 // Change option to CustomModule
 script {
 use 0x1::DiemTransactionPublishingOption;
-fun main(config: &signer) {
+fun main(config: signer) {
+    let config = &config;
     DiemTransactionPublishingOption::set_open_module(config, false)
 }
 }
@@ -30,7 +31,7 @@ module COIN {
     use 0x1::FixedPoint32;
     use 0x1::Diem;
 
-    struct COIN { }
+    struct COIN has store { }
 
     public fun initialize(dr_account: &signer, tc_account: &signer) {
         // Register the COIN currency.
@@ -57,7 +58,9 @@ module COIN {
 script {
 use 0x1::TransactionFee;
 use 0x1::COIN::{Self, COIN};
-fun main(dr_account: &signer, tc_account: &signer) {
+fun main(dr_account: signer, tc_account: signer) {
+    let dr_account = &dr_account;
+    let tc_account = &tc_account;
     COIN::initialize(dr_account, tc_account);
     TransactionFee::add_txn_fee_currency<COIN>(tc_account);
 }
@@ -72,7 +75,8 @@ fun main(dr_account: &signer, tc_account: &signer) {
 script {
 use 0x1::DiemAccount;
 use 0x1::XUS::XUS;
-fun main(account: &signer) {
+fun main(account: signer) {
+    let account = &account;
     DiemAccount::add_currency<XUS>(account);
 }
 }
@@ -84,7 +88,8 @@ fun main(account: &signer) {
 script {
 use 0x1::DiemAccount;
 use 0x1::XUS::XUS;
-fun main(account: &signer) {
+fun main(account: signer) {
+    let account = &account;
     DiemAccount::add_currency<XUS>(account);
 }
 }
@@ -96,7 +101,8 @@ fun main(account: &signer) {
 //! sender: diemroot
 script {
 use 0x1::DiemAccount;
-fun main(account: &signer) {
+fun main(account: signer) {
+    let account = &account;
     DiemAccount::create_validator_account(account, {{vivian}}, {{vivian::auth_key}}, b"owner_name");
     DiemAccount::create_validator_operator_account(account, {{otto}}, {{otto::auth_key}}, b"operator_name")
 
@@ -110,7 +116,8 @@ fun main(account: &signer) {
 script {
 use 0x1::DiemAccount;
 use 0x1::XUS::XUS;
-fun main(account: &signer) {
+fun main(account: signer) {
+    let account = &account;
     DiemAccount::add_currency<XUS>(account);
 }
 }
@@ -122,7 +129,8 @@ fun main(account: &signer) {
 script {
 use 0x1::DiemAccount;
 use 0x1::XUS::XUS;
-fun main(account: &signer) {
+fun main(account: signer) {
+    let account = &account;
     DiemAccount::add_currency<XUS>(account);
 }
 }
@@ -132,25 +140,25 @@ fun main(account: &signer) {
 //! sender: blessed
 //! type-args: 0x1::XUS::XUS
 //! args: 0, {{vasp}}, {{vasp::auth_key}}, b"bob", false
-stdlib_script::create_parent_vasp_account
+stdlib_script::AccountCreationScripts::create_parent_vasp_account
 // check: "Keep(EXECUTED)"
 
 //! new-transaction
 //! sender: vasp
 //! type-args: 0x1::COIN::COIN
-stdlib_script::add_currency_to_account
+stdlib_script::AccountAdministrationScripts::add_currency_to_account
 // check: "Keep(EXECUTED)"
 
 //! new-transaction
 //! sender: vasp
 //! type-args: 0x1::COIN::COIN
 //! args: {{child}}, {{child::auth_key}}, false, 0
-stdlib_script::create_child_vasp_account
+stdlib_script::AccountCreationScripts::create_child_vasp_account
 // check: "Keep(EXECUTED)"
 
 // can't add a balance of XDX right now
 //! new-transaction
 //! sender: child
 //! type-args: 0x1::XDX::XDX
-stdlib_script::add_currency_to_account
+stdlib_script::AccountAdministrationScripts::add_currency_to_account
 // check: "Keep(EXECUTED)"

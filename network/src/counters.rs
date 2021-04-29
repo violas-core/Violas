@@ -10,6 +10,7 @@ use diem_metrics::{
 use diem_types::PeerId;
 use netcore::transport::ConnectionOrigin;
 use once_cell::sync::Lazy;
+use short_hex_str::AsShortHexStr;
 
 // some type labels
 pub const REQUEST_LABEL: &str = "request";
@@ -50,6 +51,27 @@ pub fn connections(network_context: &NetworkContext, origin: ConnectionOrigin) -
     ])
 }
 
+pub static DIEM_CONNECTIONS_REJECTED: Lazy<IntCounterVec> = Lazy::new(|| {
+    register_int_counter_vec!(
+        "diem_connections_rejected",
+        "Number of connections rejected per interface",
+        &["role_type", "network_id", "peer_id", "direction"]
+    )
+    .unwrap()
+});
+
+pub fn connections_rejected(
+    network_context: &NetworkContext,
+    origin: ConnectionOrigin,
+) -> IntCounter {
+    DIEM_CONNECTIONS_REJECTED.with_label_values(&[
+        network_context.role().as_str(),
+        network_context.network_id().as_str(),
+        network_context.peer_id().short_str().as_str(),
+        origin.as_str(),
+    ])
+}
+
 pub static DIEM_NETWORK_PEER_CONNECTED: Lazy<IntGaugeVec> = Lazy::new(|| {
     register_int_gauge_vec!(
         "diem_network_peer_connected",
@@ -60,7 +82,7 @@ pub static DIEM_NETWORK_PEER_CONNECTED: Lazy<IntGaugeVec> = Lazy::new(|| {
 });
 
 pub fn peer_connected(network_context: &NetworkContext, remote_peer_id: &PeerId, v: i64) {
-    if network_context.role().is_validator() {
+    if network_context.network_id().is_validator_network() {
         DIEM_NETWORK_PEER_CONNECTED
             .with_label_values(&[
                 network_context.role().as_str(),
@@ -449,6 +471,15 @@ pub static PENDING_PEER_NETWORK_NOTIFICATIONS: Lazy<IntGauge> = Lazy::new(|| {
     register_int_gauge!(
         "diem_network_pending_peer_network_notifications",
         "Number of pending peer network notifications"
+    )
+    .unwrap()
+});
+
+pub static NETWORK_RATE_LIMIT_METRICS: Lazy<HistogramVec> = Lazy::new(|| {
+    register_histogram_vec!(
+        "diem_network_rate_limit",
+        "Network Rate Limiting Metrics",
+        &["direction", "metric"]
     )
     .unwrap()
 });

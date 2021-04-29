@@ -2,14 +2,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{
-    expansion::ast::{Fields, SpecId, Value, Value_},
+    expansion::ast::{
+        ability_constraints_ast_debug, ability_modifiers_ast_debug, AbilitySet, Fields, SpecId,
+        Value, Value_,
+    },
     parser::ast::{
-        BinOp, ConstantName, Field, FunctionName, FunctionVisibility, Kind, Kind_, ModuleIdent,
-        ResourceLoc, StructName, UnaryOp, Var,
+        BinOp, ConstantName, Field, FunctionName, FunctionVisibility, ModuleIdent, StructName,
+        UnaryOp, Var,
     },
     shared::{ast_debug::*, unique_map::UniqueMap, *},
 };
 use move_ir_types::location::*;
+use once_cell::sync::Lazy;
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     fmt,
@@ -19,7 +23,7 @@ use std::{
 // Program
 //**************************************************************************************************
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Program {
     pub modules: UniqueMap<ModuleIdent, ModuleDefinition>,
     pub scripts: BTreeMap<String, Script>,
@@ -29,7 +33,7 @@ pub struct Program {
 // Scripts
 //**************************************************************************************************
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Script {
     pub loc: Loc,
     pub constants: UniqueMap<ConstantName, Constant>,
@@ -41,12 +45,13 @@ pub struct Script {
 // Modules
 //**************************************************************************************************
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ModuleDefinition {
     pub is_source_module: bool,
     /// `dependency_order` is the topological order/rank in the dependency graph.
     /// `dependency_order` is initialized at `0` and set in the uses pass
     pub dependency_order: usize,
+    pub friends: UniqueMap<ModuleIdent, Loc>,
     pub structs: UniqueMap<StructName, StructDefinition>,
     pub constants: UniqueMap<ConstantName, Constant>,
     pub functions: UniqueMap<FunctionName, Function>,
@@ -58,7 +63,7 @@ pub struct ModuleDefinition {
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct StructDefinition {
-    pub resource_opt: ResourceLoc,
+    pub abilities: AbilitySet,
     pub type_parameters: Vec<TParam>,
     pub fields: StructFields,
 }
@@ -80,14 +85,14 @@ pub struct FunctionSignature {
     pub return_type: Type,
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub enum FunctionBody_ {
     Defined(Sequence),
     Native,
 }
 pub type FunctionBody = Spanned<FunctionBody_>;
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub struct Function {
     pub visibility: FunctionVisibility,
     pub signature: FunctionSignature,
@@ -99,7 +104,7 @@ pub struct Function {
 // Constants
 //**************************************************************************************************
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub struct Constant {
     pub loc: Loc,
     pub signature: Type,
@@ -145,7 +150,7 @@ pub struct TParamID(pub u64);
 pub struct TParam {
     pub id: TParamID,
     pub user_specified_name: Name,
-    pub kind: Kind,
+    pub abilities: AbilitySet,
 }
 
 #[derive(Debug, Hash, Eq, PartialEq, Ord, PartialOrd, Copy, Clone)]
@@ -157,7 +162,7 @@ pub enum Type_ {
     Unit,
     Ref(bool, Box<Type>),
     Param(TParam),
-    Apply(Option<Kind>, TypeName, Vec<Type>),
+    Apply(Option<AbilitySet>, TypeName, Vec<Type>),
     Var(TVar),
     Anything,
     UnresolvedError,
@@ -168,7 +173,7 @@ pub type Type = Spanned<Type_>;
 // Expressions
 //**************************************************************************************************
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum LValue_ {
     Ignore,
     Var(Var),
@@ -178,14 +183,14 @@ pub type LValue = Spanned<LValue_>;
 pub type LValueList_ = Vec<LValue>;
 pub type LValueList = Spanned<LValueList_>;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum ExpDotted_ {
     Exp(Box<Exp>),
     Dot(Box<ExpDotted>, Field),
 }
 pub type ExpDotted = Spanned<ExpDotted_>;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 #[allow(clippy::large_enum_variant)]
 pub enum BuiltinFunction_ {
     MoveTo(Option<Type>),
@@ -197,7 +202,7 @@ pub enum BuiltinFunction_ {
 }
 pub type BuiltinFunction = Spanned<BuiltinFunction_>;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 #[allow(clippy::large_enum_variant)]
 pub enum Exp_ {
     Value(Value),
@@ -252,7 +257,7 @@ pub enum Exp_ {
 pub type Exp = Spanned<Exp_>;
 
 pub type Sequence = VecDeque<SequenceItem>;
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum SequenceItem_ {
     Seq(Exp),
     Declare(LValueList, Option<Type>),
@@ -264,6 +269,38 @@ pub type SequenceItem = Spanned<SequenceItem_>;
 // impls
 //**************************************************************************************************
 
+static BUILTIN_TYPE_ALL_NAMES: Lazy<BTreeSet<&'static str>> = Lazy::new(|| {
+    [
+        BuiltinTypeName_::ADDRESS,
+        BuiltinTypeName_::SIGNER,
+        BuiltinTypeName_::U_8,
+        BuiltinTypeName_::U_64,
+        BuiltinTypeName_::U_128,
+        BuiltinTypeName_::BOOL,
+        BuiltinTypeName_::VECTOR,
+    ]
+    .iter()
+    .cloned()
+    .collect()
+});
+
+static BUILTIN_TYPE_NUMERIC: Lazy<BTreeSet<BuiltinTypeName_>> = Lazy::new(|| {
+    [
+        BuiltinTypeName_::U8,
+        BuiltinTypeName_::U64,
+        BuiltinTypeName_::U128,
+    ]
+    .iter()
+    .cloned()
+    .collect()
+});
+
+static BUILTIN_TYPE_BITS: Lazy<BTreeSet<BuiltinTypeName_>> =
+    Lazy::new(|| BUILTIN_TYPE_NUMERIC.clone());
+
+static BUILTIN_TYPE_ORDERED: Lazy<BTreeSet<BuiltinTypeName_>> =
+    Lazy::new(|| BUILTIN_TYPE_BITS.clone());
+
 impl BuiltinTypeName_ {
     pub const ADDRESS: &'static str = "address";
     pub const SIGNER: &'static str = "signer";
@@ -273,34 +310,20 @@ impl BuiltinTypeName_ {
     pub const BOOL: &'static str = "bool";
     pub const VECTOR: &'static str = "vector";
 
-    pub fn all_names() -> BTreeSet<&'static str> {
-        let mut s = BTreeSet::new();
-        s.insert(Self::ADDRESS);
-        s.insert(Self::SIGNER);
-        s.insert(Self::U_8);
-        s.insert(Self::U_64);
-        s.insert(Self::U_128);
-        s.insert(Self::BOOL);
-        s.insert(Self::VECTOR);
-        s
+    pub fn all_names() -> &'static BTreeSet<&'static str> {
+        &*BUILTIN_TYPE_ALL_NAMES
     }
 
-    pub fn numeric() -> BTreeSet<BuiltinTypeName_> {
-        use BuiltinTypeName_ as BT;
-        let mut s = BTreeSet::new();
-        s.insert(BT::U8);
-        s.insert(BT::U64);
-        s.insert(BT::U128);
-        s
+    pub fn numeric() -> &'static BTreeSet<BuiltinTypeName_> {
+        &*BUILTIN_TYPE_NUMERIC
     }
 
-    pub fn bits() -> BTreeSet<BuiltinTypeName_> {
-        use BuiltinTypeName_ as BT;
-        BT::numeric()
+    pub fn bits() -> &'static BTreeSet<BuiltinTypeName_> {
+        &*BUILTIN_TYPE_BITS
     }
 
-    pub fn ordered() -> BTreeSet<BuiltinTypeName_> {
-        Self::bits()
+    pub fn ordered() -> &'static BTreeSet<BuiltinTypeName_> {
+        &*BUILTIN_TYPE_ORDERED
     }
 
     pub fn is_numeric(&self) -> bool {
@@ -321,12 +344,22 @@ impl BuiltinTypeName_ {
         }
     }
 
-    pub fn tparam_constraints(&self, loc: Loc) -> Vec<Kind> {
-        use BuiltinTypeName_::*;
+    pub fn declared_abilities(&self, loc: Loc) -> AbilitySet {
+        use BuiltinTypeName_ as B;
         // Match here to make sure this function is fixed when collections are added
         match self {
-            Address | Signer | U8 | U64 | U128 | Bool => vec![],
-            Vector => vec![Spanned::new(loc, Kind_::Unknown)],
+            B::Address | B::U8 | B::U64 | B::U128 | B::Bool => AbilitySet::primitives(loc),
+            B::Signer => AbilitySet::signer(loc),
+            B::Vector => AbilitySet::collection(loc),
+        }
+    }
+
+    pub fn tparam_constraints(&self, _loc: Loc) -> Vec<AbilitySet> {
+        use BuiltinTypeName_ as B;
+        // Match here to make sure this function is fixed when collections are added
+        match self {
+            B::Address | B::Signer | B::U8 | B::U64 | B::U128 | B::Bool => vec![],
+            B::Vector => vec![AbilitySet::empty()],
         }
     }
 }
@@ -343,6 +376,18 @@ impl TVar {
     }
 }
 
+static BUILTIN_FUNCTION_ALL_NAMES: Lazy<BTreeSet<&'static str>> = Lazy::new(|| {
+    let mut s = BTreeSet::new();
+    s.insert(BuiltinFunction_::MOVE_TO);
+    s.insert(BuiltinFunction_::MOVE_FROM);
+    s.insert(BuiltinFunction_::BORROW_GLOBAL);
+    s.insert(BuiltinFunction_::BORROW_GLOBAL_MUT);
+    s.insert(BuiltinFunction_::EXISTS);
+    s.insert(BuiltinFunction_::FREEZE);
+    s.insert(BuiltinFunction_::ASSERT);
+    s
+});
+
 impl BuiltinFunction_ {
     pub const MOVE_TO: &'static str = "move_to";
     pub const MOVE_FROM: &'static str = "move_from";
@@ -352,16 +397,8 @@ impl BuiltinFunction_ {
     pub const FREEZE: &'static str = "freeze";
     pub const ASSERT: &'static str = "assert";
 
-    pub fn all_names() -> BTreeSet<&'static str> {
-        let mut s = BTreeSet::new();
-        s.insert(Self::MOVE_TO);
-        s.insert(Self::MOVE_FROM);
-        s.insert(Self::BORROW_GLOBAL);
-        s.insert(Self::BORROW_GLOBAL_MUT);
-        s.insert(Self::EXISTS);
-        s.insert(Self::FREEZE);
-        s.insert(Self::ASSERT);
-        s
+    pub fn all_names() -> &'static BTreeSet<&'static str> {
+        &*BUILTIN_FUNCTION_ALL_NAMES
     }
 
     pub fn resolve(name_str: &str, arg: Option<Type>) -> Option<Self> {
@@ -394,15 +431,14 @@ impl BuiltinFunction_ {
 
 impl Type_ {
     pub fn builtin_(b: BuiltinTypeName, ty_args: Vec<Type>) -> Type_ {
-        use BuiltinTypeName_::*;
-
-        let kind = match b.value {
-            U8 | U64 | U128 | Address | Bool => Some(sp(b.loc, Kind_::Copyable)),
-            Signer => Some(sp(b.loc, Kind_::Resource)),
-            Vector => None,
+        use BuiltinTypeName_ as B;
+        let abilities = match &b.value {
+            B::Address | B::U8 | B::U64 | B::U128 | B::Bool => Some(AbilitySet::primitives(b.loc)),
+            B::Signer => Some(AbilitySet::signer(b.loc)),
+            B::Vector => None,
         };
         let n = sp(b.loc, TypeName_::Builtin(b));
-        Type_::Apply(kind, n, ty_args)
+        Type_::Apply(abilities, n, ty_args)
     }
 
     pub fn builtin(loc: Loc, b: BuiltinTypeName, ty_args: Vec<Type>) -> Type {
@@ -512,7 +548,7 @@ impl fmt::Display for TypeName_ {
 impl AstDebug for Program {
     fn ast_debug(&self, w: &mut AstWriter) {
         let Program { modules, scripts } = self;
-        for (m, mdef) in modules {
+        for (m, mdef) in modules.key_cloned_iter() {
             w.write(&format!("module {}", m));
             w.block(|w| mdef.ast_debug(w));
             w.new_line();
@@ -534,7 +570,7 @@ impl AstDebug for Script {
             function_name,
             function,
         } = self;
-        for cdef in constants {
+        for cdef in constants.key_cloned_iter() {
             cdef.ast_debug(w);
             w.new_line();
         }
@@ -547,6 +583,7 @@ impl AstDebug for ModuleDefinition {
         let ModuleDefinition {
             is_source_module,
             dependency_order,
+            friends,
             structs,
             constants,
             functions,
@@ -557,15 +594,19 @@ impl AstDebug for ModuleDefinition {
             w.writeln("source module")
         }
         w.writeln(&format!("dependency order #{}", dependency_order));
-        for sdef in structs {
+        for (mident, _loc) in friends.key_cloned_iter() {
+            w.write(&format!("friend {};", mident));
+            w.new_line();
+        }
+        for sdef in structs.key_cloned_iter() {
             sdef.ast_debug(w);
             w.new_line();
         }
-        for cdef in constants {
+        for cdef in constants.key_cloned_iter() {
             cdef.ast_debug(w);
             w.new_line();
         }
-        for fdef in functions {
+        for fdef in functions.key_cloned_iter() {
             fdef.ast_debug(w);
             w.new_line();
         }
@@ -577,7 +618,7 @@ impl AstDebug for (StructName, &StructDefinition) {
         let (
             name,
             StructDefinition {
-                resource_opt,
+                abilities,
                 type_parameters,
                 fields,
             },
@@ -585,14 +626,12 @@ impl AstDebug for (StructName, &StructDefinition) {
         if let StructFields::Native(_) = fields {
             w.write("native ");
         }
-        if resource_opt.is_some() {
-            w.write("resource ");
-        }
         w.write(&format!("struct {}", name));
         type_parameters.ast_debug(w);
+        ability_modifiers_ast_debug(w, abilities);
         if let StructFields::Defined(fields) = fields {
             w.block(|w| {
-                w.list(fields, ",", |w, (f, idx_st)| {
+                w.list(fields, ",", |w, (_, f, idx_st)| {
                     let (idx, st) = idx_st;
                     w.write(&format!("{}#{}: ", idx, f));
                     st.ast_debug(w);
@@ -699,15 +738,10 @@ impl AstDebug for TParam {
         let TParam {
             id,
             user_specified_name,
-            kind,
+            abilities,
         } = self;
         w.write(&format!("{}#{}", user_specified_name, id.0));
-        match &kind.value {
-            Kind_::Unknown => (),
-            Kind_::Resource => w.write(": resource"),
-            Kind_::Affine => w.write(": copyable"),
-            Kind_::Copyable => panic!("ICE 'copyable' kind constraint"),
-        }
+        ability_constraints_ast_debug(w, abilities);
     }
 }
 
@@ -723,18 +757,23 @@ impl AstDebug for Type_ {
                 s.ast_debug(w)
             }
             Type_::Param(tp) => tp.ast_debug(w),
-            Type_::Apply(k_opt, sp!(_, TypeName_::Multiple(_)), ss) => {
+            Type_::Apply(abilities_opt, sp!(_, TypeName_::Multiple(_)), ss) => {
                 let w_ty = move |w: &mut AstWriter| {
                     w.write("(");
                     ss.ast_debug(w);
                     w.write(")");
                 };
-                match k_opt {
+                match abilities_opt {
                     None => w_ty(w),
-                    Some(k) => w.annotate(w_ty, k),
+                    Some(abilities) => w.annotate_gen(w_ty, abilities, |w, annot| {
+                        w.list(annot, "+", |w, a| {
+                            a.ast_debug(w);
+                            false
+                        })
+                    }),
                 }
             }
-            Type_::Apply(k_opt, m, ss) => {
+            Type_::Apply(abilities_opt, m, ss) => {
                 let w_ty = move |w: &mut AstWriter| {
                     m.ast_debug(w);
                     if !ss.is_empty() {
@@ -743,9 +782,14 @@ impl AstDebug for Type_ {
                         w.write(">");
                     }
                 };
-                match k_opt {
+                match abilities_opt {
                     None => w_ty(w),
-                    Some(k) => w.annotate(w_ty, k),
+                    Some(abilities) => w.annotate_gen(w_ty, abilities, |w, annot| {
+                        w.list(annot, "+", |w, a| {
+                            a.ast_debug(w);
+                            false
+                        })
+                    }),
                 }
             }
             Type_::Var(tv) => w.write(&format!("#{}", tv.0)),
@@ -829,7 +873,7 @@ impl AstDebug for Exp_ {
                     w.write(">");
                 }
                 w.write("{");
-                w.comma(fields, |w, (f, idx_e)| {
+                w.comma(fields, |w, (_, f, idx_e)| {
                     let (idx, e) = idx_e;
                     w.write(&format!("{}#{}: ", idx, f));
                     e.ast_debug(w);
@@ -1003,7 +1047,7 @@ impl AstDebug for LValue_ {
                     w.write(">");
                 }
                 w.write("{");
-                w.comma(fields, |w, (f, idx_b)| {
+                w.comma(fields, |w, (_, f, idx_b)| {
                     let (idx, b) = idx_b;
                     w.write(&format!("{}#{}: ", idx, f));
                     b.ast_debug(w);

@@ -6,15 +6,15 @@
 module Holder {
     use 0x1::Signer;
 
-    resource struct Hold<T> {
+    struct Hold<T> has key {
         x: T
     }
 
-    public fun hold<T>(account: &signer, x: T) {
+    public fun hold<T: store>(account: &signer, x: T) {
         move_to(account, Hold<T>{x})
     }
 
-    public fun get<T>(account: &signer): T
+    public fun get<T: store>(account: &signer): T
     acquires Hold {
         let Hold {x} = move_from<Hold<T>>(Signer::address_of(account));
         x
@@ -24,7 +24,8 @@ module Holder {
 //! new-transaction
 script {
     use 0x1::DiemAccount;
-    fun main(sender: &signer) {
+    fun main(sender: signer) {
+        let sender = &sender;
         DiemAccount::initialize(sender, x"00000000000000000000000000000000");
     }
 }
@@ -35,7 +36,8 @@ script {
 script {
     use 0x1::XDX::XDX;
     use 0x1::DiemAccount;
-    fun main(account: &signer) {
+    fun main(account: signer) {
+        let account = &account;
         let with_cap = DiemAccount::extract_withdraw_capability(account);
         DiemAccount::pay_from<XDX>(&with_cap, {{bob}}, 10, x"", x"");
         DiemAccount::restore_withdraw_capability(with_cap);
@@ -48,7 +50,8 @@ script {
 script {
     use 0x1::XDX::XDX;
     use 0x1::DiemAccount;
-    fun main(account: &signer) {
+    fun main(account: signer) {
+    let account = &account;
         let with_cap = DiemAccount::extract_withdraw_capability(account);
         DiemAccount::pay_from<XDX>(&with_cap, {{abby}}, 10, x"", x"");
         DiemAccount::restore_withdraw_capability(with_cap);
@@ -61,7 +64,8 @@ script {
 script {
     use 0x1::XUS::XUS;
     use 0x1::DiemAccount;
-    fun main(account: &signer) {
+    fun main(account: signer) {
+    let account = &account;
         let with_cap = DiemAccount::extract_withdraw_capability(account);
         DiemAccount::pay_from<XUS>(&with_cap, {{abby}}, 10, x"", x"");
         DiemAccount::restore_withdraw_capability(with_cap);
@@ -74,7 +78,8 @@ script {
 script {
     use 0x1::XDX::XDX;
     use 0x1::DiemAccount;
-    fun main(account: &signer) {
+    fun main(account: signer) {
+    let account = &account;
         let with_cap = DiemAccount::extract_withdraw_capability(account);
         DiemAccount::pay_from<XDX>(&with_cap, {{doris}}, 10, x"", x"");
         DiemAccount::restore_withdraw_capability(with_cap);
@@ -86,7 +91,8 @@ script {
 //! sender: bob
 script {
     use 0x1::DiemAccount;
-    fun main(account: &signer) {
+    fun main(account: signer) {
+    let account = &account;
         let rot_cap = DiemAccount::extract_key_rotation_capability(account);
         DiemAccount::rotate_authentication_key(&rot_cap, x"123abc");
         DiemAccount::restore_key_rotation_capability(rot_cap);
@@ -98,7 +104,8 @@ script {
 script {
     use 0x1::DiemAccount;
     use {{default}}::Holder;
-    fun main(account: &signer) {
+    fun main(account: signer) {
+    let account = &account;
         Holder::hold(
             account,
             DiemAccount::extract_key_rotation_capability(account)
@@ -115,7 +122,8 @@ script {
 script {
     use 0x1::DiemAccount;
     use 0x1::Signer;
-    fun main(sender: &signer) {
+    fun main(sender: signer) {
+    let sender = &sender;
         let cap = DiemAccount::extract_key_rotation_capability(sender);
         assert(
             *DiemAccount::key_rotation_capability_address(&cap) == Signer::address_of(sender), 0
@@ -137,7 +145,8 @@ script {
 script {
     use 0x1::DiemAccount;
     use 0x1::XDX::XDX;
-    fun main(account: &signer) {
+    fun main(account: signer) {
+    let account = &account;
         let with_cap = DiemAccount::extract_withdraw_capability(account);
         DiemAccount::pay_from<XDX>(&with_cap, {{alice}}, 10000, x"", x"");
         DiemAccount::restore_withdraw_capability(with_cap);
@@ -150,14 +159,14 @@ script {
 //! sender: blessed
 //! type-args: 0x1::XUS::XUS
 //! args: 0, 0x0, {{bob::auth_key}}, b"bob", true
-stdlib_script::create_parent_vasp_account
+stdlib_script::AccountCreationScripts::create_parent_vasp_account
 // check: "Keep(ABORTED { code: 2567,"
 
 //! new-transaction
 //! sender: blessed
 //! type-args: 0x1::XUS::XUS
 //! args: 0, {{abby}}, x"", b"bob", true
-stdlib_script::create_parent_vasp_account
+stdlib_script::AccountCreationScripts::create_parent_vasp_account
 // check: "Keep(ABORTED { code: 2055,"
 
 //! new-transaction

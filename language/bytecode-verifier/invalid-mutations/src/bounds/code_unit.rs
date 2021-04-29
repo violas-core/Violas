@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use diem_proptest_helpers::pick_slice_idxs;
-use diem_types::vm_status::StatusCode;
+use move_core_types::vm_status::StatusCode;
 use proptest::{prelude::*, sample::Index as PropIndex};
 use std::collections::BTreeMap;
 use vm::{
@@ -27,7 +27,7 @@ pub struct CodeUnitBoundsMutation {
 
 impl CodeUnitBoundsMutation {
     pub fn strategy() -> impl Strategy<Value = Self> {
-        (any::<PropIndex>(), any::<PropIndex>(), 0..16 as usize).prop_map(
+        (any::<PropIndex>(), any::<PropIndex>(), 0..16_usize).prop_map(
             |(function_def, bytecode, offset)| Self {
                 function_def,
                 bytecode,

@@ -5,6 +5,7 @@ use crate::{auto_validate::AutoValidate, json_rpc::JsonRpcClientWrapper, Transac
 use diem_crypto::ed25519::Ed25519PublicKey;
 use diem_global_constants::{OPERATOR_ACCOUNT, OPERATOR_KEY};
 use diem_management::{error::Error, transaction::build_raw_transaction};
+use diem_transaction_builder::stdlib as transaction_builder;
 use diem_types::{
     account_address::AccountAddress,
     transaction::{authenticator::AuthenticationKey, Transaction},
@@ -103,14 +104,15 @@ impl RotateOperatorKey {
         let sequence_number = client.sequence_number(operator_account)?;
 
         // Build the operator rotation transaction
-        let rotate_key_script = transaction_builder::encode_rotate_authentication_key_script(
-            AuthenticationKey::ed25519(&new_storage_key).to_vec(),
-        );
+        let rotate_key_script =
+            transaction_builder::encode_rotate_authentication_key_script_function(
+                AuthenticationKey::ed25519(&new_storage_key).to_vec(),
+            );
         let rotate_key_txn = build_raw_transaction(
             config.chain_id,
             operator_account,
             sequence_number,
-            rotate_key_script,
+            rotate_key_script.into_script_function(),
         );
 
         // Sign the operator rotation transaction
