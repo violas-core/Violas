@@ -8,9 +8,7 @@ use bytecode_source_map::{
 };
 use bytecode_verifier::control_flow_graph::{ControlFlowGraph, VMControlFlowGraph};
 use colored::*;
-use move_core_types::identifier::IdentStr;
-use move_coverage::coverage_map::{ExecCoverageMap, FunctionCoverage};
-use vm::{
+use move_binary_format::{
     access::ModuleAccess,
     file_format::{
         Ability, AbilitySet, Bytecode, CompiledModule, CompiledScript, FieldHandleIndex,
@@ -19,6 +17,8 @@ use vm::{
         Visibility,
     },
 };
+use move_core_types::identifier::IdentStr;
+use move_coverage::coverage_map::{ExecCoverageMap, FunctionCoverage};
 
 /// Holds the various options that we support while disassembling code.
 #[derive(Debug, Default)]
@@ -303,6 +303,16 @@ impl<Location: Clone + Eq> Disassembler<Location> {
             .get(local_idx as usize)
             .ok_or_else(|| format_err!("Unable to get type for local at index {}", local_idx))?;
         self.disassemble_sig_tok(sig_tok.clone(), &function_source_map.type_parameters)
+    }
+
+    fn format_ability(a: Ability) -> String {
+        match a {
+            Ability::Copy => "copy",
+            Ability::Drop => "drop",
+            Ability::Store => "store",
+            Ability::Key => "key",
+        }
+        .to_string()
     }
 
     fn format_type_params(ty_params: &[String]) -> String {
@@ -827,11 +837,13 @@ impl<Location: Clone + Eq> Disassembler<Location> {
             .iter()
             .zip(ablities)
             .map(|((name, _), abs)| {
-                format!(
-                    "{}{}",
-                    name.as_str(),
-                    kind_to_constraint(ability_to_kind(*abs))
-                )
+                let abilities_str = if *abs == AbilitySet::EMPTY {
+                    "".to_string()
+                } else {
+                    let ability_vec: Vec<_> = abs.into_iter().map(Self::format_ability).collect();
+                    format!(": {}", ability_vec.join(" + "))
+                };
+                format!("{}{}", name.as_str(), abilities_str)
             })
             .collect();
         Self::format_type_params(&ty_params)
@@ -995,17 +1007,12 @@ impl<Location: Clone + Eq> Disassembler<Location> {
         let abilities = if struct_handle.abilities == AbilitySet::EMPTY {
             String::new()
         } else {
-            let ability_vec = struct_handle
+            let ability_vec: Vec<_> = struct_handle
                 .abilities
                 .into_iter()
-                .map(|a| match a {
-                    Ability::Copy => "copy",
-                    Ability::Drop => "drop",
-                    Ability::Store => "store",
-                    Ability::Key => "key",
-                })
-                .collect::<Vec<_>>();
-            format!("has {}", ability_vec.join(", "))
+                .map(Self::format_ability)
+                .collect();
+            format!(" has {}", ability_vec.join(", "))
         };
 
         let name = self
@@ -1071,29 +1078,5 @@ impl<Location: Clone + Eq> Disassembler<Location> {
             struct_defs = &struct_defs.join("\n"),
             function_defs = &function_defs.join("\n")
         ))
-    }
-}
-
-// Temporary helpers until abilities+constraints are added to the IR
-enum Kind {
-    Copyable,
-    Resource,
-    All,
-}
-
-fn ability_to_kind(abs: AbilitySet) -> Kind {
-    match (abs.has_copy(), abs.has_drop(), abs.has_key()) {
-        (true, true, false) => Kind::Copyable,
-        (false, false, true) => Kind::Resource,
-        (false, false, false) => Kind::All,
-        _ => panic!("Unsupported ability set"),
-    }
-}
-
-fn kind_to_constraint(k: Kind) -> &'static str {
-    match k {
-        Kind::Copyable => ": copyable",
-        Kind::Resource => ": resource",
-        Kind::All => "",
     }
 }

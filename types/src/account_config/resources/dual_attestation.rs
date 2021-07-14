@@ -2,7 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{event::EventHandle, on_chain_config::OnChainConfig};
-use move_core_types::move_resource::MoveResource;
+use move_core_types::{
+    ident_str,
+    identifier::IdentStr,
+    move_resource::{MoveResource, MoveStructType},
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -41,10 +45,12 @@ impl Credential {
     }
 }
 
-impl MoveResource for Credential {
-    const MODULE_NAME: &'static str = "DualAttestation";
-    const STRUCT_NAME: &'static str = "Credential";
+impl MoveStructType for Credential {
+    const MODULE_NAME: &'static IdentStr = ident_str!("DualAttestation");
+    const STRUCT_NAME: &'static IdentStr = ident_str!("Credential");
 }
+
+impl MoveResource for Credential {}
 
 /// Defines the dual attest limit in microDiem XDX
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -56,7 +62,9 @@ impl OnChainConfig for Limit {
     const IDENTIFIER: &'static str = "Limit";
 }
 
-impl MoveResource for Limit {
-    const MODULE_NAME: &'static str = "DualAttestation";
-    const STRUCT_NAME: &'static str = "Limit";
+impl MoveStructType for Limit {
+    const MODULE_NAME: &'static IdentStr = ident_str!("DualAttestation");
+    const STRUCT_NAME: &'static IdentStr = ident_str!("Limit");
 }
+
+impl MoveResource for Limit {}

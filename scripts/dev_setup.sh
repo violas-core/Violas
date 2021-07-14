@@ -11,11 +11,14 @@
 # 2 .profile will be used to configure the shell
 # 3 ${HOME}/bin/ is expected to be on the path - hashicorp tools/hadolint/etc.  will be installed there on linux systems.
 
+# fast fail.
+set -eo pipefail
+
 SHELLCHECK_VERSION=0.7.1
 HADOLINT_VERSION=1.17.4
-SCCACHE_VERSION=0.2.14-alpha.0
+SCCACHE_VERSION=0.2.16-alpha.0
 #If installing sccache from a git repp set url@revision.
-SCCACHE_GIT='https://github.com/rexhoffman/sccache.git@549babdd3866aa60dae01668c42ee00bf1e8c763'
+SCCACHE_GIT='https://github.com/diem/sccache.git@ef50d87a58260c30767520045e242ccdbdb965af'
 KUBECTL_VERSION=1.18.6
 TERRAFORM_VERSION=0.12.26
 HELM_VERSION=3.2.4
@@ -23,7 +26,9 @@ VAULT_VERSION=1.5.0
 Z3_VERSION=4.8.9
 CVC4_VERSION=aac53f51
 DOTNET_VERSION=3.1
-BOOGIE_VERSION=2.8.29
+BOOGIE_VERSION=2.8.32
+PYRE_CHECK_VERSION=0.0.59
+NUMPY_VERSION=1.20.1
 
 SCRIPT_PATH="$( cd "$( dirname "$0" )" >/dev/null 2>&1 && pwd )"
 cd "$SCRIPT_PATH/.." || exit
@@ -44,7 +49,7 @@ function usage {
 
 function add_to_profile {
   eval "$1"
-  FOUND=$(grep -c "$1" < "${HOME}/.profile")
+  FOUND=$(grep -c "$1" < "${HOME}/.profile" || true)  # grep error return would kill the script.
   if [ "$FOUND" == "0" ]; then
     echo "$1" >> "${HOME}"/.profile
   fi
@@ -95,11 +100,17 @@ function install_build_essentials {
 }
 
 function install_rustup {
+  echo installing rust.
   BATCH_MODE=$1
   # Install Rust
-  [[ "${BATCH_MODE}" == "false" ]] && echo "Installing Rust......"
-  if rustup --version &>/dev/null; then
-	   [[ "${BATCH_MODE}" == "false" ]] && echo "Rust is already installed"
+  if [[ "${BATCH_MODE}" == "false" ]]; then
+    echo "Installing Rust......"
+  fi
+  VERSION="$(rustup --version || true)"
+  if [ -n "$VERSION" ]; then
+	  if [[ "${BATCH_MODE}" == "false" ]]; then
+      echo "Rustup is already installed, version: $VERSION"
+    fi
   else
 	  curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain stable
     PATH="${HOME}/.cargo/bin:${PATH}"
@@ -115,7 +126,7 @@ function install_hadolint {
 }
 
 function install_vault {
-  VERSION=$(vault --version)
+  VERSION=$(vault --version || true)
   if [[ "$VERSION" != "Vault v${VAULT_VERSION}" ]]; then
     MACHINE=$(uname -m);
     if [[ $MACHINE == "x86_64" ]]; then
@@ -152,7 +163,7 @@ function install_helm {
 }
 
 function install_terraform {
-  VERSION=$(terraform --version | head -1)
+  VERSION=$(terraform --version | head -1 || true)
   if [[ "$VERSION" != "Terraform v${TERRAFORM_VERSION}" ]]; then
     if [[ $(uname -s) == "Darwin" ]]; then
       install_pkg tfenv brew
@@ -174,7 +185,7 @@ function install_terraform {
 }
 
 function install_kubectl {
-  VERSION=$(kubectl version client --short=true | head -1)
+  VERSION=$(kubectl version client --short=true | head -1 || true)
   if [[ "$VERSION" != "Client Version: v${KUBECTL_VERSION}" ]]; then
     if [[ $(uname -s) == "Darwin" ]]; then
       install_pkg kubectl brew
@@ -187,13 +198,18 @@ function install_kubectl {
       chmod +x "${HOME}"/bin/kubectl
     fi
   fi
-  kubectl version client --short=true | head -1
+  kubectl version client --short=true | head -1 || true
 }
 
 function install_awscli {
+  PACKAGE_MANAGER=$1
   if ! command -v aws &> /dev/null; then
     if [[ $(uname -s) == "Darwin" ]]; then
       install_pkg awscli brew
+    elif [[ "$PACKAGE_MANAGER" == "apk" ]]; then
+      apk add --no-cache python3 py3-pip \
+      && pip3 install --upgrade pip \
+      && pip3 install awscli
     else
       MACHINE=$(uname -m);
       TMPFILE=$(mktemp)
@@ -224,6 +240,7 @@ function install_pkg {
       "${PRE_COMMAND[@]}" yum install "${package}" -y
     elif [[ "$PACKAGE_MANAGER" == "apt-get" ]]; then
       "${PRE_COMMAND[@]}" apt-get install "${package}" --no-install-recommends -y
+      echo apt-get install result code: $?
     elif [[ "$PACKAGE_MANAGER" == "pacman" ]]; then
       "${PRE_COMMAND[@]}" pacman -Syu "$package" --noconfirm
     elif [[ "$PACKAGE_MANAGER" == "apk" ]]; then
@@ -286,6 +303,35 @@ function install_openssl_dev {
   fi
 }
 
+function install_lcov {
+  PACKAGE_MANAGER=$1
+  #Differently named packages for lcov with different sources.
+  if [[ "$PACKAGE_MANAGER" == "apk" ]]; then
+    apk --update add --no-cache  -X http://dl-cdn.alpinelinux.org/alpine/edge/testing lcov
+  fi
+  if [[ "$PACKAGE_MANAGER" == "apt-get" ]] || [[ "$PACKAGE_MANAGER" == "yum" ]] || [[ "$PACKAGE_MANAGER" == "dnf" ]] || [[ "$PACKAGE_MANAGER" == "brew" ]]; then
+    install_pkg lcov "$PACKAGE_MANAGER"
+  fi
+  if [[ "$PACKAGE_MANAGER" == "pacman" ]]; then
+    echo nope no lcov for you.
+    echo You can try installing yourself with:
+    echo install_pkg git "$PACKAGE_MANAGER"
+    echo cd lcov;
+    echo git clone https://aur.archlinux.org/lcov.git
+    echo makepkg -si --noconfirm
+  fi
+}
+
+function install_tidy {
+  PACKAGE_MANAGER=$1
+  #Differently named packages for tidy
+  if [[ "$PACKAGE_MANAGER" == "apk" ]]; then
+    apk --update add --no-cache  -X http://dl-cdn.alpinelinux.org/alpine/edge/testing tidyhtml
+  else
+    install_pkg tidy "$PACKAGE_MANAGER"
+  fi
+}
+
 function install_gcc_powerpc_linux_gnu {
   PACKAGE_MANAGER=$1
   #Differently named packages for gcc-powerpc-linux-gnu
@@ -302,7 +348,7 @@ function install_gcc_powerpc_linux_gnu {
 
 function install_toolchain {
   version=$1
-  FOUND=$(rustup show | grep -c "$version" )
+  FOUND=$(rustup show | grep -c "$version" || true )
   if [[ "$FOUND" == "0" ]]; then
     echo "Installing ${version} of rust toolchain"
     rustup install "$version"
@@ -312,7 +358,7 @@ function install_toolchain {
 }
 
 function install_sccache {
-  VERSION="$(sccache --version)"
+  VERSION="$(sccache --version || true)"
   if [[ "$VERSION" != "sccache ""${SCCACHE_VERSION}" ]]; then
     if [[ -n "${SCCACHE_GIT}" ]]; then
       git_repo=$( echo "$SCCACHE_GIT" | cut -d "@" -f 1 );
@@ -375,7 +421,7 @@ function install_z3 {
     echo "but this install will go to $HOME/bin/z3."
     echo "you may want to remove the shared instance to avoid version confusion"
   fi
-  if which "$HOME/bin/z3" &>/dev/null && [[ "$("$HOME/bin/z3" --version)" =~ .*${Z3_VERSION}.* ]]; then
+  if which "$HOME/bin/z3" &>/dev/null && [[ "$("$HOME/bin/z3" --version || true)" =~ .*${Z3_VERSION}.* ]]; then
      echo "Z3 ${Z3_VERSION} already installed"
      return
   fi
@@ -407,7 +453,7 @@ function install_cvc4 {
     echo "but this install will go to $HOME/bin/cvc4."
     echo "you may want to remove the shared instance to avoid version confusion"
   fi
-  if which "$HOME/bin/cvc4" &>/dev/null && [[ "$("$HOME/bin/cvc4" --version)" =~ .*${CVC4_VERSION}.* ]]; then
+  if which "$HOME/bin/cvc4" &>/dev/null && [[ "$("$HOME/bin/cvc4" --version || true)" =~ .*${CVC4_VERSION}.* ]]; then
      echo "CVC4 ${CVC4_VERSION} already installed"
      return
   fi
@@ -443,6 +489,8 @@ function install_golang {
       fi
       "${PRE_COMMAND[@]}" apt-get install -y golang-1.14-go/buster-backports
       "${PRE_COMMAND[@]}" ln -sf /usr/lib/go-1.14 /usr/lib/golang
+    elif [[ "$PACKAGE_MANAGER" == "apk" ]]; then
+      apk --update add --no-cache git make musl-dev go
     else
       install_pkg golang "$PACKAGE_MANAGER"
     fi
@@ -451,8 +499,18 @@ function install_golang {
 function install_java {
     if [[ "$PACKAGE_MANAGER" == "apt-get" ]]; then
       "${PRE_COMMAND[@]}" apt-get install -y default-jdk
+    elif [[ "$PACKAGE_MANAGER" == "apk" ]]; then
+      apk --update add --no-cache  -X http://dl-cdn.alpinelinux.org/alpine/edge/community openjdk11
     else
       install_pkg java "$PACKAGE_MANAGER"
+    fi
+}
+
+function install_xsltproc {
+    if [[ "$PACKAGE_MANAGER" == "apt-get" ]]; then
+      install_pkg xsltproc "$PACKAGE_MANAGER"
+    else
+      install_pkg libxslt "$PACKAGE_MANAGER"
     fi
 }
 
@@ -629,13 +687,20 @@ if [[ "$BATCH_MODE" == "false" ]]; then
 fi
 
 if [[ "$PACKAGE_MANAGER" == "apt-get" ]]; then
-	[[ "$BATCH_MODE" == "false" ]] && echo "Updating apt-get......"
+	if [[ "$BATCH_MODE" == "false" ]]; then
+    echo "Updating apt-get......"
+  fi
 	"${PRE_COMMAND[@]}" apt-get update
-  [[ "$BATCH_MODE" == "false" ]] && echo "Installing ca-certificates......"
+  if [[ "$BATCH_MODE" == "false" ]]; then
+   echo "Installing ca-certificates......"
+  fi
+  set -x
 	"${PRE_COMMAND[@]}" install_pkg ca-certificates "$PACKAGE_MANAGER"
 fi
 
-[[ "$INSTALL_PROFILE" == "true" ]] && update_path_and_profile
+if [[ "$INSTALL_PROFILE" == "true" ]]; then
+  update_path_and_profile
+fi
 
 install_pkg curl "$PACKAGE_MANAGER"
 
@@ -658,7 +723,8 @@ if [[ "$INSTALL_BUILD_TOOLS" == "true" ]]; then
 
   install_sccache
   install_grcov
-  install_pkg lcov "$PACKAGE_MANAGER"
+  install_pkg git "$PACKAGE_MANAGER"
+  install_lcov "$PACKAGE_MANAGER"
 fi
 
 if [[ "$OPERATIONS" == "true" ]]; then
@@ -667,6 +733,8 @@ if [[ "$OPERATIONS" == "true" ]]; then
   install_pkg unzip "$PACKAGE_MANAGER"
   install_pkg jq "$PACKAGE_MANAGER"
   install_pkg git "$PACKAGE_MANAGER"
+  install_tidy "$PACKAGE_MANAGER"
+  install_xsltproc
   #for timeout
   if [[ "$PACKAGE_MANAGER" == "apt-get" ]]; then
     install_pkg coreutils "$PACKAGE_MANAGER"
@@ -677,7 +745,7 @@ if [[ "$OPERATIONS" == "true" ]]; then
   install_helm
   install_terraform
   install_kubectl
-  install_awscli
+  install_awscli "$PACKAGE_MANAGER"
 fi
 
 if [[ "$INSTALL_PROVER" == "true" ]]; then
@@ -694,6 +762,8 @@ if [[ "$INSTALL_CODEGEN" == "true" ]]; then
     install_pkg python3-all-dev "$PACKAGE_MANAGER"
     install_pkg python3-setuptools "$PACKAGE_MANAGER"
     install_pkg python3-pip "$PACKAGE_MANAGER"
+  elif [[ "$PACKAGE_MANAGER" == "apk" ]]; then
+    install_pkg python3-dev "$PACKAGE_MANAGER"
   else
     install_pkg python3 "$PACKAGE_MANAGER"
   fi
@@ -701,15 +771,21 @@ if [[ "$INSTALL_CODEGEN" == "true" ]]; then
   install_pkg npm "$PACKAGE_MANAGER"
   install_java
   install_golang
-  "${PRE_COMMAND[@]}" python3 -m pip install pyre-check==0.0.59
-  "${PRE_COMMAND[@]}" python3 -m pip install numpy==1.20.1
+  if [[ "$PACKAGE_MANAGER" != "apk" ]]; then
+    # depends on wheels which needs glibc which doesn't work on alpine's python.
+    # Only invested a hour or so in this, a work around may exist.
+    "${PRE_COMMAND[@]}" python3 -m pip install pyre-check=="${PYRE_CHECK_VERSION}"
+  fi
+  "${PRE_COMMAND[@]}" python3 -m pip install numpy=="${NUMPY_VERSION}"
 fi
 
-[[ "${BATCH_MODE}" == "false" ]] && cat <<EOF
+if [[ "${BATCH_MODE}" == "false" ]]; then
+cat <<EOF
 Finished installing all dependencies.
 
 You should now be able to build the project by running:
 	cargo build
 EOF
+fi
 
 exit 0

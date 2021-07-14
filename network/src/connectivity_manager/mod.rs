@@ -120,7 +120,7 @@ pub struct ConnectivityManager<TBackoff> {
 #[repr(u8)]
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, NumVariants, Serialize)]
 pub enum DiscoverySource {
-    OnChain,
+    OnChainValidatorSet,
     Config,
 }
 
@@ -136,7 +136,7 @@ impl fmt::Display for DiscoverySource {
             f,
             "{}",
             match self {
-                DiscoverySource::OnChain => "OnChain",
+                DiscoverySource::OnChainValidatorSet => "OnChainValidatorSet",
                 DiscoverySource::Config => "Config",
             }
         )
@@ -252,7 +252,7 @@ where
         network_context: Arc<NetworkContext>,
         time_service: TimeService,
         eligible: Arc<RwLock<PeerSet>>,
-        seeds: &PeerSet,
+        seeds: PeerSet,
         connection_reqs_tx: ConnectionRequestSender,
         connection_notifs_rx: conn_notifs_channel::Receiver,
         requests_rx: channel::Receiver<ConnectivityRequest>,
@@ -294,7 +294,7 @@ where
         };
 
         // set the initial config addresses and pubkeys
-        connmgr.handle_update_discovered_peers(DiscoverySource::Config, seeds.clone());
+        connmgr.handle_update_discovered_peers(DiscoverySource::Config, seeds);
         connmgr
     }
 

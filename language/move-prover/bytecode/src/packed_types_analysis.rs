@@ -3,21 +3,19 @@
 
 use crate::{
     compositional_analysis::{CompositionalAnalysis, SummaryCache},
-    dataflow_analysis::{
-        AbstractDomain, DataflowAnalysis, JoinResult, SetDomain, TransferFunctions,
-    },
+    dataflow_analysis::{DataflowAnalysis, TransferFunctions},
+    dataflow_domains::{AbstractDomain, JoinResult, SetDomain},
     function_target::{FunctionData, FunctionTarget},
     function_target_pipeline::{FunctionTargetProcessor, FunctionTargetsHolder, FunctionVariant},
     stackless_bytecode::{Bytecode, Operation},
 };
-use diem_types::account_config;
+use move_binary_format::file_format::CodeOffset;
 use move_core_types::language_storage::{StructTag, TypeTag};
 use move_model::{
     model::{FunctionEnv, GlobalEnv},
     ty::Type,
 };
 use std::collections::BTreeSet;
-use vm::file_format::CodeOffset;
 
 /// Get all closed types that may be packed by (1) genesis and (2) all transaction scripts.
 /// This makes some simplifying assumptions that are not correct in general, but hold for the
@@ -27,14 +25,18 @@ use vm::file_format::CodeOffset;
 ///   XDX. Passing any other values will lead to an aborted transaction.
 /// The first assumption is checked and will trigger an assert failure if violated. The second
 /// is unchecked, but would be a nice property for the prover.
-pub fn get_packed_types(env: &GlobalEnv, targets: &FunctionTargetsHolder) -> BTreeSet<StructTag> {
+pub fn get_packed_types(
+    env: &GlobalEnv,
+    targets: &FunctionTargetsHolder,
+    coin_types: Vec<Type>,
+) -> BTreeSet<StructTag> {
     let mut packed_types = BTreeSet::new();
     for module_env in env.get_modules() {
         let module_name = module_env.get_identifier().to_string();
         let is_script = module_env.is_script_module();
         if is_script || module_name == "Genesis" {
             for func_env in module_env.get_functions() {
-                let fun_target = targets.get_target(&func_env, FunctionVariant::Baseline);
+                let fun_target = targets.get_target(&func_env, &FunctionVariant::Baseline);
                 let annotation = fun_target
                     .get_annotations()
                     .get::<PackedTypesState>()
@@ -42,19 +44,14 @@ pub fn get_packed_types(env: &GlobalEnv, targets: &FunctionTargetsHolder) -> BTr
                         "Invariant violation: usage analysis should be run before calling this",
                     );
 
-                packed_types.extend(annotation.closed_types.0.clone());
+                packed_types.extend(annotation.closed_types.clone());
                 // instantiate the tx script open types with XUS, XDX
                 if is_script {
                     let num_type_parameters = func_env.get_type_parameters().len();
                     assert!(num_type_parameters <= 1, "Assuming that transaction scripts have <= 1 type parameters for simplicity. If there can be >1 type parameter, the code here must account for all permutations of type params");
 
                     if num_type_parameters == 1 {
-                        let coin_types: Vec<Type> =
-                            vec![account_config::xus_tag(), account_config::xdx_type_tag()]
-                                .into_iter()
-                                .map(|t| Type::from_type_tag(t, env))
-                                .collect();
-                        for open_ty in &annotation.open_types.0 {
+                        for open_ty in annotation.open_types.iter() {
                             for coin_ty in &coin_types {
                                 match open_ty.instantiate(vec![coin_ty.clone()].as_slice()).into_type_tag(env) {
                                     Some(TypeTag::Struct(s)) =>     {
@@ -123,13 +120,16 @@ impl<'a> TransferFunctions for PackedTypesAnalysis<'a> {
                     }
                 }
                 Function(mid, fid, types) => {
-                    if let Some(summary) = self.cache.get::<PackedTypesState>(mid.qualified(*fid)) {
+                    if let Some(summary) = self
+                        .cache
+                        .get::<PackedTypesState>(mid.qualified(*fid), &FunctionVariant::Baseline)
+                    {
                         // add closed types
-                        for ty in &summary.closed_types.0 {
+                        for ty in summary.closed_types.iter() {
                             state.closed_types.insert(ty.clone());
                         }
                         // instantiate open types with the type parameters at this call site
-                        for open_ty in &summary.open_types.0 {
+                        for open_ty in summary.open_types.iter() {
                             let specialized_ty = open_ty.instantiate(types);
                             if specialized_ty.is_open() {
                                 state.open_types.insert(specialized_ty);
@@ -142,6 +142,9 @@ impl<'a> TransferFunctions for PackedTypesAnalysis<'a> {
                             }
                         }
                     }
+                }
+                OpaqueCallBegin(_, _, _) | OpaqueCallEnd(_, _, _) => {
+                    // skip
                 }
                 _ => (),
             }
@@ -172,12 +175,15 @@ impl FunctionTargetProcessor for PackedTypesProcessor {
         &self,
         targets: &mut FunctionTargetsHolder,
         func_env: &FunctionEnv<'_>,
-        data: FunctionData,
+        mut data: FunctionData,
     ) -> FunctionData {
         let initial_state = PackedTypesState::default();
+        let fun_target = FunctionTarget::new(func_env, &data);
         let cache = SummaryCache::new(targets, func_env.module_env.env);
         let analysis = PackedTypesAnalysis { cache };
-        analysis.summarize(func_env, initial_state, data)
+        let summary = analysis.summarize(&fun_target, initial_state);
+        data.annotations.set(summary);
+        data
     }
 
     fn name(&self) -> String {

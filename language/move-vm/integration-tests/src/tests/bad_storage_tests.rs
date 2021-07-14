@@ -2,19 +2,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::compiler::{as_module, as_script, compile_units};
+use move_binary_format::errors::{Location, PartialVMError, PartialVMResult, VMResult};
 use move_core_types::{
     account_address::AccountAddress,
     effects::ChangeSet,
-    gas_schedule::{GasAlgebra, GasUnits},
     identifier::Identifier,
     language_storage::{ModuleId, StructTag},
     value::{serialize_values, MoveValue},
     vm_status::{StatusCode, StatusType},
 };
-use move_vm_runtime::{data_cache::RemoteCache, logging::NoContextLog, move_vm::MoveVM};
+use move_vm_runtime::{data_cache::MoveStorage, logging::NoContextLog, move_vm::MoveVM};
 use move_vm_test_utils::{DeltaStorage, InMemoryStorage};
-use move_vm_types::gas_schedule::{zero_cost_schedule, CostStrategy};
-use vm::errors::{Location, PartialVMError, PartialVMResult, VMResult};
+use move_vm_types::gas_schedule::GasStatus;
 
 const TEST_ADDR: AccountAddress = AccountAddress::new([42; AccountAddress::LENGTH]);
 
@@ -33,7 +32,7 @@ fn test_malformed_resource() {
             }
         }
 
-        module M {
+        module {{ADDR}}::M {
             use 0x1::Signer;
 
             struct Foo has key { x: u64, y: bool }
@@ -65,7 +64,7 @@ fn test_malformed_resource() {
         }
     "#;
     let code = code.replace("{{ADDR}}", &format!("0x{}", TEST_ADDR.to_string()));
-    let mut units = compile_units(TEST_ADDR, &code).unwrap();
+    let mut units = compile_units(&code).unwrap();
 
     let s2 = as_script(units.pop().unwrap());
     let s1 = as_script(units.pop().unwrap());
@@ -86,8 +85,7 @@ fn test_malformed_resource() {
     let vm = MoveVM::new();
 
     let log_context = NoContextLog::new();
-    let cost_table = zero_cost_schedule();
-    let mut cost_strategy = CostStrategy::system(&cost_table, GasUnits::new(0));
+    let mut gas_status = GasStatus::new_unmetered();
 
     // Execute the first script to publish a resource Foo.
     let mut script_blob = vec![];
@@ -98,7 +96,7 @@ fn test_malformed_resource() {
         vec![],
         vec![],
         vec![TEST_ADDR],
-        &mut cost_strategy,
+        &mut gas_status,
         &log_context,
     )
     .unwrap();
@@ -117,7 +115,7 @@ fn test_malformed_resource() {
             vec![],
             vec![],
             vec![TEST_ADDR],
-            &mut cost_strategy,
+            &mut gas_status,
             &log_context,
         )
         .unwrap();
@@ -145,7 +143,7 @@ fn test_malformed_resource() {
                 vec![],
                 vec![],
                 vec![TEST_ADDR],
-                &mut cost_strategy,
+                &mut gas_status,
                 &log_context,
             )
             .unwrap_err();
@@ -157,13 +155,13 @@ fn test_malformed_resource() {
 fn test_malformed_module() {
     // Compile module M.
     let code = r#"
-        module M {
+        module {{ADDR}}::M {
             public fun foo() {}
         }
     "#;
 
     let code = code.replace("{{ADDR}}", &format!("0x{}", TEST_ADDR.to_string()));
-    let mut units = compile_units(TEST_ADDR, &code).unwrap();
+    let mut units = compile_units(&code).unwrap();
 
     let m = as_module(units.pop().unwrap());
 
@@ -173,8 +171,7 @@ fn test_malformed_module() {
     let module_id = ModuleId::new(TEST_ADDR, Identifier::new("M").unwrap());
     let fun_name = Identifier::new("foo").unwrap();
     let log_context = NoContextLog::new();
-    let cost_table = zero_cost_schedule();
-    let mut cost_strategy = CostStrategy::system(&cost_table, GasUnits::new(0));
+    let mut gas_status = GasStatus::new_unmetered();
 
     // Publish M and call M::foo. No errors should be thrown.
     {
@@ -187,7 +184,7 @@ fn test_malformed_module() {
             &fun_name,
             vec![],
             vec![],
-            &mut cost_strategy,
+            &mut gas_status,
             &log_context,
         )
         .unwrap();
@@ -214,7 +211,7 @@ fn test_malformed_module() {
                 &fun_name,
                 vec![],
                 vec![],
-                &mut cost_strategy,
+                &mut gas_status,
                 &log_context,
             )
             .unwrap_err();
@@ -226,17 +223,17 @@ fn test_malformed_module() {
 fn test_unverifiable_module() {
     // Compile module M.
     let code = r#"
-        module M {
+        module {{ADDR}}::M {
             public fun foo() {}
         }
     "#;
 
-    let mut units = compile_units(TEST_ADDR, &code).unwrap();
+    let code = code.replace("{{ADDR}}", &format!("0x{}", TEST_ADDR.to_string()));
+    let mut units = compile_units(&code).unwrap();
     let m = as_module(units.pop().unwrap());
 
     let log_context = NoContextLog::new();
-    let cost_table = zero_cost_schedule();
-    let mut cost_strategy = CostStrategy::system(&cost_table, GasUnits::new(0));
+    let mut gas_status = GasStatus::new_unmetered();
     let module_id = ModuleId::new(TEST_ADDR, Identifier::new("M").unwrap());
     let fun_name = Identifier::new("foo").unwrap();
 
@@ -256,7 +253,7 @@ fn test_unverifiable_module() {
             &fun_name,
             vec![],
             vec![],
-            &mut cost_strategy,
+            &mut gas_status,
             &log_context,
         )
         .unwrap();
@@ -283,7 +280,7 @@ fn test_unverifiable_module() {
                 &fun_name,
                 vec![],
                 vec![],
-                &mut cost_strategy,
+                &mut gas_status,
                 &log_context,
             )
             .unwrap_err();
@@ -296,18 +293,18 @@ fn test_unverifiable_module() {
 fn test_missing_module_dependency() {
     // Compile two modules M, N where N depends on M.
     let code = r#"
-        module M {
+        module {{ADDR}}::M {
             public fun foo() {}
         }
 
-        module N {
+        module {{ADDR}}::N {
             use {{ADDR}}::M;
 
             public fun bar() { M::foo(); }
         }
     "#;
     let code = code.replace("{{ADDR}}", &format!("0x{}", TEST_ADDR.to_string()));
-    let mut units = compile_units(TEST_ADDR, &code).unwrap();
+    let mut units = compile_units(&code).unwrap();
     let n = as_module(units.pop().unwrap());
     let m = as_module(units.pop().unwrap());
 
@@ -317,8 +314,7 @@ fn test_missing_module_dependency() {
     n.serialize(&mut blob_n).unwrap();
 
     let log_context = NoContextLog::new();
-    let cost_table = zero_cost_schedule();
-    let mut cost_strategy = CostStrategy::system(&cost_table, GasUnits::new(0));
+    let mut gas_status = GasStatus::new_unmetered();
 
     let module_id = ModuleId::new(TEST_ADDR, Identifier::new("N").unwrap());
     let fun_name = Identifier::new("bar").unwrap();
@@ -338,7 +334,7 @@ fn test_missing_module_dependency() {
             &fun_name,
             vec![],
             vec![],
-            &mut cost_strategy,
+            &mut gas_status,
             &log_context,
         )
         .unwrap();
@@ -359,7 +355,7 @@ fn test_missing_module_dependency() {
                 &fun_name,
                 vec![],
                 vec![],
-                &mut cost_strategy,
+                &mut gas_status,
                 &log_context,
             )
             .unwrap_err();
@@ -372,18 +368,18 @@ fn test_missing_module_dependency() {
 fn test_malformed_module_denpency() {
     // Compile two modules M, N where N depends on M.
     let code = r#"
-        module M {
+        module {{ADDR}}::M {
             public fun foo() {}
         }
 
-        module N {
+        module {{ADDR}}::N {
             use {{ADDR}}::M;
 
             public fun bar() { M::foo(); }
         }
     "#;
     let code = code.replace("{{ADDR}}", &format!("0x{}", TEST_ADDR.to_string()));
-    let mut units = compile_units(TEST_ADDR, &code).unwrap();
+    let mut units = compile_units(&code).unwrap();
     let n = as_module(units.pop().unwrap());
     let m = as_module(units.pop().unwrap());
 
@@ -393,8 +389,7 @@ fn test_malformed_module_denpency() {
     n.serialize(&mut blob_n).unwrap();
 
     let log_context = NoContextLog::new();
-    let cost_table = zero_cost_schedule();
-    let mut cost_strategy = CostStrategy::system(&cost_table, GasUnits::new(0));
+    let mut gas_status = GasStatus::new_unmetered();
 
     let module_id = ModuleId::new(TEST_ADDR, Identifier::new("N").unwrap());
     let fun_name = Identifier::new("bar").unwrap();
@@ -414,7 +409,7 @@ fn test_malformed_module_denpency() {
             &fun_name,
             vec![],
             vec![],
-            &mut cost_strategy,
+            &mut gas_status,
             &log_context,
         )
         .unwrap();
@@ -441,7 +436,7 @@ fn test_malformed_module_denpency() {
                 &fun_name,
                 vec![],
                 vec![],
-                &mut cost_strategy,
+                &mut gas_status,
                 &log_context,
             )
             .unwrap_err();
@@ -454,18 +449,18 @@ fn test_malformed_module_denpency() {
 fn test_unverifiable_module_dependency() {
     // Compile two modules M, N where N depends on M.
     let code = r#"
-        module M {
+        module {{ADDR}}::M {
             public fun foo() {}
         }
 
-        module N {
+        module {{ADDR}}::N {
             use {{ADDR}}::M;
 
             public fun bar() { M::foo(); }
         }
     "#;
     let code = code.replace("{{ADDR}}", &format!("0x{}", TEST_ADDR.to_string()));
-    let mut units = compile_units(TEST_ADDR, &code).unwrap();
+    let mut units = compile_units(&code).unwrap();
     let n = as_module(units.pop().unwrap());
     let m = as_module(units.pop().unwrap());
 
@@ -473,8 +468,7 @@ fn test_unverifiable_module_dependency() {
     n.serialize(&mut blob_n).unwrap();
 
     let log_context = NoContextLog::new();
-    let cost_table = zero_cost_schedule();
-    let mut cost_strategy = CostStrategy::system(&cost_table, GasUnits::new(0));
+    let mut gas_status = GasStatus::new_unmetered();
 
     let module_id = ModuleId::new(TEST_ADDR, Identifier::new("N").unwrap());
     let fun_name = Identifier::new("bar").unwrap();
@@ -497,7 +491,7 @@ fn test_unverifiable_module_dependency() {
             &fun_name,
             vec![],
             vec![],
-            &mut cost_strategy,
+            &mut gas_status,
             &log_context,
         )
         .unwrap();
@@ -525,7 +519,7 @@ fn test_unverifiable_module_dependency() {
                 &fun_name,
                 vec![],
                 vec![],
-                &mut cost_strategy,
+                &mut gas_status,
                 &log_context,
             )
             .unwrap_err();
@@ -538,7 +532,7 @@ struct BogusStorage {
     bad_status_code: StatusCode,
 }
 
-impl RemoteCache for BogusStorage {
+impl MoveStorage for BogusStorage {
     fn get_module(&self, _module_id: &ModuleId) -> VMResult<Option<Vec<u8>>> {
         Err(PartialVMError::new(self.bad_status_code).finish(Location::Undefined))
     }
@@ -565,8 +559,7 @@ const LIST_OF_ERROR_CODES: &[StatusCode] = &[
 #[test]
 fn test_storage_returns_bogus_error_when_loading_module() {
     let log_context = NoContextLog::new();
-    let cost_table = zero_cost_schedule();
-    let mut cost_strategy = CostStrategy::system(&cost_table, GasUnits::new(0));
+    let mut gas_status = GasStatus::new_unmetered();
     let module_id = ModuleId::new(TEST_ADDR, Identifier::new("N").unwrap());
     let fun_name = Identifier::new("bar").unwrap();
 
@@ -583,7 +576,7 @@ fn test_storage_returns_bogus_error_when_loading_module() {
                 &fun_name,
                 vec![],
                 vec![],
-                &mut cost_strategy,
+                &mut gas_status,
                 &log_context,
             )
             .unwrap_err();
@@ -595,8 +588,7 @@ fn test_storage_returns_bogus_error_when_loading_module() {
 #[test]
 fn test_storage_returns_bogus_error_when_loading_resource() {
     let log_context = NoContextLog::new();
-    let cost_table = zero_cost_schedule();
-    let mut cost_strategy = CostStrategy::system(&cost_table, GasUnits::new(0));
+    let mut gas_status = GasStatus::new_unmetered();
 
     let code = r#"
         address 0x1 {
@@ -609,7 +601,7 @@ fn test_storage_returns_bogus_error_when_loading_resource() {
             }
         }
 
-        module M {
+        module {{ADDR}}::M {
             use 0x1::Signer;
 
             struct R has key {}
@@ -621,8 +613,9 @@ fn test_storage_returns_bogus_error_when_loading_resource() {
             }
         }
     "#;
+    let code = code.replace("{{ADDR}}", &format!("0x{}", TEST_ADDR.to_string()));
 
-    let mut units = compile_units(TEST_ADDR, &code).unwrap();
+    let mut units = compile_units(&code).unwrap();
     let m = as_module(units.pop().unwrap());
     let s = as_module(units.pop().unwrap());
     let mut m_blob = vec![];
@@ -651,7 +644,7 @@ fn test_storage_returns_bogus_error_when_loading_resource() {
             &foo_name,
             vec![],
             vec![],
-            &mut cost_strategy,
+            &mut gas_status,
             &log_context,
         )
         .unwrap();
@@ -662,7 +655,7 @@ fn test_storage_returns_bogus_error_when_loading_resource() {
                 &bar_name,
                 vec![],
                 serialize_values(&vec![MoveValue::Signer(TEST_ADDR)]),
-                &mut cost_strategy,
+                &mut gas_status,
                 &log_context,
             )
             .unwrap_err();

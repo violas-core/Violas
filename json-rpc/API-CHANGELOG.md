@@ -8,10 +8,38 @@ Please add the API change in the following format:
 
 ## <date> (add "breaking change" to title following the date if a change will break client
 
-- <describle one change of API>, please <PR link> if this log is added after the PR is merged.
-- <describle another change of the API>
+- <describe one change of API>, please <PR link> if this log is added after the PR is merged.
+- <describe another change of the API>
 
 ```
+
+## 2021-05-25 Add `TreasuryComplianceRole`
+
+TreasuryComplianceRole has been created and has a field `diem_id_domain_events_key` that stores the event key of diem id domain events.
+
+## 2021-05-24 Add `diem_id_domains` field to `ParentVASPRole`
+
+ParentVASPRole has a new field `diem_id_domains` that stores the domain names for diem ID that belong to the parent VASP.
+
+## 2021-05-07 Add support for secondary signers in `TransactionDataView`
+
+With the introduction of multi-agent transactions, multiple accounts are now able to
+participate in and sign a transaction. Therefore, we have added four new fields,
+`secondary_signers`, `secondary_signature_schemes`, `secondary_signatures`,
+and `secondary_public_keys`, to support this new feature.
+
+## 2021-05-12 Add `include_events` parameter and `serialized_events` field to `get_transactions_with_proofs` method
+
+- Add an `include_events` parameter to the `get_transactions_with_proofs` method,
+  which optionally includes the `serialized_events` field in the response. This
+  field is a BCS-serialized list of each transaction's list of generated events.
+- Add a field `first_transaction_version` to the `get_transactions_with_proofs`
+  method response, which contains the version of the first transaction in the
+  response or `null` if there are no transactions.
+
+## 2021-04-21 Add `bytes` field to `unknown` event
+
+When the event data can't be parsed, we output `unknown` type event data with raw BCS event data bytes, so that client can unwrap event details by parsing the BCS bytes.
 
 ## 2021-03-25 Add `metadata` field to preburns in the `preburn_queues` for designated dealers
 

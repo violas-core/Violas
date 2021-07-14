@@ -1,9 +1,12 @@
 // Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::{account_address::AccountAddress, account_config, event::EventKey};
+use crate::{
+    account_address::AccountAddress, account_config, account_config::ACCOUNT_MODULE_IDENTIFIER,
+    event::EventKey,
+};
 use anyhow::Result;
-use move_core_types::move_resource::MoveResource;
+use move_core_types::{ident_str, identifier::IdentStr, move_resource::MoveStructType};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -30,7 +33,7 @@ impl CreateAccountEvent {
     }
 }
 
-impl MoveResource for CreateAccountEvent {
-    const MODULE_NAME: &'static str = "DiemAccount";
-    const STRUCT_NAME: &'static str = "CreateAccountEvent";
+impl MoveStructType for CreateAccountEvent {
+    const MODULE_NAME: &'static IdentStr = ACCOUNT_MODULE_IDENTIFIER;
+    const STRUCT_NAME: &'static IdentStr = ident_str!("CreateAccountEvent");
 }

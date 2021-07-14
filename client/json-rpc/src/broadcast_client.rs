@@ -1,13 +1,16 @@
 // Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::views::{AccountStateWithProofView, CurrencyInfoView, EventView, StateProofView};
 use diem_client::{
-    views::{AccountView, MetadataView, TransactionView},
+    views::{
+        AccountView, EventWithProofView, MetadataView, TransactionView, TransactionsWithProofsView,
+    },
     Client, MethodRequest, MethodResponse, Response, Result,
 };
-use diem_types::{account_address::AccountAddress, transaction::SignedTransaction};
-
-use crate::views::{AccountStateWithProofView, CurrencyInfoView, EventView, StateProofView};
+use diem_types::{
+    account_address::AccountAddress, event::EventKey, transaction::SignedTransaction,
+};
 use futures::future::join_all;
 use rand::seq::{SliceChooseIter, SliceRandom};
 use std::cmp::Reverse;
@@ -132,7 +135,7 @@ impl BroadcastingClient {
 
     pub async fn get_events(
         &self,
-        key: &str,
+        key: EventKey,
         start_seq: u64,
         limit: u64,
     ) -> Result<Response<Vec<EventView>>> {
@@ -186,20 +189,21 @@ impl BroadcastingClient {
         &self,
         start_version: u64,
         limit: u64,
-    ) -> Result<Response<()>> {
-        let futures = self
-            .random_clients()
-            .map(|client| client.get_transactions_with_proofs(start_version, limit));
+        include_events: bool,
+    ) -> Result<Response<Option<TransactionsWithProofsView>>> {
+        let futures = self.random_clients().map(|client| {
+            client.get_transactions_with_proofs(start_version, limit, include_events)
+        });
         let results = join_all(futures).await;
         collect_results(results)
     }
 
     pub async fn get_events_with_proofs(
         &self,
-        key: &str,
+        key: EventKey,
         start_seq: u64,
         limit: u64,
-    ) -> Result<Response<()>> {
+    ) -> Result<Response<Vec<EventWithProofView>>> {
         let futures = self
             .random_clients()
             .map(|client| client.get_events_with_proofs(key, start_seq, limit));

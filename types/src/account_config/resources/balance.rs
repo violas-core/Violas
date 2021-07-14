@@ -3,11 +3,13 @@
 
 use crate::{
     access_path::AccessPath,
-    account_config::constants::{xus_tag, ACCOUNT_MODULE_NAME, CORE_CODE_ADDRESS},
+    account_config::constants::{xus_tag, ACCOUNT_MODULE_IDENTIFIER, CORE_CODE_ADDRESS},
 };
 use move_core_types::{
+    ident_str,
+    identifier::IdentStr,
     language_storage::{StructTag, TypeTag},
-    move_resource::MoveResource,
+    move_resource::{MoveResource, MoveStructType},
 };
 #[cfg(any(test, feature = "fuzzing"))]
 use proptest_derive::Arbitrary;
@@ -45,11 +47,13 @@ impl BalanceResource {
     }
 }
 
-impl MoveResource for BalanceResource {
-    const MODULE_NAME: &'static str = ACCOUNT_MODULE_NAME;
-    const STRUCT_NAME: &'static str = "Balance";
+impl MoveStructType for BalanceResource {
+    const MODULE_NAME: &'static IdentStr = ACCOUNT_MODULE_IDENTIFIER;
+    const STRUCT_NAME: &'static IdentStr = ident_str!("Balance");
 
     fn type_params() -> Vec<TypeTag> {
         vec![xus_tag()]
     }
 }
+
+impl MoveResource for BalanceResource {}

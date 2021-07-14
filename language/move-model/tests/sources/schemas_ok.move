@@ -1,4 +1,4 @@
-module M {
+module 0x42::M {
 
     spec schema Increases {
         x: num;
@@ -32,12 +32,12 @@ module M {
     }
 
     fun add(x: u64): u64 { x + 1 }
-    spec fun add {
+    spec add {
         include Increases;
     }
 
     fun id(x: u64): u64 { x }
-    spec fun add {
+    spec add {
         include IsEqual<num>{y: result};
     }
 
@@ -46,7 +46,7 @@ module M {
         // invariant update x == old(x);
     }
     struct S<X> { x: X }
-    spec struct S {
+    spec S {
         include InvariantIsEqual<X>;
     }
 
@@ -59,7 +59,7 @@ module M {
         _y: R;
     }
     fun multiple(_x: u64, _y: u64) {}
-    spec fun multiple {
+    spec multiple {
         include MultipleTypeParams<num, num>;
         requires _x > _y;
     }

@@ -1,10 +1,10 @@
-module M {
+module 0x42::M {
 
   struct S {
     x: u64,
   }
 
-  spec struct S {
+  spec S {
     global tick: num;
 
     // Undeclared

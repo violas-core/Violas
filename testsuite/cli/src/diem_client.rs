@@ -1,15 +1,14 @@
 // Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use anyhow::{bail, ensure, Result};
+use anyhow::{ensure, Result};
 use diem_client::{views, BlockingClient, Response, WaitForTransactionError};
 use diem_logger::prelude::info;
 use diem_types::{
-    access_path::AccessPath,
     account_address::AccountAddress,
-    account_config::{ACCOUNT_RECEIVED_EVENT_PATH, ACCOUNT_SENT_EVENT_PATH},
     account_state_blob::AccountStateBlob,
     epoch_change::EpochChangeProof,
+    event::EventKey,
     ledger_info::LedgerInfoWithSignatures,
     transaction::{SignedTransaction, Version},
     trusted_state::{TrustedState, TrustedStateChange},
@@ -90,7 +89,7 @@ impl DiemClient {
 
     pub fn get_events(
         &self,
-        event_key: &str,
+        event_key: EventKey,
         start: u64,
         limit: u64,
     ) -> Result<Vec<views::EventView>> {
@@ -130,7 +129,7 @@ impl DiemClient {
     pub fn update_and_verify_state_proof(&mut self) -> Result<()> {
         let state_proof = self
             .client
-            .get_state_proof(self.trusted_state().latest_version())
+            .get_state_proof(self.trusted_state().version())
             .map(Response::into_inner)?;
 
         self.verify_state_proof(state_proof)
@@ -146,10 +145,10 @@ impl DiemClient {
 
         // check ledger info version
         ensure!(
-            li.ledger_info().version() >= state.latest_version(),
+            li.ledger_info().version() >= state.version(),
             "Got stale ledger_info with version {}, known version: {}",
             li.ledger_info().version(),
-            state.latest_version(),
+            state.version(),
         );
 
         // trusted_state_change
@@ -170,8 +169,8 @@ impl DiemClient {
                 self.update_latest_epoch_change_li(latest_epoch_change_li.clone());
             }
             TrustedStateChange::Version { new_state } => {
-                if state.latest_version() < new_state.latest_version() {
-                    info!("Verified version change to: {}", new_state.latest_version());
+                if state.version() < new_state.version() {
+                    info!("Verified version change to: {}", new_state.version());
                 }
                 self.update_trusted_state(new_state);
             }
@@ -222,31 +221,5 @@ impl DiemClient {
             .get_transactions(start_version, limit, fetch_events)
             .map_err(Into::into)
             .map(Response::into_inner)
-    }
-
-    pub fn get_events_by_access_path(
-        &self,
-        access_path: AccessPath,
-        start_event_seq_num: u64,
-        limit: u64,
-    ) -> Result<(Vec<views::EventView>, views::AccountView)> {
-        // get event key from access_path
-        match self.get_account(&access_path.address)? {
-            None => bail!("No account found for address {:?}", access_path.address),
-            Some(account_view) => {
-                let path = access_path.path;
-                let event_key = if path == ACCOUNT_SENT_EVENT_PATH.to_vec() {
-                    &account_view.sent_events_key
-                } else if path == ACCOUNT_RECEIVED_EVENT_PATH.to_vec() {
-                    &account_view.received_events_key
-                } else {
-                    bail!("Unexpected event path found in access path");
-                };
-
-                // get_events
-                let events = self.get_events(&event_key.to_string(), start_event_seq_num, limit)?;
-                Ok((events, account_view))
-            }
-        }
     }
 }

@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::account_config::resources::{
-    ChildVASP, Credential, DesignatedDealer, DesignatedDealerPreburns, ParentVASP,
+    ChildVASP, Credential, DesignatedDealer, DesignatedDealerPreburns, DiemIdDomainManager,
+    DiemIdDomains, ParentVASP,
 };
 use serde::{Deserialize, Serialize};
 
@@ -12,12 +13,16 @@ pub enum AccountRole {
     ParentVASP {
         vasp: ParentVASP,
         credential: Credential,
+        diem_id_domains: Option<DiemIdDomains>,
     },
     ChildVASP(ChildVASP),
     DesignatedDealer {
         dd_credential: Credential,
         preburn_balances: DesignatedDealerPreburns,
         designated_dealer: DesignatedDealer,
+    },
+    TreasuryCompliance {
+        diem_id_domain_manager: DiemIdDomainManager,
     },
     Unknown,
     // TODO: add other roles

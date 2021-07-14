@@ -79,7 +79,7 @@ use diem_crypto::HashValue;
 use diem_types::{
     account_address::AccountAddress, account_config::constants::from_currency_code_string,
     account_state::AccountState, account_state_blob::AccountStateBlob, chain_id::ChainId,
-    transaction::Version,
+    diem_id_identifier::DiemIdVaspDomainIdentifier, transaction::Version,
 };
 use move_core_types::identifier::Identifier;
 use serde::Serialize;
@@ -150,6 +150,7 @@ pub struct ParentVASPView {
     base_url: String,
     /// The number of child VASP accounts under this parent VASP account.
     num_children: u64,
+    diem_id_domains: Option<Vec<DiemIdVaspDomainIdentifier>>,
 }
 
 impl TryFrom<AccountView> for ParentVASPView {
@@ -166,6 +167,7 @@ impl TryFrom<AccountView> for ParentVASPView {
                 human_name,
                 base_url,
                 num_children,
+                diem_id_domains,
                 ..
             } => Ok(ParentVASPView {
                 address: account.address,
@@ -173,6 +175,7 @@ impl TryFrom<AccountView> for ParentVASPView {
                 human_name,
                 base_url,
                 num_children,
+                diem_id_domains,
             }),
             _ => Err(format_err!(
                 "expected parent VASP account, actual account type: {:?}",
@@ -409,14 +412,9 @@ impl CollectOptions {
             .collect::<Result<Vec<_>>>()
             .context("Invalid currency metadata")?;
 
-        let currency_ids = currencies
-            .iter()
-            .map(|currency_info| currency_info.currency.clone())
-            .collect::<Vec<_>>();
-
         // Get the parent VASP account.
         let parent_vasp = client
-            .get_account_by_version(self.parent_vasp, target_version, &currency_ids)
+            .get_account_by_version(self.parent_vasp, target_version)
             .context("Failed to retrieve parent VASP account")?
             .into_inner()
             .ok_or_else(|| {
@@ -455,7 +453,7 @@ impl CollectOptions {
             .iter()
             .map(|child_vasp_address| -> (AccountAddress, ResultWrapper<ChildVASPView>) {
                 let maybe_account_view = client
-                    .get_account_by_version(*child_vasp_address, target_version, &currency_ids)
+                    .get_account_by_version(*child_vasp_address, target_version)
                     .context("Failed to retrieve child VASP account")
                     .map(Response::into_inner)
                     .and_then(|opt_account_view| opt_account_view.ok_or_else(|| format_err!("no child VASP account at the address")));
@@ -497,9 +495,9 @@ impl CollectOptions {
             .collect::<BTreeMap<_, _>>();
 
         Ok(AssetsProof {
-            total_unfrozen_balances,
             metadata,
             all_child_vasps_valid,
+            total_unfrozen_balances,
             currencies,
             parent_vasp,
             child_vasps,
@@ -550,7 +548,6 @@ pub trait Client {
         &self,
         address: AccountAddress,
         version: Version,
-        currency_ids: &[Identifier],
     ) -> Result<Response<Option<AccountView>>>;
 }
 
@@ -581,7 +578,6 @@ impl Client for diem_client::BlockingClient {
         &self,
         address: AccountAddress,
         version: Version,
-        currency_ids: &[Identifier],
     ) -> Result<Response<Option<AccountView>>> {
         // HACK: until the follwing PR lands and hits release (https://github.com/diem/diem/pull/7983),
         // there is no `get_account_by_version` API available. However, we can
@@ -602,38 +598,10 @@ impl Client for diem_client::BlockingClient {
 
         let account_state =
             AccountState::try_from(&account_blob).context("Failed to deserialize account state")?;
-        let account_view = make_account_view(address, account_state, currency_ids, version)
+        let account_view = AccountView::try_from_account_state(address, account_state, version)
             .context("Failed to project account state into account view")?;
         Ok(Response::new(Some(account_view), response_state))
     }
-}
-
-/// Try to convert an [`AccountState`] into an [`AccountView`].
-fn make_account_view(
-    address: AccountAddress,
-    account_state: AccountState,
-    currency_ids: &[Identifier],
-    version: Version,
-) -> Result<AccountView> {
-    let account_resource = account_state
-        .get_account_resource()?
-        .ok_or_else(|| format_err!("invalid account data: no account resource"))?;
-    let freezing_bit = account_state
-        .get_freezing_bit()?
-        .ok_or_else(|| format_err!("invalid account data: no freezing bit"))?;
-    let account_role = account_state
-        .get_account_role(currency_ids)?
-        .ok_or_else(|| format_err!("invalid account data: no account role"))?;
-    let balances = account_state.get_balance_resources(currency_ids)?;
-
-    Ok(AccountView::new(
-        address,
-        &account_resource,
-        balances,
-        account_role,
-        freezing_bit,
-        version,
-    ))
 }
 
 /// For pretty printing outputs in JSON

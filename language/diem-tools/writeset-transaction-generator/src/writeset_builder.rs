@@ -10,23 +10,19 @@ use diem_types::{
 };
 use diem_vm::{convert_changeset_and_events, data_cache::RemoteStorage};
 use move_core_types::{
-    gas_schedule::{CostTable, GasAlgebra, GasUnits},
     identifier::Identifier,
     language_storage::{ModuleId, TypeTag},
     transaction_argument::convert_txn_args,
     value::{serialize_values, MoveValue},
 };
 use move_vm_runtime::{
-    data_cache::RemoteCache, logging::NoContextLog, move_vm::MoveVM, session::Session,
+    data_cache::MoveStorage, logging::NoContextLog, move_vm::MoveVM, session::Session,
 };
-use move_vm_types::gas_schedule::{zero_cost_schedule, CostStrategy};
-use once_cell::sync::Lazy;
+use move_vm_types::gas_schedule::GasStatus;
 
-pub static ZERO_COST_SCHEDULE: Lazy<CostTable> = Lazy::new(zero_cost_schedule);
+pub struct GenesisSession<'r, 'l, S>(Session<'r, 'l, S>);
 
-pub struct GenesisSession<'r, 'l, R>(Session<'r, 'l, R>);
-
-impl<'r, 'l, R: RemoteCache> GenesisSession<'r, 'l, R> {
+impl<'r, 'l, S: MoveStorage> GenesisSession<'r, 'l, S> {
     pub fn exec_func(
         &mut self,
         module_name: &str,
@@ -43,7 +39,7 @@ impl<'r, 'l, R: RemoteCache> GenesisSession<'r, 'l, R> {
                 &Identifier::new(function_name).unwrap(),
                 ty_args,
                 args,
-                &mut CostStrategy::system(&ZERO_COST_SCHEDULE, GasUnits::new(100_000_000)),
+                &mut GasStatus::new_unmetered(),
                 &NoContextLog::new(),
             )
             .unwrap_or_else(|e| {
@@ -63,7 +59,7 @@ impl<'r, 'l, R: RemoteCache> GenesisSession<'r, 'l, R> {
                 script.ty_args().to_vec(),
                 convert_txn_args(script.args()),
                 vec![sender],
-                &mut CostStrategy::system(&ZERO_COST_SCHEDULE, GasUnits::new(100_000_000)),
+                &mut GasStatus::new_unmetered(),
                 &NoContextLog::new(),
             )
             .unwrap()

@@ -154,12 +154,24 @@ Event emitted when a new account is created
 | created_address | string | Address of the created account |
 | role_id         | u64    | Role id of the created account, see [DIP-2](https://dip.diem.com/dip-2/#move-implementation) for more details |
 
+#### diemiddomain
+
+Event emitted under TC account when a diem id domain is added or removed from parent VASP account
+
+| Name            | Type   | Description                    |
+|-----------------|--------|--------------------------------|
+| type            | string | Constant string "diemiddomain"|
+| address | string | On-chain account address of parent VASP |
+| domain         | string    | Diem ID domain string of the account |
+| removed         | boolean    | Whether a domain was added or removed |
+
 #### unknown
 
 Represents events currently unsupported by JSON-RPC API.
 
-| Name    | Type   | Description                 |
-|---------|--------|-----------------------------|
-| type    | string | Constant string "unknown"   |
+| Name  | Type   | Description                             |
+|-------|--------|-----------------------------------------|
+| type  | string | Constant string "unknown"               |
+| bytes | string | Hex-encoded BCS bytes of the event data |
 
 [1]: https://docs.rs/bcs/ "BCS"

@@ -1,8 +1,6 @@
 // Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::shared::*;
-
 pub const DEPENDENCY: &str = "dependency";
 pub const DEPENDENCY_SHORT: &str = "d";
 
@@ -19,9 +17,8 @@ pub const NO_SHADOW_SHORT: &str = "S";
 pub const SOURCE_MAP: &str = "source-map";
 pub const SOURCE_MAP_SHORT: &str = "m";
 
-pub fn parse_address(s: &str) -> Result<Address, String> {
-    Address::parse_str(s).map_err(|msg| format!("Invalid argument to '{}': {}", SENDER, msg))
-}
+pub const TEST: &str = "test";
+pub const TEST_SHORT: &str = "t";
 
 pub const COLOR_MODE_ENV_VAR: &str = "COLOR_MODE";
 

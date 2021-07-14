@@ -1,5 +1,5 @@
 // flag: --v2
-module Generics {
+module 0x42::Generics {
 
     spec module {
         pragma verify = true;
@@ -10,7 +10,7 @@ module Generics {
     fun remove<T: store>(a: address): R<T> acquires R {
         move_from<R<T>>(a)
     }
-    spec fun remove {
+    spec remove {
         pragma opaque;
         include Remove<T>;
     }
@@ -23,7 +23,7 @@ module Generics {
     fun remove_u64(a: address): R<u64> acquires R {
         remove<u64>(a)
     }
-    spec fun remove_u64 {
+    spec remove_u64 {
         include Remove<u64>;
     }
 }

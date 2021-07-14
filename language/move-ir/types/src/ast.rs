@@ -159,7 +159,7 @@ pub type TypeVar = Spanned<TypeVar_>;
 // Abilities
 //**************************************************************************************************
 
-/// The abilities of a type. Analogous to `vm::file_format::Ability`.
+/// The abilities of a type. Analogous to `move_binary_format::file_format::Ability`.
 #[derive(Debug, Clone, Eq, Copy, Hash, Ord, PartialEq, PartialOrd)]
 pub enum Ability {
     /// Allows values of types with this ability to be copied
@@ -784,7 +784,7 @@ impl QualifiedModuleIdent {
     /// Creates a new fully qualified module identifier from the module name and the address at
     /// which it is published
     pub fn new(name: ModuleName, address: AccountAddress) -> Self {
-        QualifiedModuleIdent { address, name }
+        QualifiedModuleIdent { name, address }
     }
 
     /// Accessor for the name of the fully qualified module identifier

@@ -2,13 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{
-    errors::*,
     expansion::{
-        ast::{self as E, AbilitySet},
+        ast::{self as E, AbilitySet, ModuleIdent},
         translate::is_valid_struct_constant_or_schema_name as is_constant_name,
     },
     naming::ast as N,
-    parser::ast::{Ability_, ConstantName, Field, FunctionName, ModuleIdent, StructName, Var},
+    parser::ast::{Ability_, ConstantName, Field, FunctionName, StructName, Var},
     shared::{unique_map::UniqueMap, *},
     FullyCompiledProgram,
 };
@@ -37,8 +36,8 @@ impl ResolvedType {
     }
 }
 
-struct Context {
-    errors: Errors,
+struct Context<'env> {
+    env: &'env mut CompilationEnv,
     current_module: Option<ModuleIdent>,
     scoped_types: BTreeMap<ModuleIdent, BTreeMap<String, (Loc, ModuleIdent, AbilitySet, usize)>>,
     unscoped_types: BTreeMap<String, ResolvedType>,
@@ -47,11 +46,11 @@ struct Context {
     scoped_constants: BTreeMap<ModuleIdent, BTreeMap<String, Loc>>,
 }
 
-impl Context {
+impl<'env> Context<'env> {
     fn new(
+        compilation_env: &'env mut CompilationEnv,
         pre_compiled_lib: Option<&FullyCompiledProgram>,
         prog: &E::Program,
-        errors: Errors,
     ) -> Self {
         use ResolvedType as RT;
         let all_modules = || {
@@ -108,7 +107,7 @@ impl Context {
             .map(|s| (s.to_string(), RT::BuiltinType))
             .collect();
         Self {
-            errors,
+            env: compilation_env,
             current_module: None,
             scoped_types,
             scoped_functions,
@@ -118,26 +117,14 @@ impl Context {
         }
     }
 
-    fn error(&mut self, e: Vec<(Loc, impl Into<String>)>) {
-        self.errors
-            .push(e.into_iter().map(|(loc, msg)| (loc, msg.into())).collect())
-    }
-
-    fn get_errors(self) -> Errors {
-        self.errors
-    }
-
-    fn has_errors(&self) -> bool {
-        !self.errors.is_empty()
-    }
-
-    fn resolve_module(&mut self, loc: Loc, m: &ModuleIdent) -> bool {
+    fn resolve_module(&mut self, m: &ModuleIdent) -> bool {
         // NOTE: piggybacking on `scoped_functions` to provide a set of modules in the context。
         // TODO: a better solution would be to have a single `BTreeMap<ModuleIdent, ModuleInfo>`
         // in the context that can be used to resolve modules, types, and functions.
         let resolved = self.scoped_functions.contains_key(m);
         if !resolved {
-            self.error(vec![(loc, format!("Unbound module '{}'", m,))]);
+            self.env
+                .add_error(vec![(m.loc, format!("Unbound module '{}'", m,))]);
         }
         resolved
     }
@@ -150,14 +137,15 @@ impl Context {
     ) -> Option<(Loc, StructName, AbilitySet, usize)> {
         let types = match self.scoped_types.get(m) {
             None => {
-                self.error(vec![(loc, format!("Unbound module '{}'", m,))]);
+                self.env
+                    .add_error(vec![(m.loc, format!("Unbound module '{}'", m,))]);
                 return None;
             }
             Some(members) => members,
         };
         match types.get(&n.value) {
             None => {
-                self.error(vec![(
+                self.env.add_error(vec![(
                     loc,
                     format!(
                         "Invalid module access. Unbound struct '{}' in module '{}'",
@@ -180,14 +168,15 @@ impl Context {
     ) -> Option<FunctionName> {
         let functions = match self.scoped_functions.get(m) {
             None => {
-                self.error(vec![(loc, format!("Unbound module '{}'", m,))]);
+                self.env
+                    .add_error(vec![(m.loc, format!("Unbound module '{}'", m,))]);
                 return None;
             }
             Some(members) => members,
         };
         match functions.get(&n.value).cloned() {
             None => {
-                self.error(vec![(
+                self.env.add_error(vec![(
                     loc,
                     format!(
                         "Invalid module access. Unbound function '{}' in module '{}'",
@@ -208,14 +197,15 @@ impl Context {
     ) -> Option<ConstantName> {
         let constants = match self.scoped_constants.get(m) {
             None => {
-                self.error(vec![(loc, format!("Unbound module '{}'", m,))]);
+                self.env
+                    .add_error(vec![(m.loc, format!("Unbound module '{}'", m,))]);
                 return None;
             }
             Some(members) => members,
         };
         match constants.get(&n.value).cloned() {
             None => {
-                self.error(vec![(
+                self.env.add_error(vec![(
                     loc,
                     format!(
                         "Invalid module access. Unbound constant '{}' in module '{}'",
@@ -231,7 +221,7 @@ impl Context {
     fn resolve_unscoped_type(&mut self, n: &Name) -> Option<ResolvedType> {
         match self.unscoped_types.get(&n.value) {
             None => {
-                self.error(vec![(
+                self.env.add_error(vec![(
                     n.loc,
                     format!("Unbound type '{}' in current scope", n),
                 )]);
@@ -253,11 +243,11 @@ impl Context {
         match ma_ {
             EA::Name(n) => match self.resolve_unscoped_type(&n) {
                 None => {
-                    assert!(self.has_errors());
+                    assert!(self.env.has_errors());
                     None
                 }
                 Some(rt) => {
-                    self.error(vec![
+                    self.env.add_error(vec![
                         (nloc, format!("Invalid {}. Expected a struct name", verb)),
                         rt.error_msg(&n),
                     ]);
@@ -266,7 +256,7 @@ impl Context {
             },
             EA::ModuleAccess(m, n) => match self.resolve_module_type(nloc, &m, &n) {
                 None => {
-                    assert!(self.has_errors());
+                    assert!(self.env.has_errors());
                     None
                 }
                 Some((_, _, _, arity)) => {
@@ -289,14 +279,15 @@ impl Context {
         match ma_ {
             EA::Name(n) => match self.unscoped_constants.get(&n.value) {
                 None => {
-                    self.error(vec![(loc, format!("Unbound constant '{}'", n))]);
+                    self.env
+                        .add_error(vec![(loc, format!("Unbound constant '{}'", n))]);
                     None
                 }
                 Some(_) => Some((None, ConstantName(n))),
             },
             EA::ModuleAccess(m, n) => match self.resolve_module_constant(loc, &m, n) {
                 None => {
-                    assert!(self.has_errors());
+                    assert!(self.env.has_errors());
                     None
                 }
                 Some(cname) => Some((Some(m), cname)),
@@ -330,18 +321,24 @@ impl Context {
 //**************************************************************************************************
 
 pub fn program(
+    compilation_env: &mut CompilationEnv,
     pre_compiled_lib: Option<&FullyCompiledProgram>,
     prog: E::Program,
-    errors: Errors,
-) -> (N::Program, Errors) {
-    let mut context = Context::new(pre_compiled_lib, &prog, errors);
+) -> N::Program {
+    let mut context = Context::new(compilation_env, pre_compiled_lib, &prog);
     let E::Program {
+        addresses,
         modules: emodules,
         scripts: escripts,
     } = prog;
+    let addresses = addresses.filter_map(|_name, mapping| mapping.map(|sp!(_, addr)| addr));
     let modules = modules(&mut context, emodules);
     let scripts = scripts(&mut context, escripts);
-    (N::Program { modules, scripts }, context.get_errors())
+    N::Program {
+        addresses,
+        modules,
+        scripts,
+    }
 }
 
 fn modules(
@@ -357,31 +354,41 @@ fn module(
     mdef: E::ModuleDefinition,
 ) -> N::ModuleDefinition {
     context.current_module = Some(ident);
-    let is_source_module = mdef.is_source_module;
-    let friends = mdef
-        .friends
-        .filter_map(|mident, f| friend(context, mident, f));
+    let E::ModuleDefinition {
+        attributes,
+        loc: _loc,
+        is_source_module,
+        dependency_order,
+        immediate_neighbors: _,
+        friends: efriends,
+        structs: estructs,
+        functions: efunctions,
+        constants: econstants,
+        specs: _specs,
+    } = mdef;
+    let friends = efriends.filter_map(|mident, f| friend(context, mident, f));
     let unscoped = context.save_unscoped();
-    let structs = mdef.structs.map(|name, s| {
+    let structs = estructs.map(|name, s| {
         context.restore_unscoped(unscoped.clone());
         struct_def(context, name, s)
     });
-    let functions = mdef.functions.map(|name, f| {
+    let functions = efunctions.map(|name, f| {
         context.restore_unscoped(unscoped.clone());
         function(context, name, f)
     });
-    let constants = mdef.constants.map(|name, c| {
+    let constants = econstants.map(|name, c| {
         context.restore_unscoped(unscoped.clone());
         constant(context, name, c)
     });
     context.restore_unscoped(unscoped);
     N::ModuleDefinition {
+        attributes,
         is_source_module,
-        dependency_order: mdef.dependency_order,
+        dependency_order,
         friends,
         structs,
-        functions,
         constants,
+        functions,
     }
 }
 
@@ -397,7 +404,9 @@ fn scripts(
 
 fn script(context: &mut Context, escript: E::Script) -> N::Script {
     let E::Script {
+        attributes,
         loc,
+        immediate_neighbors: _,
         constants: econstants,
         function_name,
         function: efunction,
@@ -416,6 +425,7 @@ fn script(context: &mut Context, escript: E::Script) -> N::Script {
     let function = function(context, function_name.clone(), efunction);
     context.restore_unscoped(outer_unscoped);
     N::Script {
+        attributes,
         loc,
         constants,
         function_name,
@@ -426,28 +436,29 @@ fn script(context: &mut Context, escript: E::Script) -> N::Script {
 //**************************************************************************************************
 // Friends
 //**************************************************************************************************
-fn friend(context: &mut Context, mident: ModuleIdent, loc: Loc) -> Option<Loc> {
+
+fn friend(context: &mut Context, mident: ModuleIdent, friend: E::Friend) -> Option<E::Friend> {
     let current_mident = context.current_module.as_ref().unwrap();
-    if mident.value.0 != current_mident.value.0 {
+    if mident.value.address != current_mident.value.address {
         // NOTE: in alignment with the bytecode verifier, this constraint is a policy decision
         // rather than a technical requirement. The compiler, VM, and bytecode verifier DO NOT
         // rely on the assumption that friend modules must reside within the same account address.
         let msg = "Cannot declare modules out of the current address as a friend";
-        context.error(vec![
-            (loc, "Invalid friend declaration"),
-            (mident.loc(), msg),
+        context.env.add_error(vec![
+            (friend.loc, "Invalid friend declaration"),
+            (mident.loc, msg),
         ]);
         None
     } else if &mident == current_mident {
-        context.error(vec![
-            (loc, "Invalid friend declaration"),
-            (mident.loc(), "Cannot declare the module itself as a friend"),
+        context.env.add_error(vec![
+            (friend.loc, "Invalid friend declaration"),
+            (mident.loc, "Cannot declare the module itself as a friend"),
         ]);
         None
-    } else if context.resolve_module(loc, &mident) {
-        Some(loc)
+    } else if context.resolve_module(&mident) {
+        Some(friend)
     } else {
-        assert!(context.has_errors());
+        assert!(context.env.has_errors());
         None
     }
 }
@@ -457,11 +468,13 @@ fn friend(context: &mut Context, mident: ModuleIdent, loc: Loc) -> Option<Loc> {
 //**************************************************************************************************
 
 fn function(context: &mut Context, _name: FunctionName, f: E::Function) -> N::Function {
+    let attributes = f.attributes;
     let visibility = f.visibility;
     let signature = function_signature(context, f.signature);
     let acquires = function_acquires(context, f.acquires);
     let body = function_body(context, f.body);
     N::Function {
+        attributes,
         visibility,
         signature,
         acquires,
@@ -503,7 +516,7 @@ fn function_acquires(
             Some(sn) => sn,
         };
         if let Some(old_loc) = acquires.insert(sn, new_loc) {
-            context.error(vec![
+            context.env.add_error(vec![
                 (new_loc, "Duplicate acquires item"),
                 (old_loc, "Previously listed here"),
             ])
@@ -521,7 +534,7 @@ fn acquires_type(context: &mut Context, sp!(loc, en_): E::ModuleAccess) -> Optio
                 RT::BuiltinType => "builtin type",
                 RT::TParam(_, _) => "type parameter",
             };
-            context.error(vec![(
+            context.env.add_error(vec![(
                 loc,
                 format!(
                     "Invalid acquires item. Expected a struct name, but got a {}",
@@ -557,7 +570,7 @@ fn acquires_type_struct(
             "Invalid acquires item. Expected a struct with the '{}' ability.",
             Ability_::KEY
         );
-        context.error(vec![
+        context.env.add_error(vec![
             (loc, msg),
             (decl_loc, "Declared without the ability here".to_string()),
         ]);
@@ -570,7 +583,9 @@ fn acquires_type_struct(
              internal to the module'",
             n
         );
-        context.error(vec![(loc, "Invalid acquires item".into()), (n.loc(), tmsg)]);
+        context
+            .env
+            .add_error(vec![(loc, "Invalid acquires item".into()), (n.loc(), tmsg)]);
         has_errors = true;
     }
 
@@ -590,10 +605,12 @@ fn struct_def(
     _name: StructName,
     sdef: E::StructDefinition,
 ) -> N::StructDefinition {
+    let attributes = sdef.attributes;
     let abilities = sdef.abilities;
     let type_parameters = type_parameters(context, sdef.type_parameters);
     let fields = struct_fields(context, sdef.fields);
     N::StructDefinition {
+        attributes,
         abilities,
         type_parameters,
         fields,
@@ -615,6 +632,7 @@ fn struct_fields(context: &mut Context, efields: E::StructFields) -> N::StructFi
 
 fn constant(context: &mut Context, _name: ConstantName, econstant: E::Constant) -> N::Constant {
     let E::Constant {
+        attributes,
         loc,
         signature: esignature,
         value: evalue,
@@ -622,6 +640,7 @@ fn constant(context: &mut Context, _name: ConstantName, econstant: E::Constant) 
     let signature = type_(context, esignature);
     let value = exp_(context, evalue);
     N::Constant {
+        attributes,
         loc,
         signature,
         value,
@@ -654,7 +673,7 @@ fn type_parameters(
             );
             if let Err((name, old_loc)) = unique_tparams.add(name, ()) {
                 let msg = format!("Duplicate type parameter declared with name '{}'", name);
-                context.error(vec![
+                context.env.add_error(vec![
                     (loc, msg),
                     (old_loc, "Previously defined here".to_string()),
                 ])
@@ -679,12 +698,12 @@ fn type_(context: &mut Context, sp!(loc, ety_): E::Type) -> N::Type {
         }
         ET::Ref(mut_, inner) => NT::Ref(mut_, Box::new(type_(context, *inner))),
         ET::UnresolvedError => {
-            assert!(context.has_errors());
+            assert!(context.env.has_errors());
             NT::UnresolvedError
         }
         ET::Apply(sp!(_, EN::Name(n)), tys) => match context.resolve_unscoped_type(&n) {
             None => {
-                assert!(context.has_errors());
+                assert!(context.env.has_errors());
                 NT::UnresolvedError
             }
             Some(RT::BuiltinType) => {
@@ -697,7 +716,7 @@ fn type_(context: &mut Context, sp!(loc, ety_): E::Type) -> N::Type {
             }
             Some(RT::TParam(_, tp)) => {
                 if !tys.is_empty() {
-                    context.error(vec![(
+                    context.env.add_error(vec![(
                         loc,
                         "Generic type parameters cannot take type arguments",
                     )]);
@@ -710,7 +729,7 @@ fn type_(context: &mut Context, sp!(loc, ety_): E::Type) -> N::Type {
         ET::Apply(sp!(nloc, EN::ModuleAccess(m, n)), tys) => {
             match context.resolve_module_type(nloc, &m, &n) {
                 None => {
-                    assert!(context.has_errors());
+                    assert!(context.env.has_errors());
                     NT::UnresolvedError
                 }
                 Some((_, _, _, arity)) => {
@@ -736,7 +755,7 @@ fn check_type_argument_arity<F: FnOnce() -> String>(
 ) -> Vec<N::Type> {
     let args_len = ty_args.len();
     if args_len != arity {
-        context.error(vec![(
+        context.env.add_error(vec![(
             loc,
             format!(
                 "Invalid instantiation of '{}'. Expected {} type argument(s) but got {}",
@@ -777,7 +796,7 @@ fn sequence_item(context: &mut Context, sp!(loc, ns_): E::SequenceItem) -> N::Se
             let tys = ty_opt.map(|t| type_(context, t));
             match bind_opt {
                 None => {
-                    assert!(context.has_errors());
+                    assert!(context.env.has_errors());
                     NS::Seq(sp(loc, N::Exp_::UnresolvedError))
                 }
                 Some(bind) => NS::Declare(bind, tys),
@@ -788,7 +807,7 @@ fn sequence_item(context: &mut Context, sp!(loc, ns_): E::SequenceItem) -> N::Se
             let e = exp_(context, e);
             match bind_opt {
                 None => {
-                    assert!(context.has_errors());
+                    assert!(context.env.has_errors());
                     NS::Seq(sp(loc, N::Exp_::UnresolvedError))
                 }
                 Some(bind) => NS::Bind(bind, e),
@@ -816,7 +835,6 @@ fn exp_(context: &mut Context, e: E::Exp) -> N::Exp {
     let sp!(eloc, e_) = e;
     let ne_ = match e_ {
         EE::Unit { trailing } => NE::Unit { trailing },
-        EE::InferredNum(u) => NE::InferredNum(u),
         EE::Value(val) => NE::Value(val),
         EE::Move(v) => NE::Move(v),
         EE::Copy(v) => NE::Copy(v),
@@ -841,7 +859,7 @@ fn exp_(context: &mut Context, e: E::Exp) -> N::Exp {
             let ne = exp(context, *e);
             match na_opt {
                 None => {
-                    assert!(context.has_errors());
+                    assert!(context.env.has_errors());
                     NE::UnresolvedError
                 }
                 Some(na) => NE::Assign(na, ne),
@@ -852,7 +870,7 @@ fn exp_(context: &mut Context, e: E::Exp) -> N::Exp {
             let ner = exp(context, *er);
             match ndot_opt {
                 None => {
-                    assert!(context.has_errors());
+                    assert!(context.env.has_errors());
                     NE::UnresolvedError
                 }
                 Some(ndot) => NE::FieldMutate(ndot, ner),
@@ -876,7 +894,7 @@ fn exp_(context: &mut Context, e: E::Exp) -> N::Exp {
         EE::Pack(tn, etys_opt, efields) => {
             match context.resolve_struct_name(eloc, "construction", tn, etys_opt) {
                 None => {
-                    assert!(context.has_errors());
+                    assert!(context.env.has_errors());
                     NE::UnresolvedError
                 }
                 Some((m, sn, tys_opt)) => NE::Pack(
@@ -895,7 +913,7 @@ fn exp_(context: &mut Context, e: E::Exp) -> N::Exp {
         EE::Borrow(mut_, inner) => match *inner {
             sp!(_, EE::ExpDotted(edot)) => match dotted(context, *edot) {
                 None => {
-                    assert!(context.has_errors());
+                    assert!(context.env.has_errors());
                     NE::UnresolvedError
                 }
                 Some(d) => NE::Borrow(mut_, d),
@@ -908,7 +926,7 @@ fn exp_(context: &mut Context, e: E::Exp) -> N::Exp {
 
         EE::ExpDotted(edot) => match dotted(context, *edot) {
             None => {
-                assert!(context.has_errors());
+                assert!(context.env.has_errors());
                 NE::UnresolvedError
             }
             Some(d) => NE::DerefBorrow(d),
@@ -925,7 +943,7 @@ fn exp_(context: &mut Context, e: E::Exp) -> N::Exp {
                 EA::Name(n) if N::BuiltinFunction_::all_names().contains(&n.value.as_str()) => {
                     match resolve_builtin_function(context, eloc, &n, ty_args) {
                         None => {
-                            assert!(context.has_errors());
+                            assert!(context.env.has_errors());
                             NE::UnresolvedError
                         }
                         Some(f) => NE::Builtin(sp(mloc, f), nes),
@@ -933,7 +951,7 @@ fn exp_(context: &mut Context, e: E::Exp) -> N::Exp {
                 }
 
                 EA::Name(n) => {
-                    context.error(vec![(
+                    context.env.add_error(vec![(
                         n.loc,
                         format!("Unbound function '{}' in current scope", n),
                     )]);
@@ -941,7 +959,7 @@ fn exp_(context: &mut Context, e: E::Exp) -> N::Exp {
                 }
                 EA::ModuleAccess(m, n) => match context.resolve_module_function(mloc, &m, &n) {
                     None => {
-                        assert!(context.has_errors());
+                        assert!(context.env.has_errors());
                         NE::UnresolvedError
                     }
                     Some(_) => NE::ModuleCall(m, FunctionName(n), ty_args, nes),
@@ -954,7 +972,7 @@ fn exp_(context: &mut Context, e: E::Exp) -> N::Exp {
             NE::Spec(u, used_locals)
         }
         EE::UnresolvedError => {
-            assert!(context.has_errors());
+            assert!(context.env.has_errors());
             NE::UnresolvedError
         }
         // `Name` matches name variants only allowed in specs (we handle the allowed ones above)
@@ -968,7 +986,7 @@ fn exp_(context: &mut Context, e: E::Exp) -> N::Exp {
 fn access_constant(context: &mut Context, ma: E::ModuleAccess) -> N::Exp_ {
     match context.resolve_constant(ma) {
         None => {
-            assert!(context.has_errors());
+            assert!(context.env.has_errors());
             N::Exp_::UnresolvedError
         }
         Some((m, c)) => N::Exp_::Constant(m, c),
@@ -1072,7 +1090,9 @@ fn resolve_builtin_function(
             Assert
         }
         _ => {
-            context.error(vec![(b.loc, format!("Unbound function: '{}'", b))]);
+            context
+                .env
+                .add_error(vec![(b.loc, format!("Unbound function: '{}'", b))]);
             return None;
         }
     })
@@ -1101,7 +1121,7 @@ fn check_builtin_ty_args(
     ty_args.map(|mut args| {
         let len = args.len();
         if len != arity {
-            context.error(vec![
+            context.env.add_error(vec![
                 (b.loc, format!("Invalid call to builtin function: '{}'", b)),
                 (
                     loc,

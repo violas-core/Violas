@@ -15,6 +15,13 @@ cfg_blocking! {
 cfg_async! {
     mod client;
     pub use client::Client;
+
+    mod verifying_client;
+    // WARNING: the VerifyingClient is currently experimental; it's not recommended
+    // to use it until it stabilizes further
+    // TODO(philiphayes): make this pub once verifying_client is stable.
+    #[doc(hidden)]
+    pub use verifying_client::{Storage, InMemoryStorage, VerifyingClient};
 }
 
 cfg_faucet! {
@@ -27,6 +34,11 @@ pub use request::{JsonRpcRequest, MethodRequest};
 
 mod response;
 pub use response::{MethodResponse, Response};
+
+cfg_async_or_blocking! {
+    mod move_deserialize;
+    pub use move_deserialize::Event;
+}
 
 mod state;
 pub use state::State;
@@ -75,6 +87,7 @@ cfg_async_or_blocking! {
     fn validate(
         state_manager: &state::StateManager,
         resp: &diem_json_rpc_types::response::JsonRpcResponse,
+        ignore_stale: bool,
     ) -> Result<(u64, State, serde_json::Value)> {
         if resp.jsonrpc != "2.0" {
             return Err(Error::rpc_response(format!(
@@ -89,7 +102,11 @@ cfg_async_or_blocking! {
         }
 
         let state = State::from_response(resp);
-        state_manager.update_state(&state)?;
+        if let Err(e) = state_manager.update_state(&state) {
+            if !ignore_stale {
+                return Err(e);
+            }
+        }
 
         // Result being empty is an acceptable response
         let result = resp.result.clone().unwrap_or(serde_json::Value::Null);
@@ -105,7 +122,7 @@ cfg_async_or_blocking! {
         let mut responses = std::collections::HashMap::new();
         for raw_response in &raw_responses {
             let id = get_id(&raw_response)?;
-            let response = validate(state_manager, &raw_response);
+            let response = validate(state_manager, &raw_response, false);
 
             responses.insert(id, response);
         }

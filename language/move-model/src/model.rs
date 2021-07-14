@@ -12,13 +12,14 @@
 //!   and is the owner of all related data.
 //! - A `ModuleEnv` which is a reference to the data of some module in the environment.
 //! - A `StructEnv` which is a reference to the data of some struct in a module.
-//! - A `FuncEnv` which is a reference to the data of some function in a module.
+//! - A `FunctionEnv` which is a reference to the data of some function in a module.
 
 use std::{
+    any::{Any, TypeId},
     cell::RefCell,
     collections::{BTreeMap, BTreeSet},
     ffi::OsStr,
-    fmt,
+    fmt::{self, Formatter},
     rc::Rc,
 };
 
@@ -33,17 +34,15 @@ use codespan_reporting::{
 use itertools::Itertools;
 #[allow(unused_imports)]
 use log::{info, warn};
-use num::{BigUint, Num, One, ToPrimitive};
+use num::{BigUint, One, ToPrimitive};
 use serde::{Deserialize, Serialize};
 
-use bytecode_source_map::source_map::SourceMap;
-use move_core_types::{
-    account_address::AccountAddress, identifier::Identifier, language_storage, value::MoveValue,
-};
-use vm::{
+use bytecode_source_map::{mapping::SourceMapping, source_map::SourceMap};
+use disassembler::disassembler::{Disassembler, DisassemblerOptions};
+use move_binary_format::{
     access::ModuleAccess,
     file_format::{
-        AbilitySet, AddressIdentifierIndex, Bytecode, Constant as VMConstant, ConstantPoolIndex,
+        AddressIdentifierIndex, Bytecode, Constant as VMConstant, ConstantPoolIndex,
         FunctionDefinitionIndex, FunctionHandleIndex, SignatureIndex, SignatureToken,
         StructDefinitionIndex, StructFieldInformation, StructHandleIndex, Visibility,
     },
@@ -53,10 +52,13 @@ use vm::{
     },
     CompiledModule,
 };
+use move_core_types::{
+    account_address::AccountAddress, identifier::Identifier, language_storage, value::MoveValue,
+};
 
 use crate::{
     ast::{
-        ConditionKind, Exp, GlobalInvariant, ModuleName, PropertyBag, PropertyValue, Spec,
+        ConditionKind, ExpData, GlobalInvariant, ModuleName, PropertyBag, PropertyValue, Spec,
         SpecBlockInfo, SpecFunDecl, SpecVarDecl, Value,
     },
     pragmas::{
@@ -64,10 +66,12 @@ use crate::{
         INTRINSIC_PRAGMA, OPAQUE_PRAGMA, VERIFY_PRAGMA,
     },
     symbol::{Symbol, SymbolPool},
-    ty::{PrimitiveType, Type},
+    ty::{PrimitiveType, Type, TypeDisplayContext},
 };
-use std::any::{Any, TypeId};
-pub use vm::file_format::Visibility as FunctionVisibility;
+
+// import and re-expose symbols
+use crate::ast::Exp;
+pub use move_binary_format::file_format::{AbilitySet, Visibility as FunctionVisibility};
 
 // =================================================================================================
 /// # Constants
@@ -201,7 +205,7 @@ pub struct SpecVarId(RawIndex);
 /// Identifier for a node in the AST, relative to a module. This is used to associate attributes
 /// with the node, like source location and type.
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
-pub struct NodeId(RawIndex);
+pub struct NodeId(usize);
 
 /// A global id. Instances of this type represent unique identifiers relative to `GlobalEnv`.
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
@@ -211,6 +215,14 @@ pub struct GlobalId(usize);
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
 pub struct QualifiedId<Id> {
     pub module_id: ModuleId,
+    pub id: Id,
+}
+
+/// Some identifier qualified by a module and a type instantiation.
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
+pub struct QualifiedInstId<Id> {
+    pub module_id: ModuleId,
+    pub inst: Vec<Type>,
     pub id: Id,
 }
 
@@ -286,7 +298,7 @@ impl SpecVarId {
 
 impl NodeId {
     pub fn new(idx: usize) -> Self {
-        Self(idx as RawIndex)
+        Self(idx)
     }
 
     pub fn as_usize(self) -> usize {
@@ -321,6 +333,60 @@ impl ModuleId {
             id,
         }
     }
+
+    pub fn qualified_inst<Id>(self, id: Id, inst: Vec<Type>) -> QualifiedInstId<Id> {
+        QualifiedInstId {
+            module_id: self,
+            inst,
+            id,
+        }
+    }
+}
+
+impl<Id: Clone> QualifiedId<Id> {
+    pub fn instantiate(self, inst: Vec<Type>) -> QualifiedInstId<Id> {
+        let QualifiedId { module_id, id } = self;
+        QualifiedInstId {
+            module_id,
+            inst,
+            id,
+        }
+    }
+}
+
+impl<Id: Clone> QualifiedInstId<Id> {
+    pub fn instantiate(self, params: &[Type]) -> Self {
+        if params.is_empty() {
+            self
+        } else {
+            let Self {
+                module_id,
+                inst,
+                id,
+            } = self;
+            Self {
+                module_id,
+                inst: Type::instantiate_vec(inst, params),
+                id,
+            }
+        }
+    }
+
+    pub fn instantiate_ref(&self, params: &[Type]) -> Self {
+        let res = self.clone();
+        res.instantiate(params)
+    }
+
+    pub fn to_qualified_id(&self) -> QualifiedId<Id> {
+        let Self { module_id, id, .. } = self;
+        module_id.qualified(id.to_owned())
+    }
+}
+
+impl QualifiedInstId<StructId> {
+    pub fn to_type(&self) -> Type {
+        Type::Struct(self.module_id, self.id, self.inst.to_owned())
+    }
 }
 
 // =================================================================================================
@@ -335,6 +401,8 @@ pub enum VerificationScope {
     All,
     /// Verify only one function.
     Only(String),
+    /// Verify only functions from the given module.
+    OnlyModule(String),
     /// Verify no functions
     None,
 }
@@ -346,9 +414,13 @@ impl Default for VerificationScope {
 }
 
 impl VerificationScope {
-    /// Whether verification is exclusive to only one function.
+    /// Whether verification is exclusive to only one function or module. If set, this overrides
+    /// all implicitly included verification targets via invariants and friends.
     pub fn is_exclusive(&self) -> bool {
-        matches!(self, VerificationScope::Only(_))
+        matches!(
+            self,
+            VerificationScope::Only(_) | VerificationScope::OnlyModule(_)
+        )
     }
 
     /// Returns the target function if verification is exclusive to one function.
@@ -392,7 +464,8 @@ pub struct GlobalEnv {
     /// In difference to an `unknown_loc`, this is a well-known but undisclosed location.
     internal_loc: Loc,
     /// Accumulated diagnosis. In a RefCell so we can add to it without needing a mutable GlobalEnv.
-    diags: RefCell<Vec<Diagnostic>>,
+    /// The boolean indicates whether the diag was reported.
+    diags: RefCell<Vec<(Diagnostic, bool)>>,
     /// Pool of symbols -- internalized strings.
     symbol_pool: SymbolPool,
     /// A counter for allocating node ids.
@@ -410,13 +483,21 @@ pub struct GlobalEnv {
     /// A map of global invariants.
     global_invariants: BTreeMap<GlobalId, GlobalInvariant>,
     /// A map from spec vars to global invariants which refer to them.
-    global_invariants_for_spec_var: BTreeMap<QualifiedId<SpecVarId>, BTreeSet<GlobalId>>,
+    global_invariants_for_spec_var: BTreeMap<QualifiedInstId<SpecVarId>, BTreeSet<GlobalId>>,
     /// A map from global memories to global invariants which refer to them.
-    global_invariants_for_memory: BTreeMap<QualifiedId<StructId>, BTreeSet<GlobalId>>,
-    /// A set containing spec functions which are called/used in specs.
+    global_invariants_for_memory: BTreeMap<QualifiedInstId<StructId>, BTreeSet<GlobalId>>,
+    /// A set containing spec functions which are called/used in specs. Note that these
+    /// are represented without type instantiation because we assume the backend can handle
+    /// generics in the expression language.
     pub used_spec_funs: BTreeSet<QualifiedId<SpecFunId>>,
     /// A type-indexed container for storing extension data in the environment.
     extensions: RefCell<BTreeMap<TypeId, Box<dyn Any>>>,
+}
+
+/// Struct a helper type for implementing fmt::Display depending on GlobalEnv
+pub struct EnvDisplay<'a, T> {
+    pub env: &'a GlobalEnv,
+    pub val: &'a T,
 }
 
 impl GlobalEnv {
@@ -466,9 +547,16 @@ impl GlobalEnv {
         }
     }
 
+    /// Creates a display container for the given value. There must be an implementation
+    /// of fmt::Display for an instance to work in formatting.
+    pub fn display<'a, T>(&'a self, val: &'a T) -> EnvDisplay<'a, T> {
+        EnvDisplay { env: self, val }
+    }
+
     /// Stores extension data in the environment. This can be arbitrary data which is
     /// indexed by type. Used by tools which want to store their own data in the environment,
-    /// like a set of tool dependent options/flags.
+    /// like a set of tool dependent options/flags. This can also be used to update
+    /// extension data.
     pub fn set_extension<T: Any>(&self, x: T) {
         let id = TypeId::of::<T>();
         self.extensions
@@ -487,10 +575,39 @@ impl GlobalEnv {
             .and_then(|d| d.downcast_ref::<Rc<T>>().cloned())
     }
 
+    /// Updates extension data. If they are no outstanding references to this extension it
+    /// is updated in place, otherwise it will be cloned before the update.
+    pub fn update_extension<T: Any + Clone>(&self, f: impl FnOnce(&mut T)) {
+        let id = TypeId::of::<T>();
+        let d = self
+            .extensions
+            .borrow_mut()
+            .remove(&id)
+            .expect("extension defined")
+            .downcast_ref::<Rc<T>>()
+            .cloned()
+            .unwrap();
+        let mut curr = Rc::try_unwrap(d).unwrap_or_else(|d| d.as_ref().clone());
+        f(&mut curr);
+        self.set_extension(curr);
+    }
+
     /// Checks whether there is an extension of type `T`.
     pub fn has_extension<T: Any>(&self) -> bool {
         let id = TypeId::of::<T>();
         self.extensions.borrow().contains_key(&id)
+    }
+
+    /// Clear extension data from the environment (return the data if it is previously set).
+    /// Use as in `env.clear_extension::<T>()` and an `Rc<T>` is returned if the extension data is
+    /// previously stored in the environment.
+    pub fn clear_extension<T: Any>(&self) -> Option<Rc<T>> {
+        let id = TypeId::of::<T>();
+        self.extensions
+            .borrow_mut()
+            .remove(&id)
+            .and_then(|d| d.downcast::<Rc<T>>().ok())
+            .map(|boxed| *boxed)
     }
 
     /// Create a new global id unique to this environment.
@@ -519,6 +636,17 @@ impl GlobalEnv {
         file_id
     }
 
+    /// Find all target modules and return in a vector
+    pub fn get_target_modules(&self) -> Vec<ModuleEnv> {
+        let mut target_modules: Vec<ModuleEnv> = vec![];
+        for module_env in self.get_modules() {
+            if module_env.is_target() {
+                target_modules.push(module_env);
+            }
+        }
+        target_modules
+    }
+
     /// Adds documentation for a file.
     pub fn add_documentation(&mut self, file_id: FileId, docs: BTreeMap<ByteIndex, String>) {
         self.doc_comments.insert(file_id, docs);
@@ -526,25 +654,60 @@ impl GlobalEnv {
 
     /// Adds diagnostic to the environment.
     pub fn add_diag(&self, diag: Diagnostic) {
-        self.diags.borrow_mut().push(diag);
-    }
-
-    /// Adds an error to this environment, with notes.
-    pub fn error_with_notes(&self, loc: &Loc, msg: &str, notes: Vec<String>) {
-        let diag = Diagnostic::new_error(msg, Label::new(loc.file_id, loc.span, ""));
-        let diag = diag.with_notes(notes);
-        self.add_diag(diag);
+        self.diags.borrow_mut().push((diag, false));
     }
 
     /// Adds an error to this environment, without notes.
     pub fn error(&self, loc: &Loc, msg: &str) {
-        self.error_with_notes(loc, msg, vec![]);
+        self.diag(Severity::Error, loc, msg)
     }
 
-    /// Adds a warning to this environment.
-    pub fn warn(&self, loc: &Loc, msg: &str) {
-        let diag = Diagnostic::new_warning(msg, Label::new(loc.file_id, loc.span, ""));
+    /// Adds an error to this environment, with notes.
+    pub fn error_with_notes(&self, loc: &Loc, msg: &str, notes: Vec<String>) {
+        self.diag_with_notes(Severity::Error, loc, msg, notes)
+    }
+
+    /// Adds a diagnostic of given severity to this environment.
+    pub fn diag(&self, severity: Severity, loc: &Loc, msg: &str) {
+        let diag = Diagnostic::new(severity, msg, Label::new(loc.file_id, loc.span, ""));
         self.add_diag(diag);
+    }
+
+    /// Adds a diagnostic of given severity to this environment, with notes.
+    pub fn diag_with_notes(&self, severity: Severity, loc: &Loc, msg: &str, notes: Vec<String>) {
+        let diag = Diagnostic::new(severity, msg, Label::new(loc.file_id, loc.span, ""));
+        let diag = diag.with_notes(notes);
+        self.add_diag(diag);
+    }
+
+    /// Adds a diagnostic of given severity to this environment, with secondary labels.
+    pub fn diag_with_labels(
+        &self,
+        severity: Severity,
+        loc: &Loc,
+        msg: &str,
+        labels: Vec<(Loc, String)>,
+    ) {
+        let mut diag = Diagnostic::new(severity, msg, Label::new(loc.file_id, loc.span, ""));
+        let labels = labels
+            .into_iter()
+            .map(|(l, m)| Label::new(l.file_id, l.span, m))
+            .collect_vec();
+        diag.secondary_labels = labels;
+        self.add_diag(diag);
+    }
+
+    /// Checks whether any of the diagnostics contains string.
+    pub fn has_diag(&self, pattern: &str) -> bool {
+        self.diags
+            .borrow()
+            .iter()
+            .any(|(d, _)| d.message.contains(pattern))
+    }
+
+    /// Clear all accumulated diagnosis.
+    pub fn clear_diag(&self) {
+        self.diags.borrow_mut().clear();
     }
 
     /// Returns the unknown location.
@@ -567,8 +730,14 @@ impl GlobalEnv {
     /// TODO: move-lang should use FileId as well so we don't need this here. There is already
     /// a todo in their code to remove the current use of `&'static str` for file names in Loc.
     pub fn to_loc(&self, loc: &MoveIrLoc) -> Loc {
+        let file_id = self.get_file_id(loc.file()).unwrap_or_else(|| {
+            panic!(
+                "Unable to find source file '{}' in the environment",
+                loc.file()
+            )
+        });
         Loc {
-            file_id: self.get_file_id(loc.file()).expect("file name undefined"),
+            file_id,
             span: loc.span(),
         }
     }
@@ -640,10 +809,21 @@ impl GlobalEnv {
 
     /// Returns true if diagnostics have error severity or worse.
     pub fn has_errors(&self) -> bool {
+        self.error_count() > 0
+    }
+
+    /// Returns the number of diagnostics.
+    pub fn diag_count(&self, min_severity: Severity) -> usize {
         self.diags
             .borrow()
             .iter()
-            .any(|d| d.severity >= Severity::Error)
+            .filter(|(d, _)| d.severity >= min_severity)
+            .count()
+    }
+
+    /// Returns the number of errors.
+    pub fn error_count(&self) -> usize {
+        self.diag_count(Severity::Error)
     }
 
     /// Returns true if diagnostics have warning severity or worse.
@@ -651,30 +831,27 @@ impl GlobalEnv {
         self.diags
             .borrow()
             .iter()
-            .any(|d| d.severity >= Severity::Warning)
+            .any(|(d, _)| d.severity >= Severity::Warning)
     }
 
-    /// Writes accumulated errors to writer.
-    pub fn report_errors<W: WriteColor>(&self, writer: &mut W) {
-        for diag in self
+    /// Writes accumulated diagnostics of given or higher severity.
+    pub fn report_diag<W: WriteColor>(&self, writer: &mut W, severity: Severity) {
+        let mut shown = BTreeSet::new();
+        for (diag, reported) in self
             .diags
-            .borrow()
-            .iter()
-            .filter(|d| d.severity >= Severity::Error)
+            .borrow_mut()
+            .iter_mut()
+            .filter(|(d, _)| d.severity >= severity)
         {
-            emit(writer, &Config::default(), &self.source_files, diag).expect("emit must not fail");
-        }
-    }
-
-    /// Writes accumulated diagnostics with warning severity or worse to writer.
-    pub fn report_warnings<W: WriteColor>(&self, writer: &mut W) {
-        for diag in self
-            .diags
-            .borrow()
-            .iter()
-            .filter(|d| d.severity >= Severity::Warning)
-        {
-            emit(writer, &Config::default(), &self.source_files, diag).expect("emit must not fail");
+            if !*reported {
+                // Avoid showing the same message twice. This can happen e.g. because of
+                // duplication of expressions via schema inclusion.
+                if shown.insert(format!("{:?}", diag)) {
+                    emit(writer, &Config::default(), &self.source_files, diag)
+                        .expect("emit must not fail");
+                }
+                *reported = true;
+            }
         }
     }
 
@@ -683,13 +860,13 @@ impl GlobalEnv {
         let id = inv.id;
         for spec_var in &inv.spec_var_usage {
             self.global_invariants_for_spec_var
-                .entry(*spec_var)
+                .entry(spec_var.clone())
                 .or_insert_with(BTreeSet::new)
                 .insert(id);
         }
         for memory in &inv.mem_usage {
             self.global_invariants_for_memory
-                .entry(*memory)
+                .entry(memory.clone())
                 .or_insert_with(BTreeSet::new)
                 .insert(id);
         }
@@ -702,11 +879,30 @@ impl GlobalEnv {
     }
 
     /// Return the global invariants which refer to the given memory.
-    pub fn get_global_invariants_for_memory(&self, memory: QualifiedId<StructId>) -> Vec<GlobalId> {
+    pub fn get_global_invariants_for_memory(
+        &self,
+        memory: &QualifiedInstId<StructId>,
+    ) -> Vec<GlobalId> {
         self.global_invariants_for_memory
-            .get(&memory)
+            .get(memory)
             .map(|ids| ids.iter().cloned().collect_vec())
             .unwrap_or_else(Default::default)
+    }
+
+    /// Given a set of invariants, find the subset that refer to the type in mem.
+    pub fn get_subset_invariants_for_memory(
+        &self,
+        mem: QualifiedInstId<StructId>,
+        inv_set_id: &BTreeSet<GlobalId>,
+    ) -> BTreeSet<GlobalId> {
+        if let Some(modifies_inv_id_set) = self.global_invariants_for_memory.get(&mem) {
+            modifies_inv_id_set
+                .intersection(inv_set_id)
+                .cloned()
+                .collect()
+        } else {
+            BTreeSet::<GlobalId>::new()
+        }
     }
 
     pub fn get_global_invariants_by_module(&self, module_id: ModuleId) -> BTreeSet<GlobalId> {
@@ -912,6 +1108,25 @@ impl GlobalEnv {
             .find(|m| m.get_name().name() == simple_name)
     }
 
+    /// Find a module by its bytecode format ID
+    pub fn find_module_by_language_storage_id(
+        &self,
+        id: &language_storage::ModuleId,
+    ) -> Option<ModuleEnv<'_>> {
+        self.find_module(&self.to_module_name(id))
+    }
+
+    /// Find a function by its bytecode format name and ID
+    pub fn find_function_by_language_storage_id_name(
+        &self,
+        id: &language_storage::ModuleId,
+        name: &Identifier,
+    ) -> Option<FunctionEnv<'_>> {
+        self.find_module_by_language_storage_id(id)
+            .map(|menv| menv.find_function(menv.symbol_pool().make(name.as_str())))
+            .flatten()
+    }
+
     /// Gets a StructEnv in this module by its `StructTag`
     pub fn find_struct_by_tag(
         &self,
@@ -970,6 +1185,11 @@ impl GlobalEnv {
         self.get_module(fun.module_id).into_function(fun.id)
     }
 
+    /// Return the `StructEnv` for `str`
+    pub fn get_struct(&self, str: QualifiedId<StructId>) -> StructEnv<'_> {
+        self.get_module(str.module_id).into_struct(str.id)
+    }
+
     // Gets the number of modules in this environment.
     pub fn get_module_count(&self) -> usize {
         self.module_data.len()
@@ -982,6 +1202,16 @@ impl GlobalEnv {
             env: self,
             data: module_data,
         }
+    }
+
+    /// Gets a struct by qualified id.
+    pub fn get_struct_qid(&self, qid: QualifiedId<StructId>) -> StructEnv<'_> {
+        self.get_module(qid.module_id).into_struct(qid.id)
+    }
+
+    /// Gets a function by qualified id.
+    pub fn get_function_qid(&self, qid: QualifiedId<FunId>) -> FunctionEnv<'_> {
+        self.get_module(qid.module_id).into_function(qid.id)
     }
 
     /// Returns an iterator for all modules in the environment.
@@ -1095,7 +1325,7 @@ impl GlobalEnv {
             .borrow()
             .get(&node_id)
             .cloned()
-            .unwrap_or(Type::Error)
+            .expect("node type defined")
     }
 
     /// Converts an index into a node id.
@@ -1121,7 +1351,8 @@ impl GlobalEnv {
     /// Allocates a new node id.
     pub fn new_node_id(&self) -> NodeId {
         let id = NodeId::new(*self.next_free_node_id.borrow());
-        *self.next_free_node_id.borrow_mut() += 1;
+        let mut r = self.next_free_node_id.borrow_mut();
+        *r = r.checked_add(1).expect("NodeId overflow");
         id
     }
 
@@ -1133,16 +1364,32 @@ impl GlobalEnv {
         id
     }
 
-    /// Sets type for the given node id.
+    /// Sets type for the given node id. Must not have been set before.
     pub fn set_node_type(&self, node_id: NodeId, ty: Type) {
-        self.type_map.borrow_mut().insert(node_id, ty);
+        assert!(self.type_map.borrow_mut().insert(node_id, ty).is_none());
     }
 
-    /// Sets instantiation for the given node id.
+    /// Sets instantiation for the given node id. Must not have been set before.
     pub fn set_node_instantiation(&self, node_id: NodeId, instantiation: Vec<Type>) {
-        self.instantiation_map
+        assert!(self
+            .instantiation_map
             .borrow_mut()
-            .insert(node_id, instantiation);
+            .insert(node_id, instantiation)
+            .is_none());
+    }
+
+    /// Updates type for the given node id. Must have been set before.
+    pub fn update_node_type(&self, node_id: NodeId, ty: Type) {
+        assert!(self.type_map.borrow_mut().insert(node_id, ty).is_some());
+    }
+
+    /// Updates instantiation for the given node id. Must have been set before.
+    pub fn update_node_instantiation(&self, node_id: NodeId, instantiation: Vec<Type>) {
+        assert!(self
+            .instantiation_map
+            .borrow_mut()
+            .insert(node_id, instantiation)
+            .is_some());
     }
 
     /// Gets the type parameter instantiation associated with the given node.
@@ -1266,6 +1513,12 @@ impl<'env> ModuleEnv<'env> {
         &self.data.name
     }
 
+    /// Returns true if either the full name or simple name of this module matches the given string
+    pub fn matches_name(&self, name: &str) -> bool {
+        self.get_full_name_str() == name
+            || self.get_name().display(self.symbol_pool()).to_string() == name
+    }
+
     /// Returns the location of this module.
     pub fn get_loc(&'env self) -> Loc {
         self.data.loc.clone()
@@ -1346,7 +1599,7 @@ impl<'env> ModuleEnv<'env> {
             .collect();
         if include_specs {
             // Add any usage in specs.
-            let add_usage_of_exp = |usage: &mut BTreeSet<ModuleId>, exp: &Exp| {
+            let add_usage_of_exp = |usage: &mut BTreeSet<ModuleId>, exp: &ExpData| {
                 exp.module_usage(usage);
                 for node_id in exp.node_ids() {
                     self.env.get_node_type(node_id).module_usage(usage);
@@ -1584,7 +1837,7 @@ impl<'env> ModuleEnv<'env> {
             .data
             .struct_idx_to_id
             .get(&idx)
-            .expect("undefined struct definition index")
+            .unwrap_or_else(|| panic!("undefined struct definition index {:?}", idx))
     }
 
     /// Gets a StructEnv by id.
@@ -1719,12 +1972,7 @@ impl<'env> ModuleEnv<'env> {
     /// Retrieve an address identifier from the pool
     pub fn get_address_identifier(&self, idx: AddressIdentifierIndex) -> BigUint {
         let addr = &self.data.module.address_identifiers()[idx.0 as usize];
-        Self::addr_to_big_uint(addr)
-    }
-
-    /// Converts an address identifier to a number representing the address.
-    pub fn addr_to_big_uint(addr: &AccountAddress) -> BigUint {
-        BigUint::from_str_radix(&addr.to_string(), 16).unwrap()
+        crate::addr_to_big_uint(addr)
     }
 
     /// Returns specification variables of this module.
@@ -1777,6 +2025,25 @@ impl<'env> ModuleEnv<'env> {
             .spec_funs
             .iter()
             .filter(move |(_, decl)| decl.name == name)
+    }
+
+    /// Disassemble the module bytecode
+    pub fn disassemble(&self) -> String {
+        let disas = Disassembler::new(
+            SourceMapping::new(
+                self.data.source_map.clone(),
+                self.get_verified_module().clone(),
+            ),
+            DisassemblerOptions {
+                only_externally_visible: false,
+                print_code: true,
+                print_basic_blocks: true,
+                print_locals: true,
+            },
+        );
+        disas
+            .disassemble()
+            .expect("Failed to disassemble a verified module")
     }
 }
 
@@ -1889,16 +2156,20 @@ impl<'env> StructEnv<'env> {
         name.as_ref() == "Vector" && addr == &BigUint::from(0_u64)
     }
 
-    // TODO(tmn) migrate to abilities
-    /// Determines whether this struct is a resource type.
-    pub fn is_resource(&self) -> bool {
+    /// Get the abilities of this struct.
+    pub fn get_abilities(&self) -> AbilitySet {
         let def = self.module_env.data.module.struct_def_at(self.data.def_idx);
         let handle = self
             .module_env
             .data
             .module
             .struct_handle_at(def.struct_handle);
-        handle.abilities.has_key()
+        handle.abilities
+    }
+
+    /// Determines whether memory-related operations needs to be declared for this struct.
+    pub fn has_memory(&self) -> bool {
+        self.get_abilities().has_key()
     }
 
     /// Get an iterator for the fields, ordered by offset.
@@ -1962,7 +2233,7 @@ impl<'env> StructEnv<'env> {
             .map(|(i, k)| {
                 TypeParameter(
                     self.module_env.env.symbol_pool.make(&format!("$tv{}", i)),
-                    TypeConstraint::from(*k),
+                    AbilityConstraint(*k),
                 )
             })
             .collect_vec()
@@ -1989,7 +2260,7 @@ impl<'env> StructEnv<'env> {
                     .unwrap_or_else(|| format!("unknown#{}", i));
                 TypeParameter(
                     self.module_env.env.symbol_pool.make(&name),
-                    TypeConstraint::from(*k),
+                    AbilityConstraint(*k),
                 )
             })
             .collect_vec()
@@ -2003,6 +2274,25 @@ impl<'env> StructEnv<'env> {
     /// Returns the data invariants associated with this struct.
     pub fn get_spec(&'env self) -> &'env Spec {
         &self.data.spec
+    }
+
+    /// Returns the value of a boolean pragma for this struct. This first looks up a
+    /// pragma in this struct, then the enclosing module, and finally uses the provided default.
+    /// value
+    pub fn is_pragma_true(&self, name: &str, default: impl FnOnce() -> bool) -> bool {
+        let env = self.module_env.env;
+        if let Some(b) = env.is_property_true(&self.get_spec().properties, name) {
+            return b;
+        }
+        if let Some(b) = env.is_property_true(&self.module_env.get_spec().properties, name) {
+            return b;
+        }
+        default()
+    }
+
+    /// Returns true if this struct is native or marked as intrinsic.
+    pub fn is_native_or_intrinsic(&self) -> bool {
+        self.is_native() || self.is_pragma_true(INTRINSIC_PRAGMA, || false)
     }
 }
 
@@ -2157,27 +2447,10 @@ impl<'env> NamedConstantEnv<'env> {
 
 /// Represents a type parameter.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct TypeParameter(pub Symbol, pub TypeConstraint);
+pub struct TypeParameter(pub Symbol, pub AbilityConstraint);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum TypeConstraint {
-    None,
-    Copyable,
-    Resource,
-}
-
-impl TypeConstraint {
-    // TODO(tmn) migrate to abilities
-    fn from(abs: AbilitySet) -> Self {
-        if abs.has_key() {
-            TypeConstraint::Resource
-        } else if abs.has_copy() | abs.has_drop() {
-            TypeConstraint::Copyable
-        } else {
-            TypeConstraint::None
-        }
-    }
-}
+pub struct AbilityConstraint(pub AbilitySet);
 
 /// Represents a parameter.
 #[derive(Debug, Clone)]
@@ -2430,6 +2703,10 @@ impl<'env> FunctionEnv<'env> {
         self.is_pragma_true(INTRINSIC_PRAGMA, || false)
     }
 
+    pub fn is_native_or_intrinsic(&self) -> bool {
+        self.is_native() || self.is_intrinsic()
+    }
+
     /// Returns true if this function is opaque.
     pub fn is_opaque(&self) -> bool {
         self.is_pragma_true(OPAQUE_PRAGMA, || false)
@@ -2456,6 +2733,15 @@ impl<'env> FunctionEnv<'env> {
             || match self.definition_view().visibility() {
                 Visibility::Public | Visibility::Script | Visibility::Friend => true,
                 Visibility::Private => false,
+            }
+    }
+
+    /// Return whether this function is exposed outside of the module.
+    pub fn has_unknown_callers(&self) -> bool {
+        self.module_env.is_script_module()
+            || match self.definition_view().visibility() {
+                Visibility::Public | Visibility::Script => true,
+                Visibility::Private | Visibility::Friend => false,
             }
     }
 
@@ -2526,7 +2812,7 @@ impl<'env> FunctionEnv<'env> {
             .map(|(i, k)| {
                 TypeParameter(
                     self.module_env.env.symbol_pool.make(&format!("$tv{}", i)),
-                    TypeConstraint::from(*k),
+                    AbilityConstraint(*k),
                 )
             })
             .collect_vec()
@@ -2550,7 +2836,7 @@ impl<'env> FunctionEnv<'env> {
                     .unwrap_or_else(|| format!("unknown#{}", i));
                 TypeParameter(
                     self.module_env.env.symbol_pool.make(&name),
-                    TypeConstraint::from(*k),
+                    AbilityConstraint(*k),
                 )
             })
             .collect_vec()
@@ -2561,9 +2847,25 @@ impl<'env> FunctionEnv<'env> {
         view.arg_tokens().count()
     }
 
+    /// Return the number of type parameters for self
+    pub fn get_type_parameter_count(&self) -> usize {
+        let view = self.definition_view();
+        view.type_parameters().len()
+    }
+
     /// Return `true` if idx is a formal parameter index
     pub fn is_parameter(&self, idx: usize) -> bool {
         idx < self.get_parameter_count()
+    }
+
+    /// Returns the parameter types associated with this function
+    pub fn get_parameter_types(&self) -> Vec<Type> {
+        let view = self.definition_view();
+        view.arg_tokens()
+            .map(|tv: SignatureTokenView<CompiledModule>| {
+                self.module_env.globalize_signature(tv.signature_token())
+            })
+            .collect()
     }
 
     /// Returns the regular parameters associated with this function.
@@ -2707,6 +3009,10 @@ impl<'env> FunctionEnv<'env> {
 
     /// Determine whether the function is target of verification.
     pub fn should_verify(&self, default_scope: &VerificationScope) -> bool {
+        if let VerificationScope::Only(function_name) = default_scope {
+            // Overrides pragmas.
+            return self.matches_name(function_name);
+        }
         if !self.module_env.is_target() {
             // Don't generate verify method for functions from dependencies.
             return false;
@@ -2721,7 +3027,8 @@ impl<'env> FunctionEnv<'env> {
             // well for consistency.
             VerificationScope::Public => self.is_exposed(),
             VerificationScope::All => true,
-            VerificationScope::Only(function_name) => self.matches_name(function_name),
+            VerificationScope::Only(_) => unreachable!(),
+            VerificationScope::OnlyModule(module_name) => self.module_env.matches_name(module_name),
             VerificationScope::None => false,
         };
         self.is_pragma_true(VERIFY_PRAGMA, default)
@@ -2733,8 +3040,8 @@ impl<'env> FunctionEnv<'env> {
     }
 
     /// Determine whether this function is explicitly deactivated for verification.
-    pub fn is_explicitly_not_verified(&self) -> bool {
-        self.is_pragma_false(VERIFY_PRAGMA)
+    pub fn is_explicitly_not_verified(&self, scope: &VerificationScope) -> bool {
+        !matches!(scope, VerificationScope::Only(..)) && self.is_pragma_false(VERIFY_PRAGMA)
     }
 
     /// Get the functions that call this one
@@ -2820,6 +3127,19 @@ impl<'env> FunctionEnv<'env> {
                 .function_def_at(self.data.def_idx),
         )
     }
+
+    /// Produce a TypeDisplayContext to print types within the scope of this env
+    pub fn get_type_display_ctxt(&self) -> TypeDisplayContext {
+        let type_param_names = self
+            .get_type_parameters()
+            .iter()
+            .map(|param| param.0)
+            .collect();
+        TypeDisplayContext::WithEnv {
+            env: self.module_env.env,
+            type_param_names: Some(type_param_names),
+        }
+    }
 }
 
 // =================================================================================================
@@ -2868,5 +3188,53 @@ impl<'env> fmt::Display for LocDisplay<'env> {
         } else {
             write!(f, "{:?}", self.loc)
         }
+    }
+}
+
+pub trait GetNameString {
+    fn get_name_for_display(&self, env: &GlobalEnv) -> String;
+}
+
+impl GetNameString for QualifiedId<StructId> {
+    fn get_name_for_display(&self, env: &GlobalEnv) -> String {
+        env.get_struct_qid(*self).get_full_name_str()
+    }
+}
+
+impl GetNameString for QualifiedId<FunId> {
+    fn get_name_for_display(&self, env: &GlobalEnv) -> String {
+        env.get_function_qid(*self).get_full_name_str()
+    }
+}
+
+impl<'a, Id: Clone> fmt::Display for EnvDisplay<'a, QualifiedId<Id>>
+where
+    QualifiedId<Id>: GetNameString,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.val.get_name_for_display(self.env))
+    }
+}
+
+impl<'a, Id: Clone> fmt::Display for EnvDisplay<'a, QualifiedInstId<Id>>
+where
+    QualifiedId<Id>: GetNameString,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.env.display(&self.val.to_qualified_id()))?;
+        if !self.val.inst.is_empty() {
+            let tctx = TypeDisplayContext::WithEnv {
+                env: self.env,
+                type_param_names: None,
+            };
+            write!(f, "<")?;
+            let mut sep = "";
+            for ty in &self.val.inst {
+                write!(f, "{}{}", sep, ty.display(&tctx))?;
+                sep = ", ";
+            }
+            write!(f, ">")?;
+        }
+        Ok(())
     }
 }

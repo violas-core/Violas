@@ -19,9 +19,9 @@ envs = [
 ]
 
 [cargo.sccache.installer]
-version = "0.2.14-alpha.0"
-git = "https://github.com/rexhoffman/sccache.git"
-git-rev = "549babdd3866aa60dae01668c42ee00bf1e8c763"
+version = "0.2.16-alpha.0"
+git = "https://github.com/diem/sccache.git"
+git-rev = "ef50d87a58260c30767520045e242ccdbdb965af"
 features = [ "s3" ]
 
 
@@ -31,14 +31,11 @@ features = [ "s3" ]
 allowed = [
     # Deriving Arbitrary often causes this warning to show up.
     "clippy::unit_arg",
-    # Known to have false positive at the moment,
-    "clippy::mutable_key_type",
     "clippy::eval-order-dependence",
     "clippy::new-without-default",
     "clippy::rc_buffer",
     "clippy::upper_case_acronyms",
-    # vec_init_with_push is buggy: https://github.com/rust-lang/rust-clippy/issues/6956
-    "clippy::vec_init_then_push",
+    "clippy::len-without-is-empty",
 ]
 warn = [
     "clippy::wildcard_dependencies",
@@ -87,6 +84,13 @@ workspace-path = "devtools/x-core"
 name = "x-lint"
 version = "0.1.0"
 workspace-path = "devtools/x-lint"
+
+# Exclude the fail crate because the failpoints feature should only be enabled
+# for certain builds.
+[[hakari.omitted-packages]]
+name = "fail"
+version = "0.4.0"
+crates-io = true
 
 # This follows the same syntax as CargoOptionsSummary in guppy.
 [summaries.default]
@@ -157,15 +161,16 @@ features = ["fuzzing"]
 members = [
     # Please keep this list in alphabetical order!
 
+    "bytecode-interpreter-testsuite",
     "bytecode-verifier-tests",
     "cli",
     "cluster-test",
-    "datatest-stable",
     "diem-documentation-tool",
     "diem-fuzz",
     "diem-fuzzer",
     "diem-json-rpc-client",
     "diem-proptest-helpers",
+    "diem-read-write-set",
     "diem-retrier",
     "diem-smoke-test-attribute",
     "diem-swarm",
@@ -173,10 +178,12 @@ members = [
     "diemdb-benchmark",
     "executor-benchmark",
     "executor-test-helpers",
+    "forge",
     "functional-tests",
     "generate-format",
     "invalid-mutations",
     "ir-testsuite",
+    "jsonrpc-types-proto",
     "language-benchmarks",
     "language-e2e-tests",
     "language-e2e-testsuite",
@@ -186,9 +193,12 @@ members = [
     "move-lang-functional-tests",
     "move-lang-ir-utils",
     "move-lang-test-utils",
+    "move-oncall-trainer",
     "move-prover-test-utils",
     "move-vm-integration-tests",
-    "sdk-compatability",
+    "offchain",
+    "scratchpad-benchmark",
+    "sdk-compatibility",
     "serializer-tests",
     "smoke-test",
     "socket-bench-server",
@@ -205,6 +215,7 @@ diem_crates_in_language = [
     "diem-framework",
     "diem-framework-releases",
     "diem-events-fetcher",
+    "diem-read-write-set",
     "diem-validator-interface",
     "diem-transaction-replay",
     "diem-writeset-generator",
@@ -212,6 +223,7 @@ diem_crates_in_language = [
     "language-e2e-testsuite",
     "ir-testsuite",
     "language-e2e-tests",
+    "move-oncall-trainer",
     "functional-tests",
     "genesis-viewer",
     "vm-genesis",
@@ -225,67 +237,39 @@ exclude = [
 # This is a list of existing move to diem dependencies that we plan to eliminate over time.
 # You should refrain from adding new entries to this list in general.
 existing_deps = [
+    # Tier 0 - essential components that must be included in the first batch of crates getting
+    #          moved to the new repo
+    ["move-lang", "diem-framework"],                          # sanity check to ensure that the diem-framework compiles
+    ["invalid-mutations", "diem-proptest-helpers"],           # pick_slice_idxs
+    ["bytecode-verifier-tests", "diem-framework-releases"],
+    ["bytecode-interpreter", "diem-crypto"],                  # implementation of native functions
+    ["compiler", "diem-framework-releases"],
+    ["move-vm-natives", "diem-crypto"],
+    ["move-vm-runtime", "diem-logger"],
+    ["move-vm-runtime", "diem-crypto"],                       # using `HashValue` as keys in the script cache
+    ["abigen", "diem-types"],                                 # ABI types
+    ["move-cli", "vm-genesis"],
+    ["move-cli", "diem-vm"],
+    ["move-cli", "diem-types"],                               # `ContractEvent`
+    ["move-cli", "diem-framework"],
+    ["move-cli", "diem-framework-releases"],
+    ["move-binary-format", "num-variants"],                   # counting the number of bytecodes
+
+    # Tier 1 - crates that can wait a little bit longer?
     ["language-benchmarks", "language-e2e-tests"],
     ["language-benchmarks", "diem-vm"],
     ["language-benchmarks", "diem-types"],
     ["language-benchmarks", "diem-state-view"],
-    ["language-benchmarks", "diem-proptest-helpers"],
-    ["invalid-mutations", "diem-proptest-helpers"],
-    ["compiled-stdlib", "diem-types"],
-    ["compiled-stdlib", "diem-proptest-helpers"],
-    ["compiled-stdlib", "diem-framework"],
-    ["compiled-stdlib", "diem-crypto"],
-    ["compiler", "diem-framework-releases"],
-    ["move-explain", "diem-framework-releases"],
-    ["move-lang", "fallible"],
-    ["move-lang", "diem-framework"],
-    ["move-lang", "datatest-stable"],
-    ["move-lang-test-utils", "datatest-stable"],
-    ["move-model", "datatest-stable"],
-    ["move-prover", "diem-temppath"],
-    ["move-prover", "datatest-stable"],
-    ["abigen", "diem-types"],
-    ["abigen", "diem-temppath"],
-    ["abigen", "datatest-stable"],
-    ["boogie-backend", "diem-temppath"],
-    ["boogie-backend", "datatest-stable"],
-    ["boogie-backend-v2", "diem-temppath"],
-    ["boogie-backend-v2", "datatest-stable"],
-    ["bytecode", "diem-types"],
-    ["bytecode", "diem-temppath"],
-    ["bytecode", "datatest-stable"],
-    ["bytecode-verifier-tests", "diem-framework-releases"],
-    ["docgen", "diem-temppath"],
-    ["docgen", "datatest-stable"],
-    ["errmapgen", "datatest-stable"],
-    ["move-vm-natives", "diem-crypto"],
-    ["move-vm-runtime", "diem-state-view"],
-    ["move-vm-runtime", "diem-logger"],
-    ["move-vm-runtime", "diem-infallible"],
-    ["move-vm-runtime", "diem-crypto"],
-    ["move-vm-types", "diem-crypto"],
-    ["module-generation", "diem-types"],
     ["test-generation", "language-e2e-tests"],
     ["test-generation", "diem-vm"],
     ["test-generation", "diem-types"],
     ["test-generation", "diem-state-view"],
     ["test-generation", "diem-logger"],
     ["test-generation", "diem-config"],
-    ["disassembler", "diem-types"],
-    ["move-cli", "vm-genesis"],
-    ["move-cli", "diem-vm"],
-    ["move-cli", "diem-types"],
-    ["move-cli", "diem-state-view"],
-    ["move-cli", "diem-framework"],
-    ["move-cli", "diem-framework-releases"],
-    ["move-cli", "datatest-stable"],
-    ["move-coverage", "diem-types"],
     ["resource-viewer", "diem-framework-releases"],
     ["resource-viewer", "diem-types"],
     ["resource-viewer", "diem-state-view"],
-    ["vm", "num-variants"],
-    ["vm", "diem-proptest-helpers"],
-    ["vm", "diem-crypto"],
+    ["move-explain", "diem-framework-releases"],
 ]
 
 # Interesting subsets of the workspace, These are used for generating and

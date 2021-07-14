@@ -1,4 +1,4 @@
-FROM debian:buster-20210329@sha256:5c1daf79a2d6202cf1b80a80f522fa0aaec4dc1c0520135ed277627c12171c3b AS setup_ci
+FROM debian:buster-20210511@sha256:acf7795dc91df17e10effee064bd229580a9c34213b4dba578d64768af5d8c51 AS setup_ci
 
 RUN mkdir /diem
 COPY rust-toolchain /diem/rust-toolchain
@@ -20,6 +20,7 @@ RUN mkdir -p /github/home \
 ENV PATH "/opt/cargo/bin:/usr/lib/golang/bin:/github/home/bin:$PATH"
 ENV DOTNET_ROOT "/github/home/.dotnet"
 ENV Z3_EXE "/github/home/bin/z3"
+ENV CVC4_EXE "/github/home/bin/cvc4"
 ENV BOOGIE_EXE "/github/home/.dotnet/tools/boogie"
 
 FROM setup_ci as tested_ci
@@ -38,16 +39,18 @@ RUN [ -x "$(command -v shellcheck)" ] \
     && [ -x "$(command -v helm)" ] \
     && [ -x "$(command -v aws)" ] \
     && [ -x "$(command -v z3)" ] \
+    && [ -x "$(command -v "$HOME/.dotnet/tools/boogie")" ] \
+    && [ -x "$(xargs rustup which cargo --toolchain < /diem/rust-toolchain )" ] \
+    && [ -x "$(command -v tidy)" ] \
+    && [ -x "$(command -v xsltproc)" ] \
     && [ -x "$(command -v javac)" ] \
     && [ -x "$(command -v clang)" ] \
     && [ -x "$(command -v python3)" ] \
     && [ -x "$(command -v go)" ] \
-    && [ -x "$(command -v npm)" ] \
-    && [ -x "$(command -v "$HOME/.dotnet/tools/boogie")" ] \
-    && [ -x "$(xargs rustup which cargo --toolchain < /diem/rust-toolchain )" ]
+    && [ -x "$(command -v npm)" ]
 
 # should be a no-op
 # sccache builds fine, but is not executable ??? in alpine, ends up being recompiled.  Wierd.
-RUN /diem/scripts/dev_setup.sh -b -p -s
+RUN /diem/scripts/dev_setup.sh -t -o -y -b -p -s
 
 FROM setup_ci as build_environment

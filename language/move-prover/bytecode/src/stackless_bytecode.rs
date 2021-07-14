@@ -3,15 +3,15 @@
 
 use crate::function_target::FunctionTarget;
 use itertools::Itertools;
+use move_binary_format::file_format::CodeOffset;
 use move_model::{
-    ast::{Exp, MemoryLabel, TempIndex},
-    exp_rewriter::{ExpRewriter, RewriteTarget},
-    model::{FunId, ModuleId, NodeId, QualifiedId, SpecVarId, StructId},
+    ast::{Exp, ExpData, MemoryLabel, TempIndex},
+    exp_rewriter::{ExpRewriter, ExpRewriterFunctions, RewriteTarget},
+    model::{FunId, GlobalEnv, ModuleId, NodeId, QualifiedInstId, SpecVarId, StructId},
     ty::{Type, TypeDisplayContext},
 };
 use num::BigUint;
 use std::{collections::BTreeMap, fmt, fmt::Formatter};
-use vm::file_format::CodeOffset;
 
 /// A label for a branch destination.
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
@@ -70,6 +70,17 @@ pub enum AssignKind {
     Store,
 }
 
+/// The type of variable that is being havoc-ed
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum HavocKind {
+    /// Havoc a value
+    Value,
+    /// Havoc the value part in a mutation, but keep its pointer unchanged
+    MutationValue,
+    /// Havoc everything in a mutation
+    MutationAll,
+}
+
 /// A constant value.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Constant {
@@ -87,6 +98,13 @@ pub enum Constant {
 pub enum Operation {
     // User function
     Function(ModuleId, FunId, Vec<Type>),
+
+    // Markers for beginning and end of transformed
+    // opaque function calls (the function call is replaced
+    // by assumes/asserts/gotos, but it is necessary to
+    // add more assumes/asserts later in the pipeline.
+    OpaqueCallBegin(ModuleId, FunId, Vec<Type>),
+    OpaqueCallEnd(ModuleId, FunId, Vec<Type>),
 
     // Pack/Unpack
     Pack(ModuleId, StructId, Vec<Type>),
@@ -111,11 +129,12 @@ pub enum Operation {
     ReadRef,
     WriteRef,
     FreezeRef,
-    Havoc,
+    Havoc(HavocKind),
+    Stop,
 
     // Memory model
+    IsParent(BorrowNode, BorrowEdge),
     WriteBack(BorrowNode, BorrowEdge),
-    Splice(BTreeMap<usize, TempIndex>),
     UnpackRef,
     PackRef,
     UnpackRefDeep,
@@ -163,6 +182,8 @@ impl Operation {
     pub fn can_abort(&self) -> bool {
         match self {
             Operation::Function(_, _, _) => true,
+            Operation::OpaqueCallBegin(_, _, _) => false,
+            Operation::OpaqueCallEnd(_, _, _) => false,
             Operation::Pack(_, _, _) => false,
             Operation::Unpack(_, _, _) => false,
             Operation::MoveTo(_, _, _) => true,
@@ -177,9 +198,10 @@ impl Operation {
             Operation::ReadRef => false,
             Operation::WriteRef => false,
             Operation::FreezeRef => false,
-            Operation::Havoc => false,
-            Operation::WriteBack(_, _) => false,
-            Operation::Splice(_) => false,
+            Operation::Havoc(_) => false,
+            Operation::Stop => false,
+            Operation::WriteBack(..) => false,
+            Operation::IsParent(..) => false,
             Operation::UnpackRef => false,
             Operation::PackRef => false,
             Operation::UnpackRefDeep => false,
@@ -219,9 +241,12 @@ impl Operation {
 /// A borrow node -- used in memory operations.
 #[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd)]
 pub enum BorrowNode {
-    GlobalRoot(QualifiedId<StructId>),
+    GlobalRoot(QualifiedInstId<StructId>),
     LocalRoot(TempIndex),
     Reference(TempIndex),
+    // Used in summaries to represent a returned mutation at return index. This does not
+    // appear in bytecode instructions.
+    ReturnPlaceholder(usize),
 }
 
 impl BorrowNode {
@@ -234,24 +259,28 @@ impl BorrowNode {
     }
 }
 
-/// A borrow with a path length of 0 or 1 -- used in memory operations
-/// A `Direct` edge is a borrow edge with length 0
-/// A `Field(usize)` edge has length 1 and the path in known
-/// A FieldUnknown has length 1 but the path is unknown
+/// A borrow edge.
 #[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd)]
-pub enum StrongEdge {
-    Direct,
-    Field(usize),
-    FieldUnknown,
-}
-
-/// A borrow edge -- used in memory operations
-#[derive(Eq, PartialEq, Debug, Clone)]
 pub enum BorrowEdge {
-    Weak,
-    Strong(StrongEdge),
+    /// Direct borrow.
+    Direct,
+    /// Field borrow with static offset.
+    Field(QualifiedInstId<StructId>, usize),
+    /// Vector borrow with dynamic index.
+    Index,
+    /// Composed sequence of edges.
+    Hyper(Vec<BorrowEdge>),
 }
 
+impl BorrowEdge {
+    pub fn flatten(&self) -> Vec<&BorrowEdge> {
+        if let BorrowEdge::Hyper(edges) = self {
+            edges.iter().collect_vec()
+        } else {
+            vec![self]
+        }
+    }
+}
 /// A specification property kind.
 #[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
 pub enum PropKind {
@@ -269,8 +298,6 @@ pub struct AbortAction(pub Label, pub TempIndex);
 /// The stackless bytecode.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Bytecode {
-    SpecBlock(AttrId, SpecBlockId), // deprecated, to be replaced by Prop(..)
-
     Assign(AttrId, TempIndex, TempIndex, AssignKind),
 
     Call(
@@ -289,8 +316,8 @@ pub enum Bytecode {
     Abort(AttrId, TempIndex),
     Nop(AttrId),
 
-    SaveMem(AttrId, MemoryLabel, QualifiedId<StructId>),
-    SaveSpecVar(AttrId, MemoryLabel, QualifiedId<SpecVarId>),
+    SaveMem(AttrId, MemoryLabel, QualifiedInstId<StructId>),
+    SaveSpecVar(AttrId, MemoryLabel, QualifiedInstId<SpecVarId>),
     Prop(AttrId, PropKind, Exp),
 }
 
@@ -298,8 +325,7 @@ impl Bytecode {
     pub fn get_attr_id(&self) -> AttrId {
         use Bytecode::*;
         match self {
-            SpecBlock(id, ..)
-            | Assign(id, ..)
+            Assign(id, ..)
             | Call(id, ..)
             | Ret(id, ..)
             | Load(id, ..)
@@ -315,7 +341,10 @@ impl Bytecode {
     }
 
     pub fn is_exit(&self) -> bool {
-        matches!(self, Bytecode::Ret(..) | Bytecode::Abort(..))
+        matches!(
+            self,
+            Bytecode::Ret(..) | Bytecode::Abort(..) | Bytecode::Call(_, _, Operation::Stop, _, _)
+        )
     }
 
     pub fn is_return(&self) -> bool {
@@ -325,7 +354,10 @@ impl Bytecode {
     pub fn is_unconditional_branch(&self) -> bool {
         matches!(
             self,
-            Bytecode::Ret(..) | Bytecode::Jump(..) | Bytecode::Abort(..)
+            Bytecode::Ret(..)
+                | Bytecode::Jump(..)
+                | Bytecode::Abort(..)
+                | Bytecode::Call(_, _, Operation::Stop, _, _)
         )
     }
 
@@ -434,33 +466,28 @@ impl Bytecode {
         let map_abort = |f: &mut F, aa: Option<AbortAction>| {
             aa.map(|AbortAction(l, code)| AbortAction(l, f(false, code)))
         };
+        let map_node = |f: &mut F, node: BorrowNode| match node {
+            LocalRoot(tmp) => LocalRoot(f(true, tmp)),
+            Reference(tmp) => Reference(f(true, tmp)),
+            _ => node,
+        };
         match self {
             Load(attr, dst, cons) => Load(attr, f(false, dst), cons),
             Assign(attr, dest, src, kind) => Assign(attr, f(false, dest), f(true, src), kind),
-            Call(attr, _, WriteBack(LocalRoot(dest), edge), srcs, aa) => Call(
+            Call(attr, _, WriteBack(node, edge), srcs, aa) => Call(
                 attr,
                 vec![],
-                WriteBack(LocalRoot(f(true, dest)), edge),
+                WriteBack(map_node(f, node), edge),
                 map(true, f, srcs),
                 map_abort(f, aa),
             ),
-            Call(attr, _, WriteBack(Reference(dest), edge), srcs, aa) => Call(
+            Call(attr, dests, IsParent(node, edge), srcs, aa) => Call(
                 attr,
-                vec![],
-                WriteBack(Reference(f(true, dest)), edge),
+                map(false, f, dests),
+                IsParent(map_node(f, node), edge),
                 map(true, f, srcs),
                 map_abort(f, aa),
             ),
-            Call(attr, dests, Splice(m), srcs, aa) => {
-                let m = m.into_iter().map(|(p, t)| (p, f(true, t))).collect();
-                Call(
-                    attr,
-                    map(false, f, dests),
-                    Splice(m),
-                    map(true, f, srcs),
-                    map_abort(f, aa),
-                )
-            }
             Call(attr, dests, op, srcs, aa) => Call(
                 attr,
                 map(false, f, dests),
@@ -487,17 +514,26 @@ impl Bytecode {
     {
         let mut replacer = |node_id: NodeId, target: RewriteTarget| {
             if let RewriteTarget::Temporary(idx) = target {
-                Some(Exp::Temporary(node_id, f(idx)))
+                Some(ExpData::Temporary(node_id, f(idx)).into_exp())
             } else {
                 None
             }
         };
-        ExpRewriter::new(func_target.global_env(), &mut replacer).rewrite(&exp)
+        ExpRewriter::new(func_target.global_env(), &mut replacer).rewrite_exp(exp)
     }
 
-    /// Return the temporaries this instruction modifies. This includes references where the
-    /// instruction can have effect on.
-    pub fn modifies(&self, fun_target: &FunctionTarget<'_>) -> Vec<TempIndex> {
+    /// Return the temporaries this instruction modifies and how the temporaries are modified.
+    ///
+    /// For a temporary with TempIndex $t, if $t is modified by the instruction and
+    /// 1) $t is a value or an immutable reference, it will show up in the first Vec
+    /// 2) $t is a mutable reference and only its value is modified, not the reference itself,
+    ///    it will show up in the second Vec as ($t, false).
+    /// 3) $t is a mutable reference and the reference itself is modified (i.e., the location and
+    ///    path it is pointing to), it will show up in the second Vec as ($t, true).
+    pub fn modifies(
+        &self,
+        func_target: &FunctionTarget<'_>,
+    ) -> (Vec<TempIndex>, Vec<(TempIndex, bool)>) {
         use BorrowNode::*;
         use Bytecode::*;
         use Operation::*;
@@ -507,22 +543,69 @@ impl Bytecode {
             }
             res
         };
+
         match self {
-            Assign(_, dest, ..) | Load(_, dest, ..) => vec![*dest],
-            Call(_, _, WriteBack(LocalRoot(dest), _), _, aa)
-            | Call(_, _, WriteBack(Reference(dest), _), _, aa) => add_abort(vec![*dest], aa),
-            Call(_, _, WriteRef, srcs, aa) => add_abort(vec![srcs[0]], aa),
+            Assign(_, dest, _, _) => {
+                if func_target.get_local_type(*dest).is_mutable_reference() {
+                    // reference assignment completely distorts the reference (value + pointer)
+                    (vec![], vec![(*dest, true)])
+                } else {
+                    // value assignment
+                    (vec![*dest], vec![])
+                }
+            }
+            Load(_, dest, _) => {
+                // constants can only be values, hence no modifications on the reference
+                (vec![*dest], vec![])
+            }
+            Call(_, _, Operation::WriteBack(LocalRoot(dest), ..), _, aa) => {
+                // write-back to a local variable distorts the value
+                (add_abort(vec![*dest], aa), vec![])
+            }
+            Call(_, _, Operation::WriteBack(Reference(dest), ..), _, aa) => {
+                // write-back to a reference only distorts the value, but not the pointer itself
+                (add_abort(vec![], aa), vec![(*dest, false)])
+            }
+            Call(_, _, Operation::WriteRef, srcs, aa) => {
+                // write-ref only distorts the value of the reference, but not the pointer itself
+                (add_abort(vec![], aa), vec![(srcs[0], false)])
+            }
             Call(_, dests, Function(..), srcs, aa) => {
-                let mut res = dests.clone();
+                let mut val_targets = vec![];
+                let mut mut_targets = vec![];
                 for src in srcs {
-                    if fun_target.get_local_type(*src).is_mutable_reference() {
-                        res.push(*src);
+                    if func_target.get_local_type(*src).is_mutable_reference() {
+                        // values in mutable references can be distorted, but pointer stays the same
+                        mut_targets.push((*src, false));
                     }
                 }
-                add_abort(res, aa)
+                for dest in dests {
+                    if func_target.get_local_type(*dest).is_mutable_reference() {
+                        // similar to reference assignment
+                        mut_targets.push((*dest, true));
+                    } else {
+                        // similar to value assignment
+                        val_targets.push(*dest);
+                    }
+                }
+                (add_abort(val_targets, aa), mut_targets)
             }
-            Call(_, dests, _, _, aa) => add_abort(dests.clone(), aa),
-            _ => vec![],
+            // *** Double-check that this is in Wolfgang's code
+            Call(_, dests, _, _, aa) => {
+                let mut val_targets = vec![];
+                let mut mut_targets = vec![];
+                for dest in dests {
+                    if func_target.get_local_type(*dest).is_mutable_reference() {
+                        // similar to reference assignment
+                        mut_targets.push((*dest, true));
+                    } else {
+                        // similar to value assignment
+                        val_targets.push(*dest);
+                    }
+                }
+                (add_abort(val_targets, aa), mut_targets)
+            }
+            _ => (vec![], vec![]),
         }
     }
 }
@@ -545,25 +628,6 @@ impl Bytecode {
     }
 }
 
-impl std::fmt::Display for BorrowEdge {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            BorrowEdge::Weak => write!(f, "*"),
-            BorrowEdge::Strong(se) => write!(f, "{}", se),
-        }
-    }
-}
-
-impl std::fmt::Display for StrongEdge {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            StrongEdge::Field(field) => write!(f, "{}", field),
-            StrongEdge::FieldUnknown => write!(f, "U"),
-            StrongEdge::Direct => write!(f, "D"),
-        }
-    }
-}
-
 /// A display object for a bytecode.
 pub struct BytecodeDisplay<'env> {
     bytecode: &'env Bytecode,
@@ -575,13 +639,6 @@ impl<'env> fmt::Display for BytecodeDisplay<'env> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         use Bytecode::*;
         match &self.bytecode {
-            SpecBlock(id, _) => {
-                // For now, use source location to print spec block. We currently do not have a
-                // pretty printer for spec expressions and conditions. We may need to add one as
-                // we start to generate spec blocks during transformations.
-                let loc = self.func_target.get_bytecode_loc(*id);
-                write!(f, "spec at {}..{}", loc.span().start(), loc.span().end())?;
-            }
             Assign(_, dst, src, AssignKind::Copy) => {
                 write!(f, "{} := copy({})", self.lstr(*dst), self.lstr(*src))?
             }
@@ -637,14 +694,7 @@ impl<'env> fmt::Display for BytecodeDisplay<'env> {
             }
             SaveMem(_, label, qid) => {
                 let env = self.func_target.global_env();
-                let struct_env = env.get_module(qid.module_id).into_struct(qid.id);
-                write!(
-                    f,
-                    "@{} := save_mem({}::{})",
-                    label.as_usize(),
-                    struct_env.module_env.get_name().display(env.symbol_pool()),
-                    struct_env.get_name().display(env.symbol_pool())
-                )?;
+                write!(f, "@{} := save_mem({})", label.as_usize(), env.display(qid))?;
             }
             SaveSpecVar(_, label, qid) => {
                 let env = self.func_target.global_env();
@@ -729,7 +779,9 @@ impl<'env> fmt::Display for OperationDisplay<'env> {
         use Operation::*;
         match self.oper {
             // User function
-            Function(mid, fid, targs) => {
+            Function(mid, fid, targs)
+            | OpaqueCallBegin(mid, fid, targs)
+            | OpaqueCallEnd(mid, fid, targs) => {
                 let func_env = self
                     .func_target
                     .global_env()
@@ -737,12 +789,21 @@ impl<'env> fmt::Display for OperationDisplay<'env> {
                     .into_function(*fid);
                 write!(
                     f,
+                    "{}",
+                    match self.oper {
+                        OpaqueCallBegin(_, _, _) => "opaque begin: ",
+                        OpaqueCallEnd(_, _, _) => "opaque end: ",
+                        _ => "",
+                    }
+                )?;
+                write!(
+                    f,
                     "{}::{}",
                     func_env
                         .module_env
                         .get_name()
                         .display(func_env.symbol_pool()),
-                    func_env.get_name().display(func_env.symbol_pool())
+                    func_env.get_name().display(func_env.symbol_pool()),
                 )?;
                 self.fmt_type_args(f, targs)?;
             }
@@ -832,18 +893,32 @@ impl<'env> fmt::Display for OperationDisplay<'env> {
             UnpackRefDeep => {
                 write!(f, "unpack_ref_deep")?;
             }
-            WriteBack(node, edge) => {
-                write!(f, "write_back[{}.{}]", node.display(self.func_target), edge)?
-            }
-            Splice(map) => write!(
+            WriteBack(node, edge) => write!(
                 f,
-                "splice[{}]",
-                map.iter()
-                    .map(|(idx, local)| format!("{} -> $t{}", idx, *local))
-                    .join(", ")
+                "write_back[{}{}]",
+                node.display(self.func_target),
+                edge.display(self.func_target.global_env())
             )?,
-            Havoc => {
-                write!(f, "havoc")?;
+            IsParent(node, edge) => write!(
+                f,
+                "is_parent[{}{}]",
+                node.display(self.func_target),
+                edge.display(self.func_target.global_env())
+            )?,
+
+            Havoc(kind) => {
+                write!(
+                    f,
+                    "havoc[{}]",
+                    match kind {
+                        HavocKind::Value => "val",
+                        HavocKind::MutationValue => "mut",
+                        HavocKind::MutationAll => "mut_all",
+                    }
+                )?;
+            }
+            Stop => {
+                write!(f, "stop")?;
             }
             // Unary
             CastU8 => write!(f, "(u8)")?,
@@ -965,7 +1040,7 @@ impl<'env> fmt::Display for BorrowNodeDisplay<'env> {
         use BorrowNode::*;
         match self.node {
             GlobalRoot(s) => {
-                let ty = Type::Struct(s.module_id, s.id, vec![]);
+                let ty = Type::Struct(s.module_id, s.id, s.inst.to_owned());
                 let tctx = TypeDisplayContext::WithEnv {
                     env: self.func_target.global_env(),
                     type_param_names: None,
@@ -978,7 +1053,48 @@ impl<'env> fmt::Display for BorrowNodeDisplay<'env> {
             Reference(idx) => {
                 write!(f, "Reference($t{})", idx)?;
             }
+            ReturnPlaceholder(idx) => {
+                write!(f, "Return({})", idx)?;
+            }
         }
         Ok(())
+    }
+}
+impl BorrowEdge {
+    pub fn display<'a>(&'a self, env: &'a GlobalEnv) -> BorrowEdgeDisplay<'a> {
+        BorrowEdgeDisplay { env, edge: self }
+    }
+}
+
+pub struct BorrowEdgeDisplay<'a> {
+    env: &'a GlobalEnv,
+    edge: &'a BorrowEdge,
+}
+
+impl<'a> std::fmt::Display for BorrowEdgeDisplay<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use BorrowEdge::*;
+        match self.edge {
+            Field(qid, field) => {
+                let struct_env = self.env.get_struct(qid.to_qualified_id());
+                let field_env = struct_env.get_field_by_offset(*field);
+                write!(
+                    f,
+                    ".{}",
+                    field_env.get_name().display(self.env.symbol_pool())
+                )
+            }
+            Index => write!(f, "[]"),
+            Direct => write!(f, "@"),
+            Hyper(es) => {
+                write!(
+                    f,
+                    "{}",
+                    es.iter()
+                        .map(|e| format!("{}", e.display(self.env)))
+                        .join("/")
+                )
+            }
+        }
     }
 }

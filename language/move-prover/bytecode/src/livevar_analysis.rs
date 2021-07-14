@@ -5,16 +5,17 @@
 // computation of new Destroy instructions.
 
 use crate::{
-    dataflow_analysis::{AbstractDomain, DataflowAnalysis, JoinResult, TransferFunctions},
+    dataflow_analysis::{DataflowAnalysis, TransferFunctions},
+    dataflow_domains::{AbstractDomain, JoinResult},
     function_target::{FunctionData, FunctionTarget},
     function_target_pipeline::{FunctionTargetProcessor, FunctionTargetsHolder},
     stackless_bytecode::{AbortAction, AttrId, Bytecode, Label, Operation},
     stackless_control_flow_graph::StacklessControlFlowGraph,
 };
 use itertools::Itertools;
+use move_binary_format::file_format::CodeOffset;
 use move_model::{ast::TempIndex, model::FunctionEnv, ty::Type};
 use std::collections::{BTreeMap, BTreeSet};
-use vm::file_format::CodeOffset;
 
 /// The annotation for live variable analysis. For each code position, we have a set of local
 /// variable indices that are live just before the code offset, i.e. these variables are used
@@ -141,10 +142,6 @@ impl LiveVarAnalysisProcessor {
         func_target: &FunctionTarget,
         code: Vec<Bytecode>,
     ) -> (Vec<Bytecode>, Vec<Type>, BTreeMap<TempIndex, TempIndex>) {
-        if code.iter().any(|c| matches!(c, Bytecode::SpecBlock(..))) {
-            // TODO(wrwg): SpecBlock currently does not work with variable renaming.
-            return (code, func_target.data.local_types.clone(), BTreeMap::new());
-        }
         let mut new_code = vec![];
         let mut new_vars = vec![];
         let mut remap = BTreeMap::new();
@@ -360,12 +357,9 @@ impl<'a> TransferFunctions for LiveVarAnalysis<'a> {
             Load(_, dst, _) => {
                 state.remove(&[*dst]);
             }
-            Call(_, dsts, oper, srcs, on_abort) => {
+            Call(_, dsts, _, srcs, on_abort) => {
                 state.remove(dsts);
                 state.insert(srcs);
-                if let Operation::Splice(map) = oper {
-                    state.insert(&map.values().cloned().collect_vec());
-                }
                 if let Some(AbortAction(_, dst)) = on_abort {
                     state.remove(&[*dst]);
                 }
@@ -377,7 +371,7 @@ impl<'a> TransferFunctions for LiveVarAnalysis<'a> {
                 state.insert(&[*src]);
             }
             Prop(_, _, exp) => {
-                for idx in exp.temporaries() {
+                for (idx, _) in exp.temporaries(self.func_target.global_env()) {
                     state.insert(&[idx]);
                 }
             }

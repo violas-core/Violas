@@ -41,7 +41,7 @@ be careful about using floating-point to convert these values to
 decimal.
 
 
-<pre><code><b>struct</b> <a href="FixedPoint32.md#0x1_FixedPoint32">FixedPoint32</a>
+<pre><code><b>struct</b> <a href="FixedPoint32.md#0x1_FixedPoint32">FixedPoint32</a> has <b>copy</b>, drop, store
 </code></pre>
 
 
@@ -199,7 +199,7 @@ homomorphic. This does not guarantee that arithmetic functions using this code i
 <a name="0x1_FixedPoint32_spec_concrete_multiply_u64"></a>
 
 
-<pre><code><b>define</b> <a href="FixedPoint32.md#0x1_FixedPoint32_spec_concrete_multiply_u64">spec_concrete_multiply_u64</a>(val: num, multiplier: <a href="FixedPoint32.md#0x1_FixedPoint32">FixedPoint32</a>): num {
+<pre><code><b>fun</b> <a href="FixedPoint32.md#0x1_FixedPoint32_spec_concrete_multiply_u64">spec_concrete_multiply_u64</a>(val: num, multiplier: <a href="FixedPoint32.md#0x1_FixedPoint32">FixedPoint32</a>): num {
    (val * multiplier.value) &gt;&gt; 32
 }
 </code></pre>
@@ -228,7 +228,7 @@ homomorphic. This does not guarantee that arithmetic functions using this code i
 <a name="0x1_FixedPoint32_spec_multiply_u64"></a>
 
 
-<pre><code><b>define</b> <a href="FixedPoint32.md#0x1_FixedPoint32_spec_multiply_u64">spec_multiply_u64</a>(val: num, multiplier: <a href="FixedPoint32.md#0x1_FixedPoint32">FixedPoint32</a>): num {
+<pre><code><b>fun</b> <a href="FixedPoint32.md#0x1_FixedPoint32_spec_multiply_u64">spec_multiply_u64</a>(val: num, multiplier: <a href="FixedPoint32.md#0x1_FixedPoint32">FixedPoint32</a>): num {
    <b>if</b> (multiplier.value == 0)
        // Zero value
        0
@@ -319,7 +319,7 @@ an abstracted, simplified semantics for verification of callers.
 <a name="0x1_FixedPoint32_spec_concrete_divide_u64"></a>
 
 
-<pre><code><b>define</b> <a href="FixedPoint32.md#0x1_FixedPoint32_spec_concrete_divide_u64">spec_concrete_divide_u64</a>(val: num, divisor: <a href="FixedPoint32.md#0x1_FixedPoint32">FixedPoint32</a>): num {
+<pre><code><b>fun</b> <a href="FixedPoint32.md#0x1_FixedPoint32_spec_concrete_divide_u64">spec_concrete_divide_u64</a>(val: num, divisor: <a href="FixedPoint32.md#0x1_FixedPoint32">FixedPoint32</a>): num {
    (val &lt;&lt; 32) / divisor.value
 }
 </code></pre>
@@ -349,7 +349,7 @@ an abstracted, simplified semantics for verification of callers.
 <a name="0x1_FixedPoint32_spec_divide_u64"></a>
 
 
-<pre><code><b>define</b> <a href="FixedPoint32.md#0x1_FixedPoint32_spec_divide_u64">spec_divide_u64</a>(val: num, divisor: <a href="FixedPoint32.md#0x1_FixedPoint32">FixedPoint32</a>): num {
+<pre><code><b>fun</b> <a href="FixedPoint32.md#0x1_FixedPoint32_spec_divide_u64">spec_divide_u64</a>(val: num, divisor: <a href="FixedPoint32.md#0x1_FixedPoint32">FixedPoint32</a>): num {
    <b>if</b> (divisor.value == 1)
        // 1.0
        val
@@ -432,11 +432,8 @@ rounding, e.g., 0.0125 will round down to 0.012 instead of up to 0.013.
 <pre><code><b>schema</b> <a href="FixedPoint32.md#0x1_FixedPoint32_ConcreteCreateFromRationalAbortsIf">ConcreteCreateFromRationalAbortsIf</a> {
     numerator: u64;
     denominator: u64;
-    <a name="0x1_FixedPoint32_scaled_numerator$12"></a>
     <b>let</b> scaled_numerator = numerator &lt;&lt; 64;
-    <a name="0x1_FixedPoint32_scaled_denominator$13"></a>
     <b>let</b> scaled_denominator = denominator &lt;&lt; 32;
-    <a name="0x1_FixedPoint32_quotient$14"></a>
     <b>let</b> quotient = scaled_numerator / scaled_denominator;
     <b>aborts_if</b> scaled_denominator == 0 <b>with</b> <a href="Errors.md#0x1_Errors_INVALID_ARGUMENT">Errors::INVALID_ARGUMENT</a>;
     <b>aborts_if</b> quotient == 0 && scaled_numerator != 0 <b>with</b> <a href="Errors.md#0x1_Errors_INVALID_ARGUMENT">Errors::INVALID_ARGUMENT</a>;
@@ -450,7 +447,7 @@ rounding, e.g., 0.0125 will round down to 0.012 instead of up to 0.013.
 <a name="0x1_FixedPoint32_spec_concrete_create_from_rational"></a>
 
 
-<pre><code><b>define</b> <a href="FixedPoint32.md#0x1_FixedPoint32_spec_concrete_create_from_rational">spec_concrete_create_from_rational</a>(numerator: num, denominator: num): <a href="FixedPoint32.md#0x1_FixedPoint32">FixedPoint32</a> {
+<pre><code><b>fun</b> <a href="FixedPoint32.md#0x1_FixedPoint32_spec_concrete_create_from_rational">spec_concrete_create_from_rational</a>(numerator: num, denominator: num): <a href="FixedPoint32.md#0x1_FixedPoint32">FixedPoint32</a> {
    <a href="FixedPoint32.md#0x1_FixedPoint32">FixedPoint32</a>{value: (numerator &lt;&lt; 64) / (denominator &lt;&lt; 32)}
 }
 </code></pre>
@@ -481,7 +478,7 @@ succeeded.
 <a name="0x1_FixedPoint32_spec_create_from_rational"></a>
 
 
-<pre><code><b>define</b> <a href="FixedPoint32.md#0x1_FixedPoint32_spec_create_from_rational">spec_create_from_rational</a>(numerator: num, denominator: num): <a href="FixedPoint32.md#0x1_FixedPoint32">FixedPoint32</a> {
+<pre><code><b>fun</b> <a href="FixedPoint32.md#0x1_FixedPoint32_spec_create_from_rational">spec_create_from_rational</a>(numerator: num, denominator: num): <a href="FixedPoint32.md#0x1_FixedPoint32">FixedPoint32</a> {
    <b>if</b> (numerator == denominator)
        // 1.0
        <a href="FixedPoint32.md#0x1_FixedPoint32">FixedPoint32</a>{value: 1}

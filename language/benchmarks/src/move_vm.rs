@@ -4,19 +4,18 @@
 use anyhow::Result;
 use criterion::{measurement::Measurement, Criterion};
 use diem_state_view::StateView;
-use diem_types::{access_path::AccessPath, account_address::AccountAddress};
+use diem_types::access_path::AccessPath;
 use diem_vm::data_cache::StateViewCache;
+use move_binary_format::CompiledModule;
 use move_core_types::{
-    gas_schedule::{GasAlgebra, GasUnits},
     identifier::{IdentStr, Identifier},
-    language_storage::ModuleId,
+    language_storage::{ModuleId, CORE_CODE_ADDRESS},
 };
-use move_lang::{compiled_unit::CompiledUnit, shared::Address};
+use move_lang::{compiled_unit::CompiledUnit, shared::Flags};
 use move_vm_runtime::{logging::NoContextLog, move_vm::MoveVM};
-use move_vm_types::gas_schedule::{zero_cost_schedule, CostStrategy};
+use move_vm_types::gas_schedule::GasStatus;
 use once_cell::sync::Lazy;
 use std::path::PathBuf;
-use vm::CompiledModule;
 
 static MOVE_BENCH_SRC_PATH: Lazy<PathBuf> = Lazy::new(|| {
     vec![env!("CARGO_MANIFEST_DIR"), "src", "bench.move"]
@@ -48,9 +47,8 @@ fn compile_modules() -> Vec<CompiledModule> {
             MOVE_BENCH_SRC_PATH.to_str().unwrap().to_owned(),
         ],
         &[],
-        Some(Address::DIEM_CORE),
         None,
-        false,
+        Flags::empty().set_sources_shadow_deps(false),
     )
     .expect("Error compiling...");
     compiled_units
@@ -70,13 +68,12 @@ fn execute<M: Measurement + 'static>(
     fun: &str,
 ) {
     // establish running context
-    let sender = AccountAddress::new(Address::DIEM_CORE.to_u8());
+    let sender = CORE_CODE_ADDRESS;
     let state = EmptyStateView;
-    let gas_schedule = zero_cost_schedule();
     let data_cache = StateViewCache::new(&state);
     let log_context = NoContextLog::new();
     let mut session = move_vm.new_session(&data_cache);
-    let mut cost_strategy = CostStrategy::system(&gas_schedule, GasUnits::new(100_000_000));
+    let mut gas_status = GasStatus::new_unmetered();
 
     for module in modules {
         let mut mod_blob = vec![];
@@ -84,7 +81,7 @@ fn execute<M: Measurement + 'static>(
             .serialize(&mut mod_blob)
             .expect("Module serialization error");
         session
-            .publish_module(mod_blob, sender, &mut cost_strategy, &log_context)
+            .publish_module(mod_blob, sender, &mut gas_status, &log_context)
             .expect("Module must load");
     }
 
@@ -101,7 +98,7 @@ fn execute<M: Measurement + 'static>(
                     &fun_name,
                     vec![],
                     vec![],
-                    &mut cost_strategy,
+                    &mut gas_status,
                     &log_context,
                 )
                 .unwrap_or_else(|err| {
@@ -126,10 +123,6 @@ struct EmptyStateView;
 impl StateView for EmptyStateView {
     fn get(&self, _: &AccessPath) -> Result<Option<Vec<u8>>> {
         Ok(None)
-    }
-
-    fn multi_get(&self, _access_paths: &[AccessPath]) -> Result<Vec<Option<Vec<u8>>>> {
-        unimplemented!()
     }
 
     fn is_genesis(&self) -> bool {

@@ -3,11 +3,13 @@
 
 use crate::{
     access_path::AccessPath,
-    account_config::constants::{xus_tag, CORE_CODE_ADDRESS, DIEM_MODULE_NAME},
+    account_config::constants::{xus_tag, CORE_CODE_ADDRESS, DIEM_MODULE_IDENTIFIER},
 };
 use move_core_types::{
+    ident_str,
+    identifier::IdentStr,
     language_storage::{StructTag, TypeTag},
-    move_resource::MoveResource,
+    move_resource::{MoveResource, MoveStructType},
 };
 #[cfg(any(test, feature = "fuzzing"))]
 use proptest_derive::Arbitrary;
@@ -45,11 +47,13 @@ impl PreburnResource {
     }
 }
 
-impl MoveResource for PreburnResource {
-    const MODULE_NAME: &'static str = DIEM_MODULE_NAME;
-    const STRUCT_NAME: &'static str = "Preburn";
+impl MoveStructType for PreburnResource {
+    const MODULE_NAME: &'static IdentStr = DIEM_MODULE_IDENTIFIER;
+    const STRUCT_NAME: &'static IdentStr = ident_str!("Preburn");
 
     fn type_params() -> Vec<TypeTag> {
         vec![xus_tag()]
     }
 }
+
+impl MoveResource for PreburnResource {}

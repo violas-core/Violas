@@ -1,4 +1,4 @@
-FROM debian:buster-20210329@sha256:5c1daf79a2d6202cf1b80a80f522fa0aaec4dc1c0520135ed277627c12171c3b AS debian-base
+FROM debian:buster-20210511@sha256:acf7795dc91df17e10effee064bd229580a9c34213b4dba578d64768af5d8c51 AS debian-base
 
 FROM debian-base AS toolchain
 
@@ -19,7 +19,7 @@ FROM toolchain AS builder
 ARG ENABLE_FAILPOINTS
 COPY . /diem
 
-RUN ./docker/build-common.sh
+RUN IMAGE_TARGETS="test" ./docker/build-common.sh
 
 ### Production Image ###
 FROM debian-base AS pre-test
@@ -50,4 +50,3 @@ ARG GIT_UPSTREAM
 LABEL org.label-schema.schema-version="1.0"
 LABEL org.label-schema.build-date=$BUILD_DATE
 LABEL org.label-schema.vcs-ref=$GIT_REV
-LABEL vcs-upstream=$GIT_UPSTREAM

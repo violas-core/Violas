@@ -14,6 +14,7 @@ module TreasuryComplianceScripts {
     use 0x1::AccountFreezing;
     use 0x1::DualAttestation;
     use 0x1::FixedPoint32;
+    use 0x1::DiemId;
 
     /// # Summary
     /// Cancels and returns the coins held in the preburn area under
@@ -68,7 +69,7 @@ module TreasuryComplianceScripts {
         DiemAccount::cancel_burn<Token>(&account, preburn_address, amount)
     }
 
-    spec fun cancel_burn_with_amount {
+    spec cancel_burn_with_amount {
         use 0x1::CoreAddresses;
         use 0x1::Errors;
         use 0x1::Diem;
@@ -81,13 +82,18 @@ module TreasuryComplianceScripts {
         let total_preburn_value = global<Diem::CurrencyInfo<Token>>(
             CoreAddresses::CURRENCY_INFO_ADDRESS()
         ).preburn_value;
+        let post post_total_preburn_value = global<Diem::CurrencyInfo<Token>>(
+            CoreAddresses::CURRENCY_INFO_ADDRESS()
+        ).preburn_value;
+
         let balance_at_addr = DiemAccount::balance<Token>(preburn_address);
+        let post post_balance_at_addr = DiemAccount::balance<Token>(preburn_address);
 
         /// The total value of preburn for `Token` should decrease by the preburned amount.
-        ensures total_preburn_value == old(total_preburn_value) - amount;
+        ensures post_total_preburn_value == total_preburn_value - amount;
 
         /// The balance of `Token` at `preburn_address` should increase by the preburned amount.
-        ensures balance_at_addr == old(balance_at_addr) + amount;
+        ensures post_balance_at_addr == balance_at_addr + amount;
 
         include Diem::CancelBurnWithCapEmits<Token>;
         include DiemAccount::DepositEmits<Token>{
@@ -167,7 +173,7 @@ module TreasuryComplianceScripts {
         SlidingNonce::record_nonce_or_abort(&account, sliding_nonce);
         Diem::burn<Token>(&account, preburn_address, amount)
     }
-    spec fun burn_with_amount {
+    spec burn_with_amount {
         use 0x1::Errors;
         use 0x1::DiemAccount;
 
@@ -240,7 +246,7 @@ module TreasuryComplianceScripts {
         DiemAccount::restore_withdraw_capability(withdraw_cap);
     }
 
-    spec fun preburn {
+    spec preburn {
         use 0x1::Errors;
         use 0x1::Signer;
         use 0x1::Diem;
@@ -263,6 +269,9 @@ module TreasuryComplianceScripts {
         /// **Access Control:**
         /// Only the account with a Preburn resource or PreburnQueue resource can preburn [[H4]][PERMISSION].
         aborts_if !(exists<Diem::Preburn<Token>>(account_addr) || exists<Diem::PreburnQueue<Token>>(account_addr));
+
+        /// TODO(timeout): this currently times out
+        pragma verify = false;
     }
 
     /// # Summary
@@ -371,7 +380,7 @@ module TreasuryComplianceScripts {
         );
     }
 
-    spec fun tiered_mint {
+    spec tiered_mint {
         use 0x1::Errors;
         use 0x1::Roles;
 
@@ -571,7 +580,7 @@ module TreasuryComplianceScripts {
         );
         Diem::update_xdx_exchange_rate<Currency>(&tc_account, rate);
     }
-    spec fun update_exchange_rate {
+    spec update_exchange_rate {
         use 0x1::Errors;
         use 0x1::DiemAccount;
         use 0x1::Roles;
@@ -635,6 +644,90 @@ module TreasuryComplianceScripts {
         allow_minting: bool
     ) {
         Diem::update_minting_ability<Currency>(&tc_account, allow_minting);
+    }
+
+    /// # Summary
+    /// Add a DiemID domain to parent VASP account. The transaction can only be sent by
+    /// the Treasury Compliance account.
+    ///
+    /// # Technical Description
+    /// Adds a `DiemId::DiemIdDomain` to the `domains` field of the `DiemId::DiemIdDomains` resource published under
+    /// the account at `address`.
+    ///
+    /// # Parameters
+    /// | Name         | Type         | Description                                                                                     |
+    /// | ------       | ------       | -------------                                                                                   |
+    /// | `tc_account` | `signer`     | The signer of the sending account of this transaction. Must be the Treasury Compliance account. |
+    /// | `address`    | `address`    | The `address` of the parent VASP account that will have have `domain` added to its domains.     |
+    /// | `domain`     | `vector<u8>` | The domain to be added.                                                                         |
+    ///
+    /// # Common Abort Conditions
+    /// | Error Category             | Error Reason                             | Description                                                                                                                            |
+    /// | ----------------           | --------------                           | -------------                                                                                                                          |
+    /// | `Errors::REQUIRES_ROLE`    | `Roles::ETREASURY_COMPLIANCE`            | The sending account is not the Treasury Compliance account.                                                                            |
+    /// | `Errors::REQUIRES_ADDRESS` | `CoreAddresses::ETREASURY_COMPLIANCE`    | `tc_account` is not the Treasury Compliance account.                                                                                   |
+    /// | `Errors::NOT_PUBLISHED`    | `DiemId::EDIEM_ID_DOMAIN_MANAGER`        | The `DiemId::DiemIdDomainManager` resource is not yet published under the Treasury Compliance account.                                 |
+    /// | `Errors::NOT_PUBLISHED`    | `DiemId::EDIEM_ID_DOMAINS_NOT_PUBLISHED` | `address` does not have a `DiemId::DiemIdDomains` resource published under it.                                                         |
+    /// | `Errors::INVALID_ARGUMENT` | `DiemId::EDOMAIN_ALREADY_EXISTS`         | The `domain` already exists in the list of `DiemId::DiemIdDomain`s  in the `DiemId::DiemIdDomains` resource published under `address`. |
+    /// | `Errors::INVALID_ARGUMENT` | `DiemId::EINVALID_DIEM_ID_DOMAIN`        | The `domain` is greater in length than `DiemId::DOMAIN_LENGTH`.                                                                        |
+    public(script) fun add_diem_id_domain (
+        tc_account: signer,
+        address: address,
+        domain: vector<u8>,
+    ) {
+        DiemId::add_diem_id_domain(&tc_account, address, domain);
+    }
+    spec add_diem_id_domain {
+        use 0x1::Errors;
+        include DiemAccount::TransactionChecks{sender: tc_account}; // properties checked by the prologue.
+        include DiemId::AddDiemIdDomainAbortsIf;
+        include DiemId::AddDiemIdDomainEnsures;
+        include DiemId::AddDiemIdDomainEmits;
+        aborts_with [check]
+            Errors::REQUIRES_ROLE,
+            Errors::REQUIRES_ADDRESS,
+            Errors::NOT_PUBLISHED,
+            Errors::INVALID_ARGUMENT;
+    }
+
+    /// # Summary
+    /// Remove a DiemID domain from parent VASP account. The transaction can only be sent by
+    /// the Treasury Compliance account.
+    ///
+    /// # Technical Description
+    /// Removes a `DiemId::DiemIdDomain` from the `domains` field of the `DiemId::DiemIdDomains` resource published under
+    /// account with `address`.
+    ///
+    /// # Parameters
+    /// | Name         | Type         | Description                                                                                     |
+    /// | ------       | ------       | -------------                                                                                   |
+    /// | `tc_account` | `signer`     | The signer of the sending account of this transaction. Must be the Treasury Compliance account. |
+    /// | `address`    | `address`    | The `address` of parent VASP account that will update its domains.                              |
+    /// | `domain`     | `vector<u8>` | The domain name.                                                                                |
+    ///
+    /// # Common Abort Conditions
+    /// | Error Category             | Error Reason                             | Description                                                                                                                            |
+    /// | ----------------           | --------------                           | -------------                                                                                                                          |
+    /// | `Errors::REQUIRES_ROLE`    | `Roles::ETREASURY_COMPLIANCE`            | The sending account is not the Treasury Compliance account.                                                                            |
+    /// | `Errors::REQUIRES_ADDRESS` | `CoreAddresses::ETREASURY_COMPLIANCE`    | `tc_account` is not the Treasury Compliance account.                                                                                   |
+    /// | `Errors::NOT_PUBLISHED`    | `DiemId::EDIEM_ID_DOMAIN_MANAGER`        | The `DiemId::DiemIdDomainManager` resource is not yet published under the Treasury Compliance account.                                 |
+    /// | `Errors::NOT_PUBLISHED`    | `DiemId::EDIEM_ID_DOMAINS_NOT_PUBLISHED` | `address` does not have a `DiemId::DiemIdDomains` resource published under it.                                                         |
+    /// | `Errors::INVALID_ARGUMENT` | `DiemId::EINVALID_DIEM_ID_DOMAIN`        | The `domain` is greater in length than `DiemId::DOMAIN_LENGTH`.                                                                        |
+    /// | `Errors::INVALID_ARGUMENT` | `DiemId::EDOMAIN_NOT_FOUND`              | The `domain` does not exist in the list of `DiemId::DiemIdDomain`s  in the `DiemId::DiemIdDomains` resource published under `address`. |
+    public(script) fun remove_diem_id_domain (
+        tc_account: signer,
+        address: address,
+        domain: vector<u8>,
+    ) {
+        DiemId::remove_diem_id_domain(&tc_account, address, domain);
+    }
+    spec remove_diem_id_domain {
+        use 0x1::Errors;
+        aborts_with [check]
+            Errors::REQUIRES_ROLE,
+            Errors::REQUIRES_ADDRESS,
+            Errors::NOT_PUBLISHED,
+            Errors::INVALID_ARGUMENT;
     }
 }
 }

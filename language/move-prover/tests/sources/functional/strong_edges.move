@@ -1,6 +1,6 @@
 // This file consists of a series of test cases which are client functions
 // using the standard vector module.
-module TestStrongEdges {
+module 0x42::TestStrongEdges {
     use 0x1::Vector;
 
     spec module {
@@ -16,7 +16,7 @@ module TestStrongEdges {
         s.x = 2;
     }
 
-    spec fun glob_and_field_edges{
+    spec glob_and_field_edges{
         pragma opaque = true;
         ensures global<S>(addr).x == 2;
         aborts_if !exists<S>(addr);
@@ -38,7 +38,7 @@ module TestStrongEdges {
         *Vector::borrow_mut(v, 0) = 7;
         x
     }
-    spec fun vec_edge {
+    spec vec_edge {
         aborts_if len(v) == 0;
         ensures v[0] == 7;
         ensures v[1] == old(v[1]);
@@ -49,7 +49,7 @@ module TestStrongEdges {
         s.x = 2;
     }
 
-    spec fun glob_and_field_edges_incorrect{
+    spec glob_and_field_edges_incorrect{
         pragma opaque = true;
         ensures global<S>(addr).x == 3;
         aborts_if !exists<S>(addr);

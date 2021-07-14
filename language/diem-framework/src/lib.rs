@@ -4,7 +4,8 @@
 #![forbid(unsafe_code)]
 
 use bytecode_verifier::{cyclic_dependencies, dependencies, verify_module};
-use move_lang::{compiled_unit::CompiledUnit, move_compile_and_report, shared::Address};
+use move_binary_format::{access::ModuleAccess, file_format::CompiledModule};
+use move_lang::{compiled_unit::CompiledUnit, move_compile_and_report, shared::Flags};
 use once_cell::sync::Lazy;
 use sha2::{Digest, Sha256};
 use std::{
@@ -13,7 +14,6 @@ use std::{
     io::{Read, Write},
     path::{Path, PathBuf},
 };
-use vm::{access::ModuleAccess, file_format::CompiledModule};
 
 pub use move_stdlib::{COMPILED_EXTENSION, ERROR_DESC_EXTENSION, MOVE_EXTENSION};
 
@@ -86,14 +86,8 @@ pub fn stdlib_bytecode_files() -> Vec<String> {
 }
 
 pub(crate) fn build_stdlib() -> BTreeMap<String, CompiledModule> {
-    let (_files, compiled_units) = move_compile_and_report(
-        &diem_stdlib_files(),
-        &[],
-        Some(Address::DIEM_CORE),
-        None,
-        false,
-    )
-    .unwrap();
+    let (_files, compiled_units) =
+        move_compile_and_report(&diem_stdlib_files(), &[], None, Flags::empty()).unwrap();
     let mut modules = BTreeMap::new();
     for (i, compiled_unit) in compiled_units.into_iter().enumerate() {
         let name = compiled_unit.name();

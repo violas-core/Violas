@@ -5,24 +5,23 @@ use super::{context::*, remove_fallthrough_jumps};
 use crate::{
     cfgir::ast as G,
     compiled_unit::*,
-    errors::*,
-    expansion::ast::{AbilitySet, SpecId, Value_},
+    expansion::ast::{AbilitySet, Address, ModuleIdent, ModuleIdent_, SpecId, Value_},
     hlir::{
         ast::{self as H},
         translate::{display_var, DisplayVar},
     },
     naming::ast::{BuiltinTypeName_, TParam},
     parser::ast::{
-        Ability, Ability_, BinOp, BinOp_, ConstantName, Field, FunctionName, FunctionVisibility,
-        ModuleIdent, StructName, UnaryOp, UnaryOp_, Var,
+        Ability, Ability_, BinOp, BinOp_, ConstantName, Field, FunctionName, StructName, UnaryOp,
+        UnaryOp_, Var, Visibility,
     },
     shared::{unique_map::UniqueMap, *},
     FullyCompiledProgram,
 };
 use bytecode_source_map::source_map::SourceMap;
+use move_binary_format::file_format as F;
 use move_core_types::account_address::AccountAddress as MoveAddress;
 use move_ir_types::{ast as IR, location::*};
-use move_vm::file_format as F;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 type CollectedInfos = UniqueMap<FunctionName, CollectedInfo>;
@@ -32,6 +31,7 @@ type CollectedInfo = (
 );
 
 fn extract_decls(
+    compilation_env: &mut CompilationEnv,
     pre_compiled_lib: Option<&FullyCompiledProgram>,
     prog: &G::Program,
 ) -> (
@@ -83,15 +83,17 @@ fn extract_decls(
             })
         })
         .collect();
+    let context = &mut Context::new(compilation_env, &prog.addresses, None);
     let fdecls = all_modules()
         .flat_map(|(m, mdef)| {
             mdef.functions.key_cloned_iter().map(move |(f, fdef)| {
                 let key = (m.clone(), f);
                 let seen = seen_structs(&fdef.signature);
-                let sig = function_signature(&mut Context::new(None), fdef.signature.clone());
-                (key, (seen, sig))
+                let gsig = fdef.signature.clone();
+                (key, (seen, gsig))
             })
         })
+        .map(|(key, (seen, gsig))| (key, (seen, function_signature(context, gsig))))
         .collect();
     (orderings, sdecls, fdecls)
 }
@@ -101,14 +103,15 @@ fn extract_decls(
 //**************************************************************************************************
 
 pub fn program(
+    compilation_env: &mut CompilationEnv,
     pre_compiled_lib: Option<&FullyCompiledProgram>,
     prog: G::Program,
-) -> Result<Vec<CompiledUnit>, Errors> {
+) -> Vec<CompiledUnit> {
     let mut units = vec![];
-    let mut errors = vec![];
 
-    let (orderings, sdecls, fdecls) = extract_decls(pre_compiled_lib, &prog);
+    let (orderings, sdecls, fdecls) = extract_decls(compilation_env, pre_compiled_lib, &prog);
     let G::Program {
+        addresses,
         modules: gmodules,
         scripts: gscripts,
     } = prog;
@@ -119,19 +122,29 @@ pub fn program(
         .collect::<Vec<_>>();
     source_modules.sort_by_key(|(_, mdef)| mdef.dependency_order);
     for (m, mdef) in source_modules {
-        match module(m, mdef, &orderings, &sdecls, &fdecls) {
-            Ok(unit) => units.push(unit),
-            Err(err) => errors.push(err),
+        if let Some(unit) = module(
+            compilation_env,
+            &addresses,
+            m,
+            mdef,
+            &orderings,
+            &sdecls,
+            &fdecls,
+        ) {
+            units.push(unit)
         }
     }
     for (key, s) in gscripts {
         let G::Script {
-            loc: _,
+            attributes: _attributes,
+            loc: _loc,
             constants,
             function_name,
             function,
         } = s;
-        match script(
+        if let Some(unit) = script(
+            compilation_env,
+            &addresses,
             key,
             constants,
             function_name,
@@ -140,15 +153,15 @@ pub fn program(
             &sdecls,
             &fdecls,
         ) {
-            Ok(unit) => units.push(unit),
-            Err(err) => errors.push(err),
+            units.push(unit)
         }
     }
-    check_errors(errors)?;
-    Ok(units)
+    units
 }
 
 fn module(
+    compilation_env: &mut CompilationEnv,
+    addresses: &UniqueMap<Name, AddressBytes>,
     ident: ModuleIdent,
     mdef: G::ModuleDefinition,
     dependency_orderings: &HashMap<ModuleIdent, usize>,
@@ -163,8 +176,8 @@ fn module(
         (ModuleIdent, FunctionName),
         (BTreeSet<(ModuleIdent, StructName)>, IR::FunctionSignature),
     >,
-) -> Result<CompiledUnit, Error> {
-    let mut context = Context::new(Some(&ident));
+) -> Option<CompiledUnit> {
+    let mut context = Context::new(compilation_env, addresses, Some(&ident));
     let structs = mdef
         .structs
         .into_iter()
@@ -187,21 +200,33 @@ fn module(
         })
         .collect();
 
-    let addr = MoveAddress::new(ident.value.0.to_u8());
-    let mname = ident.value.1.clone();
     let friends = mdef
         .friends
         .into_iter()
-        .map(|(mident, _loc)| Context::translate_module_ident(mident))
+        .filter_map(|(mident, _loc)| context.translate_module_ident(mident))
         .collect();
+
+    let addr_name = match &ident.value.address {
+        Address::Anonymous(_) => None,
+        Address::Named(n) => Some(n.clone()),
+    };
+    let addr_bytes =
+        context.resolve_address(ident.loc, ident.value.address.clone(), "module declaration")?;
     let (imports, explicit_dependency_declarations) = context.materialize(
         dependency_orderings,
         struct_declarations,
         function_declarations,
     );
 
+    let sp!(
+        ident_loc,
+        ModuleIdent_ {
+            address: _,
+            module: module_name
+        }
+    ) = ident;
     let ir_module = IR::ModuleDefinition {
-        name: IR::ModuleName::new(mname),
+        name: IR::ModuleName::new(module_name.0.value.clone()),
         friends,
         imports,
         explicit_dependency_declarations,
@@ -211,11 +236,18 @@ fn module(
         synthetics: vec![],
     };
     let deps: Vec<&F::CompiledModule> = vec![];
-    let (module, source_map) = ir_to_bytecode::compiler::compile_module(addr, ir_module, deps)
-        .map_err(|e| vec![(ident.loc(), format!("IR ERROR: {}", e))])?;
+    let addr = MoveAddress::new(addr_bytes.into_bytes());
+    let (module, source_map) = match ir_to_bytecode::compiler::compile_module(addr, ir_module, deps)
+    {
+        Ok(res) => res,
+        Err(e) => {
+            compilation_env.add_error(vec![(ident_loc, format!("ICE. IR ERROR: {}", e))]);
+            return None;
+        }
+    };
     let function_infos = module_function_infos(&module, &source_map, &collected_function_infos);
-    Ok(CompiledUnit::Module {
-        ident,
+    Some(CompiledUnit::Module {
+        ident: CompiledModuleIdent::new(ident_loc, addr_name, addr_bytes, module_name),
         module,
         source_map,
         function_infos,
@@ -223,6 +255,8 @@ fn module(
 }
 
 fn script(
+    compilation_env: &mut CompilationEnv,
+    addresses: &UniqueMap<Name, AddressBytes>,
     key: String,
     constants: UniqueMap<ConstantName, G::Constant>,
     name: FunctionName,
@@ -239,9 +273,9 @@ fn script(
         (ModuleIdent, FunctionName),
         (BTreeSet<(ModuleIdent, StructName)>, IR::FunctionSignature),
     >,
-) -> Result<CompiledUnit, Error> {
+) -> Option<CompiledUnit> {
     let loc = name.loc();
-    let mut context = Context::new(None);
+    let mut context = Context::new(compilation_env, addresses, None);
 
     let constants = constants
         .into_iter()
@@ -262,10 +296,16 @@ fn script(
         main,
     };
     let deps: Vec<&F::CompiledModule> = vec![];
-    let (script, source_map) = ir_to_bytecode::compiler::compile_script(None, ir_script, deps)
-        .map_err(|e| vec![(loc, format!("IR ERROR: {}", e))])?;
+    let (script, source_map) = match ir_to_bytecode::compiler::compile_script(None, ir_script, deps)
+    {
+        Ok(res) => res,
+        Err(e) => {
+            compilation_env.add_error(vec![(loc, format!("IR ERROR: {}", e))]);
+            return None;
+        }
+    };
     let function_info = script_function_info(&source_map, info);
-    Ok(CompiledUnit::Script {
+    Some(CompiledUnit::Script {
         loc,
         key,
         script,
@@ -319,8 +359,8 @@ fn function_info_map(
         })
         .collect();
     let function_info = FunctionInfo {
-        parameters,
         spec_info,
+        parameters,
     };
 
     let name_loc = *collected_function_infos.get_loc_(&name).unwrap();
@@ -352,8 +392,8 @@ fn script_function_info(
         })
         .collect();
     FunctionInfo {
-        parameters,
         spec_info,
+        parameters,
     }
 }
 
@@ -393,6 +433,7 @@ fn struct_def(
     sdef: H::StructDefinition,
 ) -> IR::StructDefinition {
     let H::StructDefinition {
+        attributes: _attributes,
         abilities: abs,
         type_parameters: tys,
         fields,
@@ -472,6 +513,7 @@ fn function(
     fdef: G::Function,
 ) -> ((IR::FunctionName, IR::Function), CollectedInfo) {
     let G::Function {
+        attributes: _attributes,
         visibility: v,
         signature,
         acquires,
@@ -518,12 +560,12 @@ fn function(
     )
 }
 
-fn visibility(v: FunctionVisibility) -> IR::FunctionVisibility {
+fn visibility(v: Visibility) -> IR::FunctionVisibility {
     match v {
-        FunctionVisibility::Public(_) => IR::FunctionVisibility::Public,
-        FunctionVisibility::Script(_) => IR::FunctionVisibility::Script,
-        FunctionVisibility::Friend(_) => IR::FunctionVisibility::Friend,
-        FunctionVisibility::Internal => IR::FunctionVisibility::Internal,
+        Visibility::Public(_) => IR::FunctionVisibility::Public,
+        Visibility::Script(_) => IR::FunctionVisibility::Script,
+        Visibility::Friend(_) => IR::FunctionVisibility::Friend,
+        Visibility::Internal => IR::FunctionVisibility::Internal,
     }
 }
 
@@ -870,7 +912,13 @@ fn exp_(context: &mut Context, code: &mut IR::BytecodeBlock, e: H::Exp) {
             code.push(sp(
                 loc,
                 match v.value {
-                    V::Address(a) => B::LdAddr(MoveAddress::new(a.to_u8())),
+                    V::InferredNum(_) => panic!("ICE inferred num should have been expanded"),
+                    V::Address(a) => {
+                        let addr_bytes = context
+                            .resolve_address(loc, a, "address value")
+                            .unwrap_or(AddressBytes::DEFAULT_ERROR_BYTES);
+                        B::LdAddr(MoveAddress::new(addr_bytes.into_bytes()))
+                    }
                     V::Bytearray(bytes) => B::LdByteArray(bytes),
                     V::U8(u) => B::LdU8(u),
                     V::U64(u) => B::LdU64(u),

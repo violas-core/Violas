@@ -10,9 +10,9 @@ jobs:
     name: (hyperjump) labels
     steps:
       - name: checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v2.3.4
       - name: labels
-        uses: diem/actions/hyperjump-labels@faa14430e68d54a269628f385e69a207e4e413d5
+        uses: diem/actions/hyperjump-labels@a5fa31ff2b54a544cd88ac912cda469742592e6c
         with:
           github-token: ${{ secrets.HYPERJUMP_TOKEN }}
           number: ${{ github.event.client_payload.number }}

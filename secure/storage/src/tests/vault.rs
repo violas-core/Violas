@@ -3,8 +3,11 @@
 
 use crate::{
     tests::suite,
-    vault::{VaultEngine, VaultStorage},
-    Capability, CryptoStorage, Error, Identity, KVStorage, Permission, Policy, Storage,
+    vault::{
+        policy::{VaultEngine, VaultPolicy},
+        VaultStorage,
+    },
+    Capability, CryptoStorage, Error, Identity, KVStorage, Namespaced, Permission, Policy, Storage,
 };
 use diem_crypto::{test_utils::TestDiemCrypto, Signature};
 use diem_vault_client::dev::{self, ROOT_TOKEN};
@@ -53,7 +56,7 @@ fn execute_storage_tests_vault() {
     if dev::test_host_safe().is_none() {
         return;
     }
-    let mut storage = create_vault_with_namespace(None);
+    let mut storage = create_vault();
     storage.reset_and_clear().unwrap();
 
     for test in VAULT_TESTS.iter() {
@@ -64,16 +67,16 @@ fn execute_storage_tests_vault() {
 
 /// Runs the test suite on a VaultStorage instance that does not use distinct namespaces
 fn test_suite_no_namespaces() {
-    let mut storage = Storage::from(create_vault_with_namespace(None));
+    let mut storage = Storage::from(create_vault());
     suite::execute_all_storage_tests(&mut storage);
 }
 
 /// Runs the test suite on a VaultStorage instance that supports multiple distinct namespaces.
 /// Tests should be able to run across namespaces without interfering.
 fn test_suite_multiple_namespaces() {
-    let mut storage_1 = Storage::from(create_vault_with_namespace(Some(VAULT_NAMESPACE_1.into())));
-    let mut storage_2 = Storage::from(create_vault_with_namespace(Some(VAULT_NAMESPACE_2.into())));
-    let mut storage_3 = Storage::from(create_vault_with_namespace(Some(VAULT_NAMESPACE_3.into())));
+    let mut storage_1 = Storage::from(create_vault_with_namespace(VAULT_NAMESPACE_1));
+    let mut storage_2 = Storage::from(create_vault_with_namespace(VAULT_NAMESPACE_2));
+    let mut storage_3 = Storage::from(create_vault_with_namespace(VAULT_NAMESPACE_3));
 
     suite::execute_all_storage_tests(&mut storage_1);
     suite::execute_all_storage_tests(&mut storage_2);
@@ -82,20 +85,18 @@ fn test_suite_multiple_namespaces() {
 
 /// Creates and initializes a VaultStorage instance for testing. If a namespace is specified, the
 /// instance will perform all storage operations under that namespace.
-fn create_vault_with_namespace(namespace: Option<String>) -> VaultStorage {
-    create_vault_storage(ROOT_TOKEN.into(), namespace, None, true)
+fn create_vault_with_namespace(namespace: &str) -> Namespaced<Box<Storage>> {
+    Namespaced::new(namespace, Box::new(Storage::from(create_vault())))
 }
 
-fn create_vault_storage(
-    token: String,
-    namespace: Option<String>,
-    renew_ttl_secs: Option<u32>,
-    use_cas: bool,
-) -> VaultStorage {
+fn create_vault() -> VaultStorage {
+    create_vault_storage(ROOT_TOKEN.into(), None, true)
+}
+
+fn create_vault_storage(token: String, renew_ttl_secs: Option<u32>, use_cas: bool) -> VaultStorage {
     VaultStorage::new(
         dev::test_host(),
         token,
-        namespace,
         None,
         renew_ttl_secs,
         use_cas,
@@ -104,10 +105,14 @@ fn create_vault_storage(
     )
 }
 
+fn create_vault_policy_with_namespace(namespace: Option<String>) -> VaultPolicy {
+    VaultPolicy::new(create_vault(), namespace)
+}
+
 /// Initializes test policies for a VaultStorage instance and checks the instance is
 /// accessible (e.g., by ensuring subsequent read and write operations complete successfully).
 fn test_vault_key_value_policies() {
-    let mut storage = create_vault_with_namespace(None);
+    let mut storage = create_vault_policy_with_namespace(None);
 
     let anyone = Policy::public();
     let root = Policy::new(vec![]);
@@ -160,14 +165,14 @@ fn test_vault_key_value_policies() {
     assert_eq!(storage.get::<u64>(FULL).unwrap().value, 4);
 
     let writer_token = storage.create_token(vec![&WRITER]).unwrap();
-    let mut writer = create_vault_storage(writer_token.clone(), None, ttl, false);
+    let mut writer = create_vault_storage(writer_token.clone(), ttl, false);
     assert_eq!(writer.get::<u64>(ANYONE).unwrap().value, 1);
     assert_eq!(writer.get::<u64>(ROOT), Err(Error::PermissionDenied));
     assert_eq!(writer.get::<u64>(PARTIAL).unwrap().value, 3);
     assert_eq!(writer.get::<u64>(FULL).unwrap().value, 4);
 
     let reader_token = storage.create_token(vec![&READER]).unwrap();
-    let mut reader = create_vault_storage(reader_token.clone(), None, ttl, false);
+    let mut reader = create_vault_storage(reader_token.clone(), ttl, false);
     assert_eq!(reader.get::<u64>(ANYONE).unwrap().value, 1);
     assert_eq!(reader.get::<u64>(ROOT), Err(Error::PermissionDenied));
     assert_eq!(reader.get::<u64>(PARTIAL).unwrap().value, 3);
@@ -195,8 +200,10 @@ fn test_vault_key_value_policies() {
     assert_eq!(storage.get::<u64>(FULL).unwrap().value, 12);
 
     // Verify a reader with another namespace has no permission for the operations
-    let mut reader_with_namespace =
-        create_vault_storage(reader_token, Some(VAULT_NAMESPACE_1.into()), ttl, false);
+    let mut reader_with_namespace = Namespaced::new(
+        VAULT_NAMESPACE_1,
+        create_vault_storage(reader_token, ttl, false),
+    );
     assert_eq!(
         reader_with_namespace.get::<u64>(ANYONE),
         Err(Error::PermissionDenied)
@@ -207,8 +214,10 @@ fn test_vault_key_value_policies() {
     );
 
     // Verify a writer with another namespace has no permission for the operations
-    let mut writer_with_namespace =
-        create_vault_storage(writer_token, Some(VAULT_NAMESPACE_1.into()), ttl, false);
+    let mut writer_with_namespace = Namespaced::new(
+        VAULT_NAMESPACE_1,
+        create_vault_storage(writer_token, ttl, false),
+    );
     assert_eq!(
         writer_with_namespace.get::<u64>(ANYONE),
         Err(Error::PermissionDenied)
@@ -220,7 +229,7 @@ fn test_vault_key_value_policies() {
 }
 
 fn test_vault_crypto_policies() {
-    let mut storage = create_vault_with_namespace(None);
+    let mut storage = create_vault_policy_with_namespace(None);
 
     let policy = Policy::new(vec![
         Permission::new(Identity::User(EXPORTER.into()), vec![Capability::Export]),
@@ -246,21 +255,23 @@ fn test_vault_crypto_policies() {
 
     // Verify exporter policy
     let exporter_token = storage.create_token(vec![&EXPORTER]).unwrap();
-    let mut exporter_store = create_vault_storage(exporter_token.clone(), None, None, true);
+    let mut exporter_store = create_vault_storage(exporter_token.clone(), None, true);
     exporter_store.export_private_key(CRYPTO_KEY).unwrap();
     exporter_store.get_public_key(CRYPTO_KEY).unwrap_err();
     exporter_store.rotate_key(CRYPTO_KEY).unwrap_err();
     exporter_store.sign(CRYPTO_KEY, &message).unwrap_err();
     // Verify a exporter with another namespace has no permission for the operations
-    let exporter_store_with_namespace =
-        create_vault_storage(exporter_token, Some(VAULT_NAMESPACE_1.into()), None, true);
+    let exporter_store_with_namespace = Namespaced::new(
+        VAULT_NAMESPACE_1,
+        create_vault_storage(exporter_token, None, true),
+    );
     exporter_store_with_namespace
         .export_private_key(CRYPTO_KEY)
         .unwrap_err();
 
     // Verify noone policy
     let noone_token = storage.create_token(vec![&NOONE]).unwrap();
-    let mut noone_store = create_vault_storage(noone_token, None, None, true);
+    let mut noone_store = create_vault_storage(noone_token, None, true);
     noone_store.export_private_key(CRYPTO_KEY).unwrap_err();
     noone_store.get_public_key(CRYPTO_KEY).unwrap_err();
     noone_store.rotate_key(CRYPTO_KEY).unwrap_err();
@@ -268,7 +279,7 @@ fn test_vault_crypto_policies() {
 
     // Verify reader policy
     let reader_token = storage.create_token(vec![&READER]).unwrap();
-    let mut reader_store = create_vault_storage(reader_token.clone(), None, None, true);
+    let mut reader_store = create_vault_storage(reader_token.clone(), None, true);
     reader_store.export_private_key(CRYPTO_KEY).unwrap_err();
     assert_eq!(
         reader_store.get_public_key(CRYPTO_KEY).unwrap().public_key,
@@ -277,15 +288,17 @@ fn test_vault_crypto_policies() {
     reader_store.rotate_key(CRYPTO_KEY).unwrap_err();
     reader_store.sign(CRYPTO_KEY, &message).unwrap_err();
     // Verify a reader with another namespace has no permission for the operations
-    let reader_store_with_namespace =
-        create_vault_storage(reader_token, Some(VAULT_NAMESPACE_1.into()), None, true);
+    let reader_store_with_namespace = Namespaced::new(
+        VAULT_NAMESPACE_1,
+        create_vault_storage(reader_token, None, true),
+    );
     reader_store_with_namespace
         .get_public_key(CRYPTO_KEY)
         .unwrap_err();
 
     // Verify rotater policy
     let rotater_token = storage.create_token(vec![&ROTATER]).unwrap();
-    let mut rotater_store = create_vault_storage(rotater_token.clone(), None, None, true);
+    let mut rotater_store = create_vault_storage(rotater_token.clone(), None, true);
     rotater_store.export_private_key(CRYPTO_KEY).unwrap_err();
     assert_eq!(
         rotater_store.get_public_key(CRYPTO_KEY).unwrap().public_key,
@@ -294,8 +307,10 @@ fn test_vault_crypto_policies() {
     assert_ne!(rotater_store.rotate_key(CRYPTO_KEY).unwrap(), pubkey);
     rotater_store.sign(CRYPTO_KEY, &message).unwrap_err();
     // Verify a rotater with another namespace has no permission for the operations
-    let mut rotater_store_with_namespace =
-        create_vault_storage(rotater_token, Some(VAULT_NAMESPACE_1.into()), None, true);
+    let mut rotater_store_with_namespace = Namespaced::new(
+        VAULT_NAMESPACE_1,
+        create_vault_storage(rotater_token, None, true),
+    );
     rotater_store_with_namespace
         .rotate_key(CRYPTO_KEY)
         .unwrap_err();
@@ -304,7 +319,7 @@ fn test_vault_crypto_policies() {
 
     // Verify signer policy
     let signer_token = storage.create_token(vec![&SIGNER]).unwrap();
-    let mut signer_store = create_vault_storage(signer_token.clone(), None, None, true);
+    let mut signer_store = create_vault_storage(signer_token.clone(), None, true);
     signer_store.export_private_key(CRYPTO_KEY).unwrap_err();
     signer_store.get_public_key(CRYPTO_KEY).unwrap_err();
     signer_store.rotate_key(CRYPTO_KEY).unwrap_err();
@@ -312,15 +327,17 @@ fn test_vault_crypto_policies() {
     signature.verify(&message, &pubkey).unwrap_err();
     signature.verify(&message, &new_pubkey).unwrap();
     // Verify a signer with another namespace has no permission for the operations
-    let signer_store_with_namespace =
-        create_vault_storage(signer_token, Some(VAULT_NAMESPACE_1.into()), None, true);
+    let signer_store_with_namespace = Namespaced::new(
+        VAULT_NAMESPACE_1,
+        create_vault_storage(signer_token, None, true),
+    );
     signer_store_with_namespace
         .sign(CRYPTO_KEY, &message)
         .unwrap_err();
 }
 
 fn test_vault_tokens() {
-    let mut storage = create_vault_with_namespace(Some(VAULT_NAMESPACE_1.into()));
+    let mut storage = create_vault_policy_with_namespace(Some(VAULT_NAMESPACE_1.into()));
 
     let partial = Policy::new(vec![Permission::new(
         Identity::User(WRITER.into()),
@@ -334,11 +351,9 @@ fn test_vault_tokens() {
         .unwrap();
 
     let writer_token = storage.create_token(vec![&WRITER]).unwrap();
-    let mut writer = create_vault_storage(
-        writer_token.clone(),
-        Some(VAULT_NAMESPACE_1.into()),
-        None,
-        true,
+    let mut writer = Namespaced::new(
+        VAULT_NAMESPACE_1,
+        create_vault_storage(writer_token.clone(), None, true),
     );
 
     // Verify reads and write succeed
@@ -346,7 +361,7 @@ fn test_vault_tokens() {
     writer.set::<u64>(PARTIAL, 5).unwrap();
 
     // Verify a writer without a namespace has no permission for the operations
-    let mut writer_without_namespace = create_vault_storage(writer_token, None, None, true);
+    let mut writer_without_namespace = create_vault_storage(writer_token, None, true);
     assert_eq!(
         writer_without_namespace.get::<u64>(PARTIAL),
         Err(Error::PermissionDenied)
@@ -357,22 +372,20 @@ fn test_vault_tokens() {
     );
 
     // Revoke the token and verify failure
-    writer.revoke_token_self().unwrap();
+    writer.inner().revoke_token_self().unwrap();
     assert_eq!(writer.get::<u64>(PARTIAL), Err(Error::PermissionDenied));
 
     // Try to use an invalid token and verify failure
-    let writer = create_vault_storage(
-        "INVALID TOKEN".into(),
-        Some(VAULT_NAMESPACE_1.into()),
-        None,
-        true,
+    let writer = Namespaced::new(
+        VAULT_NAMESPACE_1,
+        create_vault_storage("INVALID TOKEN".into(), None, true),
     );
     assert_eq!(writer.get::<u64>(PARTIAL), Err(Error::PermissionDenied));
 }
 
 fn test_vault_cas() {
-    let mut with_cas = create_vault_with_namespace(None);
-    let mut without_cas = create_vault_storage(ROOT_TOKEN.into(), None, None, false);
+    let mut with_cas = create_vault();
+    let mut without_cas = create_vault_storage(ROOT_TOKEN.into(), None, false);
     // Test initial write with no version
     with_cas.set("test", 1).unwrap();
     assert_eq!(with_cas.get::<u64>("test").unwrap().value, 1);
@@ -400,7 +413,7 @@ fn test_vault_cas() {
 }
 
 fn test_vault_key_trimming() {
-    let mut storage = create_vault_with_namespace(None);
+    let mut storage = create_vault();
 
     // Create key
     let _ = storage.create_key(CRYPTO_KEY).unwrap();

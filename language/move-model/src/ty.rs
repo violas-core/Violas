@@ -30,7 +30,7 @@ pub enum Type {
     // Types only appearing in specifications
     Fun(Vec<Type>, Box<Type>),
     TypeDomain(Box<Type>),
-    ResourceDomain(ModuleId, StructId),
+    ResourceDomain(ModuleId, StructId, Option<Vec<Type>>),
     TypeLocal(Symbol),
 
     // Temporary types used during type checking
@@ -169,6 +169,18 @@ impl Type {
         }
         false
     }
+    /// Returns true if this is an address or signer type.
+    pub fn is_signer_or_address(&self) -> bool {
+        matches!(
+            self,
+            Type::Primitive(PrimitiveType::Signer) | Type::Primitive(PrimitiveType::Address)
+        )
+    }
+
+    /// Return true if this is an account address
+    pub fn is_address(&self) -> bool {
+        matches!(self, Type::Primitive(PrimitiveType::Address))
+    }
 
     /// Skip reference type.
     pub fn skip_reference(&self) -> &Type {
@@ -204,7 +216,7 @@ impl Type {
         if let Type::Struct(mid, sid, targs) = self {
             (*mid, *sid, targs.as_slice())
         } else {
-            panic!("expected a Type::Struct")
+            panic!("expected `Type::Struct`, found: `{:?}`", self)
         }
     }
 
@@ -213,13 +225,48 @@ impl Type {
         if params.is_empty() {
             self.clone()
         } else {
-            self.replace(Some(params), None)
+            self.replace(Some(params), None, None)
         }
     }
 
+    /// Instantiate type parameters in the vector of types.
+    pub fn instantiate_vec(vec: Vec<Type>, params: &[Type]) -> Vec<Type> {
+        if params.is_empty() {
+            vec
+        } else {
+            vec.into_iter().map(|ty| ty.instantiate(params)).collect()
+        }
+    }
+
+    /// Instantiate type parameters in the slice of types.
+    pub fn instantiate_slice(slice: &[Type], params: &[Type]) -> Vec<Type> {
+        if params.is_empty() {
+            slice.to_owned()
+        } else {
+            slice.iter().map(|ty| ty.instantiate(params)).collect()
+        }
+    }
+
+    /// Replace the given type local.
+    pub fn replace_type_local(&self, local: Symbol, repl: Type) -> Type {
+        let mut subs = BTreeMap::new();
+        subs.insert(local, repl);
+        self.replace(None, None, Some(&subs))
+    }
+
     /// A helper function to do replacement of type parameters and/or type variables.
-    fn replace(&self, params: Option<&[Type]>, subs: Option<&Substitution>) -> Type {
-        let replace_vec = |types: &[Type]| types.iter().map(|t| t.replace(params, subs)).collect();
+    fn replace(
+        &self,
+        params: Option<&[Type]>,
+        subs: Option<&Substitution>,
+        type_local_subs: Option<&BTreeMap<Symbol, Type>>,
+    ) -> Type {
+        let replace_vec = |types: &[Type]| {
+            types
+                .iter()
+                .map(|t| t.replace(params, subs, type_local_subs))
+                .collect()
+        };
         match self {
             Type::TypeParameter(i) => {
                 if let Some(ps) = params {
@@ -235,7 +282,18 @@ impl Type {
                         // refers to type variables.
                         // TODO: a more efficient approach is to maintain that type assignments
                         // are always fully specialized w.r.t. to the substitution.
-                        t.replace(params, subs)
+                        t.replace(params, subs, type_local_subs)
+                    } else {
+                        self.clone()
+                    }
+                } else {
+                    self.clone()
+                }
+            }
+            Type::TypeLocal(sym) => {
+                if let Some(subs) = type_local_subs {
+                    if let Some(t) = subs.get(sym) {
+                        t.clone()
                     } else {
                         self.clone()
                     }
@@ -244,18 +302,19 @@ impl Type {
                 }
             }
             Type::Reference(is_mut, bt) => {
-                Type::Reference(*is_mut, Box::new(bt.replace(params, subs)))
+                Type::Reference(*is_mut, Box::new(bt.replace(params, subs, type_local_subs)))
             }
             Type::Struct(mid, sid, args) => Type::Struct(*mid, *sid, replace_vec(args)),
-            Type::Fun(args, result) => {
-                Type::Fun(replace_vec(args), Box::new(result.replace(params, subs)))
-            }
+            Type::Fun(args, result) => Type::Fun(
+                replace_vec(args),
+                Box::new(result.replace(params, subs, type_local_subs)),
+            ),
             Type::Tuple(args) => Type::Tuple(replace_vec(args)),
-            Type::Vector(et) => Type::Vector(Box::new(et.replace(params, subs))),
-            Type::TypeDomain(et) => Type::TypeDomain(Box::new(et.replace(params, subs))),
-            Type::ResourceDomain(..) | Type::Primitive(..) | Type::TypeLocal(..) | Type::Error => {
-                self.clone()
+            Type::Vector(et) => Type::Vector(Box::new(et.replace(params, subs, type_local_subs))),
+            Type::TypeDomain(et) => {
+                Type::TypeDomain(Box::new(et.replace(params, subs, type_local_subs)))
             }
+            Type::ResourceDomain(..) | Type::Primitive(..) | Type::Error => self.clone(),
         }
     }
 
@@ -374,7 +433,7 @@ impl Type {
     }
 
     /// Create a `Type` from `t`
-    pub fn from_type_tag(t: TypeTag, env: &GlobalEnv) -> Self {
+    pub fn from_type_tag(t: &TypeTag, env: &GlobalEnv) -> Self {
         use Type::*;
         match t {
             TypeTag::Bool => Primitive(PrimitiveType::Bool),
@@ -389,12 +448,12 @@ impl Type {
                 });
                 let type_args = s
                     .type_params
-                    .into_iter()
+                    .iter()
                     .map(|arg| Self::from_type_tag(arg, env))
                     .collect();
                 Struct(qid.module_id, qid.id, type_args)
             }
-            TypeTag::Vector(type_param) => Vector(Box::new(Self::from_type_tag(*type_param, env))),
+            TypeTag::Vector(type_param) => Vector(Box::new(Self::from_type_tag(type_param, env))),
         }
     }
 
@@ -423,6 +482,36 @@ impl Type {
             Error | Primitive(..) | TypeParameter(..) | TypeLocal(..) | ResourceDomain(..) => {}
         }
     }
+
+    pub fn visit<F: FnMut(&Type)>(&self, visitor: &mut F) {
+        let visit_slice = |s: &[Type], visitor: &mut F| {
+            for ty in s {
+                ty.visit(visitor);
+            }
+        };
+        match self {
+            Type::Tuple(tys) => visit_slice(tys, visitor),
+            Type::Vector(bt) => bt.visit(visitor),
+            Type::Struct(_, _, tys) => visit_slice(tys, visitor),
+            Type::Reference(_, ty) => ty.visit(visitor),
+            Type::Fun(tys, ty) => {
+                visit_slice(tys, visitor);
+                ty.visit(visitor);
+            }
+            Type::TypeDomain(bt) => bt.visit(visitor),
+            _ => {}
+        }
+        visitor(self)
+    }
+}
+
+/// A parameter for type unification, indicating whether the outest types are allowed for
+/// co-variance. Types used in instantiations are always unified in `Variance::Disallow`
+/// mode, that is, co-variance is not allowed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Variance {
+    Allow,
+    Disallow,
 }
 
 impl Substitution {
@@ -440,7 +529,7 @@ impl Substitution {
 
     /// Specializes the type, substituting all variables bound in this substitution.
     pub fn specialize(&self, t: &Type) -> Type {
-        t.replace(None, Some(self))
+        t.replace(None, Some(self), None)
     }
 
     /// Unify two types, returning the unified type.
@@ -448,7 +537,7 @@ impl Substitution {
     /// This currently implements the following notion of type compatibility:
     ///
     /// - References are dropped (i.e. &T and T are compatible)
-    /// - All integer types are compatible.
+    /// - All integer types are compatible if co-variance is allowed.
     ///
     /// The substitution will be refined by variable assignments as needed to perform
     /// unification. If unification fails, the substitution will be in some intermediate state;
@@ -459,6 +548,7 @@ impl Substitution {
     pub fn unify<'a>(
         &mut self,
         display_context: &'a TypeDisplayContext<'a>,
+        variance: Variance,
         t1: &Type,
         t2: &Type,
     ) -> Result<Type, TypeError> {
@@ -473,21 +563,25 @@ impl Substitution {
             };
             return Ok(Type::Reference(
                 *is_mut,
-                Box::new(self.unify(display_context, bt1.as_ref(), t2)?),
+                Box::new(self.unify(display_context, Variance::Disallow, bt1.as_ref(), t2)?),
             ));
         }
         if let Type::Reference(is_mut, bt2) = t2 {
             return Ok(Type::Reference(
                 *is_mut,
-                Box::new(self.unify(display_context, t1, bt2.as_ref())?),
+                Box::new(self.unify(display_context, Variance::Disallow, t1, bt2.as_ref())?),
             ));
         }
 
         // Substitute or assign variables.
-        if let Some(rt) = self.try_substitute_or_assign(display_context, false, &t1, &t2)? {
+        if let Some(rt) =
+            self.try_substitute_or_assign(display_context, variance, false, &t1, &t2)?
+        {
             return Ok(rt);
         }
-        if let Some(rt) = self.try_substitute_or_assign(display_context, true, &t2, &t1)? {
+        if let Some(rt) =
+            self.try_substitute_or_assign(display_context, variance, true, &t2, &t1)?
+        {
             return Ok(rt);
         }
 
@@ -499,8 +593,8 @@ impl Substitution {
             return Ok(t1.clone());
         }
 
-        // All number types are currently compatible.
-        if t1.is_number() && t2.is_number() {
+        // All number types are compatible if variance is allowed.
+        if variance == Variance::Allow && t1.is_number() && t2.is_number() {
             return Ok(t1.clone());
         }
 
@@ -527,7 +621,7 @@ impl Substitution {
             (Type::Fun(ts1, r1), Type::Fun(ts2, r2)) => {
                 return Ok(Type::Fun(
                     self.unify_vec(display_context, ts1, ts2, "functions")?,
-                    Box::new(self.unify(display_context, &*r1, &*r2)?),
+                    Box::new(self.unify(display_context, Variance::Disallow, &*r1, &*r2)?),
                 ));
             }
             (Type::Struct(m1, s1, ts1), Type::Struct(m2, s2, ts2)) => {
@@ -542,6 +636,7 @@ impl Substitution {
             (Type::Vector(e1), Type::Vector(e2)) => {
                 return Ok(Type::Vector(Box::new(self.unify(
                     display_context,
+                    Variance::Disallow,
                     &*e1,
                     &*e2,
                 )?)));
@@ -549,6 +644,7 @@ impl Substitution {
             (Type::TypeDomain(e1), Type::TypeDomain(e2)) => {
                 return Ok(Type::TypeDomain(Box::new(self.unify(
                     display_context,
+                    Variance::Disallow,
                     &*e1,
                     &*e2,
                 )?)));
@@ -586,7 +682,7 @@ impl Substitution {
         }
         let mut rs = vec![];
         for i in 0..ts1.len() {
-            rs.push(self.unify(display_context, &ts1[i], &ts2[i])?);
+            rs.push(self.unify(display_context, Variance::Disallow, &ts1[i], &ts2[i])?);
         }
         Ok(rs)
     }
@@ -596,6 +692,7 @@ impl Substitution {
     fn try_substitute_or_assign(
         &mut self,
         display_context: &TypeDisplayContext,
+        variance: Variance,
         swapped: bool,
         t1: &Type,
         t2: &Type,
@@ -605,9 +702,9 @@ impl Substitution {
                 return if swapped {
                     // Place the type terms in the right order again, so we
                     // get the 'expected vs actual' direction right.
-                    Ok(Some(self.unify(display_context, t2, &s1)?))
+                    Ok(Some(self.unify(display_context, variance, t2, &s1)?))
                 } else {
-                    Ok(Some(self.unify(display_context, &s1, t2)?))
+                    Ok(Some(self.unify(display_context, variance, &s1, t2)?))
                 };
             }
             let is_t1_var = |t: &Type| {
@@ -628,9 +725,10 @@ impl Substitution {
             } else {
                 // It is not clear to me whether this can ever occur given we do no global
                 // unification with recursion, but to be on the save side, we have it.
-                Err(TypeError::new(
-                    "[internal] type unification cycle check failed. Try to annotate types.",
-                ))
+                Err(TypeError::new(&format!(
+                    "[internal] type unification cycle check failed ({:?} =?= {:?})",
+                    t1, t2
+                )))
             }
         } else {
             Ok(None)
@@ -704,7 +802,15 @@ impl<'a> fmt::Display for TypeDisplay<'a> {
             }
             Vector(t) => write!(f, "vector<{}>", t.display(self.context)),
             TypeDomain(t) => write!(f, "domain<{}>", t.display(self.context)),
-            ResourceDomain(mid, sid) => write!(f, "resources<{}>", self.struct_str(*mid, *sid)),
+            ResourceDomain(mid, sid, inst_opt) => {
+                write!(f, "resources<{}", self.struct_str(*mid, *sid))?;
+                if let Some(inst) = inst_opt {
+                    f.write_str("<")?;
+                    comma_list(f, inst)?;
+                    f.write_str(">")?;
+                }
+                f.write_str(">")
+            }
             TypeLocal(s) => write!(f, "{}", s.display(self.context.symbol_pool())),
             Fun(ts, t) => {
                 f.write_str("|")?;

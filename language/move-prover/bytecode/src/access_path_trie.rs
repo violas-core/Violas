@@ -8,12 +8,16 @@
 
 use crate::{
     access_path::{AbsAddr, AccessPath, AccessPathMap, FootprintDomain, Offset, Root},
-    dataflow_analysis::{AbstractDomain, JoinResult, MapDomain},
-    function_target::FunctionTarget,
+    dataflow_domains::{AbstractDomain, JoinResult, MapDomain},
 };
-use move_model::{ast::TempIndex, ty::Type};
+use im::ordmap::Entry;
+use move_core_types::{account_address::AccountAddress, language_storage::TypeTag};
+use move_model::{
+    ast::TempIndex,
+    model::{FunctionEnv, GlobalEnv},
+    ty::Type,
+};
 use std::{
-    collections::btree_map::Entry,
     fmt,
     fmt::Formatter,
     ops::{Deref, DerefMut},
@@ -54,15 +58,34 @@ impl<T: FootprintDomain> TrieNode<T> {
     }
 
     /// Like join, but gracefully handles `Non` data fields by treating None as Bottom
-    pub fn join_data_opt(&mut self, other: &Option<T>) -> JoinResult {
-        match (&mut self.data, other) {
+    pub fn join_data_opt_(mut data: &mut Option<T>, other: &Option<T>) -> JoinResult {
+        match (&mut data, other) {
             (Some(data1), Some(data2)) => data1.join(data2),
-            (None, Some(data)) => {
-                self.data = Some(data.clone());
+            (None, Some(d)) => {
+                *data = Some(d.clone());
                 JoinResult::Changed
             }
             (_, None) => JoinResult::Unchanged,
         }
+    }
+
+    /// Like join, but gracefully handles `Non` data fields by treating None as Bottom
+    pub fn join_data_opt(&mut self, other: &Option<T>) -> JoinResult {
+        Self::join_data_opt_(&mut self.data, other)
+    }
+
+    pub fn join_child_data(&self, mut acc: Option<T>) -> Option<T> {
+        Self::join_data_opt_(&mut acc, &self.data);
+        for v in self.children.values() {
+            Self::join_data_opt_(&mut acc, &v.data);
+        }
+        acc
+    }
+
+    pub fn get_child_data(&self) -> Option<T> {
+        let mut acc = None;
+        Self::join_data_opt_(&mut acc, &self.data);
+        acc
     }
 
     pub fn data(&self) -> &Option<T> {
@@ -80,6 +103,17 @@ impl<T: FootprintDomain> TrieNode<T> {
     /// Return the node mapped to `o` from self (if any)
     pub fn get_offset(&self, o: &Offset) -> Option<&Self> {
         self.children.get(o)
+    }
+
+    /// Return true if `self`'s keys can be converted into a compact set of concrete access paths
+    /// Note: this says nothing about the `data` part of `self`
+    pub fn keys_statically_known(&self) -> bool {
+        for (offset, child) in self.children.iter() {
+            if !offset.is_statically_known() || !child.keys_statically_known() {
+                return false;
+            }
+        }
+        true
     }
 
     /// Bind caller data in `actuals`, `type_actuals`, and `sub_map` to `self`.
@@ -100,12 +134,12 @@ impl<T: FootprintDomain> TrieNode<T> {
             None => (),
         }
         let mut acc = Self::new_opt(self.data);
-        for (mut k, v) in self.children.0.into_iter() {
+        for (mut k, v) in self.children.into_iter() {
             k.substitute_footprint(type_actuals);
             acc.children.insert_join(
                 k,
                 v.substitute_footprint(actuals, type_actuals, sub_map, sub_data),
-            )
+            );
         }
         acc
     }
@@ -115,9 +149,19 @@ impl<T: FootprintDomain> TrieNode<T> {
     where
         F: FnMut(&mut TrieNode<T>) + Copy,
     {
-        for (_k, v) in self.children.iter_mut() {
-            v.iter_values(f)
+        self.children.update_values(f);
+    }
+
+    /// Apply `f` to each offset in `self`
+    pub fn iter_offsets<F>(&self, mut f: F) -> F
+    where
+        F: FnMut(&Offset),
+    {
+        for (k, v) in self.children.iter() {
+            f(k);
+            f = v.iter_offsets(f);
         }
+        f
     }
 
     /// Apply `f` to all (access path, Option<data>) pairs encoded in `self`
@@ -148,7 +192,7 @@ impl<T: FootprintDomain> AbstractDomain for TrieNode<T> {
     }
 }
 
-impl<T: FootprintDomain> AbstractDomain for AccessPathTrie<T> {
+impl<T: FootprintDomain + PartialEq> AbstractDomain for AccessPathTrie<T> {
     fn join(&mut self, other: &Self) -> JoinResult {
         if self == other {
             return JoinResult::Unchanged;
@@ -206,6 +250,14 @@ impl<T: FootprintDomain> AccessPathTrie<T> {
         Some(node)
     }
 
+    pub fn get_child_data(&self) -> Option<T> {
+        let mut acc = None;
+        for v in self.values() {
+            acc = v.join_child_data(acc)
+        }
+        acc
+    }
+
     /// Like `update_access_path`, but always performs a weak update
     pub fn update_access_path_weak(&mut self, ap: AccessPath, data: Option<T>) {
         self.update_access_path_(ap, TrieNode::new_opt(data), true)
@@ -236,22 +288,17 @@ impl<T: FootprintDomain> AccessPathTrie<T> {
         mut weak_update: bool,
     ) {
         let (root, offsets) = ap.into();
-        let key = match root {
-            Root::Local(i) =>
+        let needs_weak_update = match &root {
             // local base. strong update possible because of Move aliasing semantics
-            {
-                Root::local(i)
-            }
-            Root::Global(g) =>
+            Root::Local(_) | Root::Formal(_) | Root::Return(_) => false,
             // global base. must do weak update unless g is statically known
-            {
-                weak_update = weak_update || !g.is_statically_known();
-                Root::global(g)
-            }
-            Root::Return(_) => panic!("Invalid: updating return"),
+            Root::Global(g) => !g.is_statically_known(),
+        };
+        if needs_weak_update {
+            weak_update = true
         };
 
-        let mut node = self.0.entry(key).or_insert_with(TrieNode::default);
+        let mut node = self.0.entry(root).or_insert_with(TrieNode::default);
         for offset in offsets.into_iter() {
             // if one of the offsets is not statically known, we must do a weak update
             weak_update = weak_update || !offset.is_statically_known();
@@ -266,18 +313,23 @@ impl<T: FootprintDomain> AccessPathTrie<T> {
     }
 
     /// Bind `data` to `local_index` in the trie, overwriting the old value of `local_index`
-    pub fn bind_local(&mut self, local_index: TempIndex, data: T) {
-        self.bind_root(Root::local(local_index), data)
+    pub fn bind_local(&mut self, local_index: TempIndex, data: T, fun_env: &FunctionEnv) {
+        self.bind_root(Root::from_index(local_index, fun_env), data)
     }
 
     /// Bind `node` to `local_index` in the trie, overwriting the old value of `local_index`
-    pub fn bind_local_node(&mut self, local_index: TempIndex, node: TrieNode<T>) {
-        self.0.insert(Root::local(local_index), node);
+    pub fn bind_local_node(
+        &mut self,
+        local_index: TempIndex,
+        node: TrieNode<T>,
+        fun_env: &FunctionEnv,
+    ) {
+        self.0.insert(Root::from_index(local_index, fun_env), node);
     }
 
     /// Remove the value bound to the local variable `local_index`
-    pub fn remove_local(&mut self, local_index: TempIndex) {
-        self.0.remove(&Root::Local(local_index));
+    pub fn remove_local(&mut self, local_index: TempIndex, fun_env: &FunctionEnv) {
+        self.0.remove(&Root::from_index(local_index, fun_env));
     }
 
     /// Bind `data` to the return variable `return_index`
@@ -290,20 +342,35 @@ impl<T: FootprintDomain> AccessPathTrie<T> {
     }
 
     /// Retrieve the data associated with `local_index` in the trie. Returns `None` if there is no associated data
-    pub fn get_local(&self, local_index: TempIndex) -> Option<&T> {
-        self.get_local_node(local_index)
+    pub fn get_local(&self, local_index: TempIndex, fun_env: &FunctionEnv) -> Option<&T> {
+        self.get_local_node(local_index, fun_env)
             .map(|n| n.data.as_ref())
             .flatten()
     }
 
     /// Retrieve the node associated with `local_index` in the trie. Returns `None` if there is no associated node
-    pub fn get_local_node(&self, local_index: TempIndex) -> Option<&TrieNode<T>> {
-        self.0.get(&Root::local(local_index))
+    pub fn get_local_node(
+        &self,
+        local_index: TempIndex,
+        fun_env: &FunctionEnv,
+    ) -> Option<&TrieNode<T>> {
+        self.0.get(&Root::from_index(local_index, fun_env))
     }
 
     /// Return `true` if there is a value bound to local variable `local_index`
-    pub fn local_exists(&self, local_index: TempIndex) -> bool {
-        self.0.contains_key(&Root::local(local_index))
+    pub fn local_exists(&self, local_index: TempIndex, fun_env: &FunctionEnv) -> bool {
+        self.0.contains_key(&Root::from_index(local_index, fun_env))
+    }
+
+    /// Return `true` if the keys of `self` have no dynamic components and thus can be converted into
+    /// a compact set of concrete access paths.
+    pub fn keys_statically_known(&self) -> bool {
+        for (root, node) in self.0.iter() {
+            if !root.is_statically_known() || !node.keys_statically_known() {
+                return false;
+            }
+        }
+        true
     }
 
     /// Bind caller data in `actuals`, `type_actuals`, and `sub_map` to `self`.
@@ -320,10 +387,10 @@ impl<T: FootprintDomain> AccessPathTrie<T> {
         F: FnMut(&mut T, &[AbsAddr], &[Type], &dyn AccessPathMap<AbsAddr>) + Copy,
     {
         let mut acc = Self::default();
-        for (mut k, v) in self.0 .0.into_iter() {
+        for (mut k, v) in self.0.into_iter() {
             k.substitute_footprint(actuals, type_actuals, sub_map);
             let new_v = v.substitute_footprint(actuals, type_actuals, sub_map, sub_data);
-            acc.0.insert_join(k, new_v)
+            acc.insert_join(k, new_v);
         }
         acc
     }
@@ -340,14 +407,47 @@ impl<T: FootprintDomain> AccessPathTrie<T> {
         self.substitute_footprint(actuals, type_actuals, sub_map, no_op)
     }
 
+    /// Substitute concrete values `actuals` and `type_actuals` into `self`
+    pub fn substitute_footprint_concrete(
+        self,
+        actuals: &[Option<AccountAddress>],
+        type_actuals: &[TypeTag],
+        sub_map: &dyn AccessPathMap<AbsAddr>,
+        env: &GlobalEnv,
+    ) -> Self {
+        let values = actuals
+            .iter()
+            .map(|addr_opt| {
+                addr_opt
+                    .map(|addr| AbsAddr::from(&addr))
+                    .unwrap_or_default()
+            })
+            .collect::<Vec<AbsAddr>>();
+        let types = type_actuals
+            .iter()
+            .map(|t| Type::from_type_tag(t, env))
+            .collect::<Vec<Type>>();
+        self.substitute_footprint_skip_data(&values, &types, sub_map)
+    }
+
     /// Apply `f` to each node in `self`
     pub fn iter_values<F>(&mut self, mut f: F)
     where
         F: FnMut(&mut TrieNode<T>) + Copy,
     {
-        for (_, mut node) in self.0.iter_mut() {
-            f(&mut node);
-            node.iter_values(f)
+        self.update_values(|node| {
+            f(node);
+            node.iter_values(f);
+        });
+    }
+
+    /// Apply `f` to each offset in `self`
+    pub fn iter_offsets<F>(&self, mut f: F)
+    where
+        F: FnMut(&Offset),
+    {
+        for (_k, node) in self.0.iter() {
+            f = node.iter_offsets(f)
         }
     }
 
@@ -356,7 +456,7 @@ impl<T: FootprintDomain> AccessPathTrie<T> {
     where
         F: FnMut(&AccessPath, &Option<&T>),
     {
-        for (root, node) in self.0.iter() {
+        for (root, node) in self.iter() {
             let ap = AccessPath::new_root(root.clone());
             f = node.iter_paths_opt(&ap, f)
         }
@@ -373,7 +473,7 @@ impl<T: FootprintDomain> AccessPathTrie<T> {
     }
 
     /// Return a wrapper that of `self` that implements `Display` using `env`
-    pub fn display<'a>(&'a self, env: &'a FunctionTarget) -> AccessPathTrieDisplay<'a, T> {
+    pub fn display<'a>(&'a self, env: &'a FunctionEnv) -> AccessPathTrieDisplay<'a, T> {
         AccessPathTrieDisplay { t: self, env }
     }
 }
@@ -412,7 +512,7 @@ impl<T: FootprintDomain> DerefMut for AccessPathTrie<T> {
 
 pub struct AccessPathTrieDisplay<'a, T: FootprintDomain> {
     t: &'a AccessPathTrie<T>,
-    env: &'a FunctionTarget<'a>,
+    env: &'a FunctionEnv<'a>,
 }
 
 impl<'a, T: FootprintDomain> fmt::Display for AccessPathTrieDisplay<'a, T> {

@@ -19,14 +19,12 @@ codespan = { version = "0.8.0", features = ["serialization"] }
 colored = "2.0.0"
 
 bcs = "0.1.2"
-diem-types = { path = "../../../types" }
 move-core-types = { path = "../../move-core/types" }
 move-ir-types = { path = "../../move-ir/types" }
 diem-workspace-hack = { path = "../../../common/workspace-hack" }
-vm = { path = "../../vm" }
+move-binary-format = { path = "../../move-binary-format" }
 bytecode-source-map = { path = "../../compiler/bytecode-source-map" }
 bytecode-verifier = { path = "../../bytecode-verifier" }
 
 [features]
 default = []
-fuzzing = ["diem-types/fuzzing"]

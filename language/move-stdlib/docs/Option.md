@@ -41,7 +41,7 @@ Abstraction of a value that may or may not be present. Implemented with a vector
 zero or one because Move bytecode does not have ADTs.
 
 
-<pre><code><b>struct</b> <a href="Option.md#0x1_Option">Option</a>&lt;Element&gt;
+<pre><code><b>struct</b> <a href="Option.md#0x1_Option">Option</a>&lt;Element&gt; has <b>copy</b>, drop, store
 </code></pre>
 
 
@@ -145,8 +145,8 @@ Return an empty <code><a href="Option.md#0x1_Option">Option</a></code>
 <a name="0x1_Option_spec_none"></a>
 
 
-<pre><code><b>define</b> <a href="Option.md#0x1_Option_spec_none">spec_none</a>&lt;Element&gt;(): <a href="Option.md#0x1_Option">Option</a>&lt;Element&gt; {
-   <a href="Option.md#0x1_Option">Option</a>{ vec: empty_vector() }
+<pre><code><b>fun</b> <a href="Option.md#0x1_Option_spec_none">spec_none</a>&lt;Element&gt;(): <a href="Option.md#0x1_Option">Option</a>&lt;Element&gt; {
+   <a href="Option.md#0x1_Option">Option</a>{ vec: vec() }
 }
 </code></pre>
 
@@ -195,8 +195,8 @@ Return an <code><a href="Option.md#0x1_Option">Option</a></code> containing <cod
 <a name="0x1_Option_spec_some"></a>
 
 
-<pre><code><b>define</b> <a href="Option.md#0x1_Option_spec_some">spec_some</a>&lt;Element&gt;(e: Element): <a href="Option.md#0x1_Option">Option</a>&lt;Element&gt; {
-   <a href="Option.md#0x1_Option">Option</a>{ vec: <a href="Vector.md#0x1_Vector_spec_singleton">Vector::spec_singleton</a>(e) }
+<pre><code><b>fun</b> <a href="Option.md#0x1_Option_spec_some">spec_some</a>&lt;Element&gt;(e: Element): <a href="Option.md#0x1_Option">Option</a>&lt;Element&gt; {
+   <a href="Option.md#0x1_Option">Option</a>{ vec: vec(e) }
 }
 </code></pre>
 
@@ -324,7 +324,7 @@ Always returns <code><b>false</b></code> if <code>t</code> does not hold a value
 <a name="0x1_Option_spec_contains"></a>
 
 
-<pre><code><b>define</b> <a href="Option.md#0x1_Option_spec_contains">spec_contains</a>&lt;Element&gt;(t: <a href="Option.md#0x1_Option">Option</a>&lt;Element&gt;, e: Element): bool {
+<pre><code><b>fun</b> <a href="Option.md#0x1_Option_spec_contains">spec_contains</a>&lt;Element&gt;(t: <a href="Option.md#0x1_Option">Option</a>&lt;Element&gt;, e: Element): bool {
    <a href="Option.md#0x1_Option_is_some">is_some</a>(t) && <a href="Option.md#0x1_Option_borrow">borrow</a>(t) == e
 }
 </code></pre>
@@ -424,7 +424,7 @@ Return the value inside <code>t</code> if it holds one
 Return <code>default</code> if <code>t</code> does not hold a value
 
 
-<pre><code><b>public</b> <b>fun</b> <a href="Option.md#0x1_Option_get_with_default">get_with_default</a>&lt;Element: <b>copyable</b>&gt;(t: &<a href="Option.md#0x1_Option_Option">Option::Option</a>&lt;Element&gt;, default: Element): Element
+<pre><code><b>public</b> <b>fun</b> <a href="Option.md#0x1_Option_get_with_default">get_with_default</a>&lt;Element: <b>copy</b>, drop&gt;(t: &<a href="Option.md#0x1_Option_Option">Option::Option</a>&lt;Element&gt;, default: Element): Element
 </code></pre>
 
 
@@ -640,7 +640,7 @@ Aborts if <code>t</code> does not hold a value
 Destroys <code>t.</code> If <code>t</code> holds a value, return it. Returns <code>default</code> otherwise
 
 
-<pre><code><b>public</b> <b>fun</b> <a href="Option.md#0x1_Option_destroy_with_default">destroy_with_default</a>&lt;Element: <b>copyable</b>&gt;(t: <a href="Option.md#0x1_Option_Option">Option::Option</a>&lt;Element&gt;, default: Element): Element
+<pre><code><b>public</b> <b>fun</b> <a href="Option.md#0x1_Option_destroy_with_default">destroy_with_default</a>&lt;Element: drop&gt;(t: <a href="Option.md#0x1_Option_Option">Option::Option</a>&lt;Element&gt;, default: Element): Element
 </code></pre>
 
 
@@ -667,7 +667,7 @@ Destroys <code>t.</code> If <code>t</code> holds a value, return it. Returns <co
 
 <pre><code><b>pragma</b> opaque;
 <b>aborts_if</b> <b>false</b>;
-<b>ensures</b> result == (<b>if</b> (<a href="Option.md#0x1_Option_is_some">is_some</a>(<b>old</b>(t))) <a href="Option.md#0x1_Option_borrow">borrow</a>(<b>old</b>(t)) <b>else</b> default);
+<b>ensures</b> result == (<b>if</b> (<a href="Option.md#0x1_Option_is_some">is_some</a>(t)) <a href="Option.md#0x1_Option_borrow">borrow</a>(t) <b>else</b> default);
 </code></pre>
 
 
@@ -711,7 +711,7 @@ Aborts if <code>t</code> does not hold a value
 
 <pre><code><b>pragma</b> opaque;
 <b>include</b> <a href="Option.md#0x1_Option_AbortsIfNone">AbortsIfNone</a>&lt;Element&gt;;
-<b>ensures</b> result == <a href="Option.md#0x1_Option_borrow">borrow</a>(<b>old</b>(t));
+<b>ensures</b> result == <a href="Option.md#0x1_Option_borrow">borrow</a>(t);
 </code></pre>
 
 

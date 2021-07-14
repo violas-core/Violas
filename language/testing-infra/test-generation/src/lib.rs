@@ -26,23 +26,18 @@ use diem_vm::DiemVM;
 use getrandom::getrandom;
 use language_e2e_tests::executor::FakeExecutor;
 use module_generation::generate_module;
-use move_core_types::{
-    gas_schedule::{GasAlgebra, GasUnits},
-    language_storage::TypeTag,
-    value::MoveValue,
-    vm_status::VMStatus,
-};
-use move_vm_runtime::logging::NoContextLog;
-use move_vm_types::gas_schedule::CostStrategy;
-use rand::{rngs::StdRng, Rng, SeedableRng};
-use std::{fs, io::Write, panic, thread};
-use vm::{
+use move_binary_format::{
     access::ModuleAccess,
     file_format::{
         AbilitySet, CompiledModule, CompiledModuleMut, FunctionDefinitionIndex, SignatureToken,
         StructHandleIndex,
     },
 };
+use move_core_types::{language_storage::TypeTag, value::MoveValue, vm_status::VMStatus};
+use move_vm_runtime::logging::NoContextLog;
+use move_vm_types::gas_schedule::GasStatus;
+use rand::{rngs::StdRng, Rng, SeedableRng};
+use std::{fs, io::Write, panic, thread};
 
 /// This function calls the Bytecode verifier to test it
 fn run_verifier(module: CompiledModule) -> Result<CompiledModule, String> {
@@ -111,16 +106,15 @@ fn execute_function_in_module<S: StateView>(
         let internals = diem_vm.internals();
 
         let log_context = NoContextLog::new();
-        let gas_schedule = internals.gas_schedule(&log_context)?;
         internals.with_txn_data_cache(state_view, |mut txn_context| {
             let sender = AccountAddress::random();
             let mut mod_blob = vec![];
             module
                 .serialize(&mut mod_blob)
                 .expect("Module serialization error");
-            let mut cost_strategy = CostStrategy::system(gas_schedule, GasUnits::new(0));
+            let mut gas_status = GasStatus::new_unmetered();
             txn_context
-                .publish_module(mod_blob, sender, &mut cost_strategy, &log_context)
+                .publish_module(mod_blob, sender, &mut gas_status, &log_context)
                 .map_err(|e| e.into_vm_status())?;
             txn_context
                 .execute_function(
@@ -128,7 +122,7 @@ fn execute_function_in_module<S: StateView>(
                     &entry_name,
                     ty_args,
                     args,
-                    &mut cost_strategy,
+                    &mut gas_status,
                     &log_context,
                 )
                 .map_err(|e| e.into_vm_status())?;

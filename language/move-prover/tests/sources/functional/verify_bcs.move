@@ -1,5 +1,5 @@
 // This file is created to verify the native function in the standard BCS module.
-module VerifyBCS {
+module 0x42::VerifyBCS {
     use 0x1::BCS;
 
 
@@ -7,7 +7,7 @@ module VerifyBCS {
     {
         BCS::to_bytes(v)
     }
-    spec fun verify_to_bytes {
+    spec verify_to_bytes {
         ensures result == BCS::serialize(v);
     }
 }

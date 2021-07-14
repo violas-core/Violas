@@ -1,12 +1,12 @@
 // A test case which reproduces a performance/non-termination problem. See the spec of fun create for details.
 
-module Test {
+module 0x42::Test {
     use 0x1::BCS;
     use 0x1::Signer;
     use 0x1::Vector;
 
     spec module {
-        define eq_append<Element>(v: vector<Element>, v1: vector<Element>, v2: vector<Element>): bool {
+        fun eq_append<Element>(v: vector<Element>, v1: vector<Element>, v2: vector<Element>): bool {
             len(v) == len(v1) + len(v2) &&
             v[0..len(v1)] == v1 &&
             v[len(v1)..len(v)] == v2
@@ -42,7 +42,7 @@ module Test {
 
         count_bytes
     }
-    spec fun fresh_guid {
+    spec fresh_guid {
         aborts_if counter.counter + 1 > max_u64();
         ensures eq_append(result, BCS::serialize(old(counter.counter)), BCS::serialize(sender));
     }
@@ -50,7 +50,7 @@ module Test {
     fun new_event_handle_impl<T: copy + drop + store>(counter: &mut EventHandleGenerator, sender: address): EventHandle<T> {
         EventHandle<T> {counter: 0, guid: fresh_guid(counter, sender)}
     }
-    spec fun new_event_handle_impl {
+    spec new_event_handle_impl {
         aborts_if counter.counter + 1 > max_u64();
         ensures eq_append(result.guid, BCS::serialize(old(counter.counter)), BCS::serialize(sender));
         ensures result.counter == 0;
@@ -70,7 +70,7 @@ module Test {
 
         authentication_key
     }
-    spec fun create {
+    spec create {
         // To reproduce, put this to true.
         pragma verify=false;
 

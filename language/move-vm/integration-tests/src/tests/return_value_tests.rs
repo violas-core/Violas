@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::compiler::{as_module, compile_units};
+use move_binary_format::errors::VMResult;
 use move_core_types::{
     account_address::AccountAddress,
-    gas_schedule::{GasAlgebra, GasUnits},
     identifier::Identifier,
     language_storage::{ModuleId, TypeTag},
     value::{MoveTypeLayout, MoveValue},
@@ -12,8 +12,7 @@ use move_core_types::{
 };
 use move_vm_runtime::{logging::NoContextLog, move_vm::MoveVM};
 use move_vm_test_utils::InMemoryStorage;
-use move_vm_types::gas_schedule::{zero_cost_schedule, CostStrategy};
-use vm::errors::VMResult;
+use move_vm_types::gas_schedule::GasStatus;
 
 const TEST_ADDR: AccountAddress = AccountAddress::new([42; AccountAddress::LENGTH]);
 
@@ -28,7 +27,7 @@ fn run(
 
     let code = format!(
         r#"
-        module M {{
+        module 0x{}::M {{
             {}
 
             fun foo{} {{
@@ -36,10 +35,10 @@ fn run(
             }}
         }}
     "#,
-        structs, fun_sig, fun_body
+        TEST_ADDR, structs, fun_sig, fun_body
     );
 
-    let mut units = compile_units(TEST_ADDR, &code).unwrap();
+    let mut units = compile_units(&code).unwrap();
     let m = as_module(units.pop().unwrap());
     let mut blob = vec![];
     m.serialize(&mut blob).unwrap();
@@ -52,8 +51,7 @@ fn run(
     let mut sess = vm.new_session(&storage);
 
     let fun_name = Identifier::new("foo").unwrap();
-    let cost_table = zero_cost_schedule();
-    let mut cost_strategy = CostStrategy::system(&cost_table, GasUnits::new(0));
+    let mut gas_status = GasStatus::new_unmetered();
     let context = NoContextLog::new();
 
     let args: Vec<_> = args
@@ -66,7 +64,7 @@ fn run(
         &fun_name,
         ty_args,
         args,
-        &mut cost_strategy,
+        &mut gas_status,
         &context,
     )?;
 

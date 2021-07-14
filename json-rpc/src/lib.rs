@@ -17,6 +17,7 @@
 mod util;
 
 mod counters;
+pub mod data;
 mod methods;
 mod runtime;
 
@@ -28,6 +29,6 @@ pub use runtime::{bootstrap, bootstrap_from_config};
 /// Fuzzer for JSON RPC service
 pub mod fuzzing;
 #[cfg(any(test, feature = "fuzzing"))]
-mod tests;
+pub(crate) mod tests;
 #[cfg(any(test, feature = "fuzzing"))]
-pub use tests::test_bootstrap;
+pub use tests::utils::test_bootstrap;

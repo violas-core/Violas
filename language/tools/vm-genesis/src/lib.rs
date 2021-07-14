@@ -29,9 +29,9 @@ use diem_types::{
     },
 };
 use diem_vm::{convert_changeset_and_events, data_cache::StateViewCache};
+use move_binary_format::CompiledModule;
 use move_core_types::{
     account_address::AccountAddress,
-    gas_schedule::{CostTable, GasAlgebra, GasUnits},
     identifier::Identifier,
     language_storage::{ModuleId, StructTag, TypeTag},
     value::{serialize_values, MoveValue},
@@ -41,11 +41,10 @@ use move_vm_runtime::{
     move_vm::MoveVM,
     session::Session,
 };
-use move_vm_types::gas_schedule::{zero_cost_schedule, CostStrategy};
+use move_vm_types::gas_schedule::GasStatus;
 use once_cell::sync::Lazy;
 use rand::prelude::*;
 use transaction_builder::encode_create_designated_dealer_script_function;
-use vm::CompiledModule;
 
 // The seed is arbitrarily picked to produce a consistent key. XXX make this more formal?
 const GENESIS_SEED: [u8; 32] = [42; 32];
@@ -59,8 +58,6 @@ pub static GENESIS_KEYPAIR: Lazy<(Ed25519PrivateKey, Ed25519PublicKey)> = Lazy::
     let public_key = private_key.public_key();
     (private_key, public_key)
 });
-
-pub static ZERO_COST_SCHEDULE: Lazy<CostTable> = Lazy::new(zero_cost_schedule);
 
 const ZERO_AUTH_KEY: [u8; 32] = [0; 32];
 
@@ -117,7 +114,7 @@ pub fn encode_genesis_change_set(
     let xdx_ty = TypeTag::Struct(StructTag {
         address: *account_config::XDX_MODULE.address(),
         module: account_config::XDX_MODULE.name().to_owned(),
-        name: account_config::XDX_STRUCT_NAME.to_owned(),
+        name: account_config::XDX_IDENTIFIER.to_owned(),
         type_params: vec![],
     });
 
@@ -181,7 +178,7 @@ fn exec_function(
             &Identifier::new(function_name).unwrap(),
             ty_args,
             args,
-            &mut CostStrategy::system(&ZERO_COST_SCHEDULE, GasUnits::new(100_000_000)),
+            &mut GasStatus::new_unmetered(),
             log_context,
         )
         .unwrap_or_else(|e| {
@@ -207,7 +204,7 @@ fn exec_script_function(
             script_function.ty_args().to_vec(),
             script_function.args().to_vec(),
             vec![sender],
-            &mut CostStrategy::system(&ZERO_COST_SCHEDULE, GasUnits::new(100_000_000)),
+            &mut GasStatus::new_unmetered(),
             log_context,
         )
         .unwrap()
@@ -467,7 +464,7 @@ fn publish_stdlib(
             .publish_module(
                 (*bytes).clone(),
                 *module_id.address(),
-                &mut CostStrategy::system(&ZERO_COST_SCHEDULE, GasUnits::new(100_000_000)),
+                &mut GasStatus::new_unmetered(),
                 log_context,
             )
             .unwrap_or_else(|e| panic!("Failure publishing module {:?}, {:?}", module_id, e));

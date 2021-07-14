@@ -33,10 +33,8 @@ pub fn function_signature(context: &mut Context, sig: &mut FunctionSignature) {
 //**************************************************************************************************
 
 fn expected_types(context: &mut Context, ss: &mut Vec<Option<Type>>) {
-    for st_opt in ss {
-        if let Some(ss) = st_opt {
-            type_(context, ss);
-        }
+    for st_opt in ss.iter_mut().flatten() {
+        type_(context, st_opt);
     }
 }
 
@@ -57,7 +55,7 @@ pub fn type_(context: &mut Context, ty: &mut Type) {
             let replacement = match replacement {
                 sp!(_, Var(_)) => panic!("ICE unfold_type_base failed to expand"),
                 sp!(loc, Anything) => {
-                    context.error(vec![(
+                    context.env.add_error(vec![(
                         ty.loc,
                         "Could not infer this type. Try adding an annotation",
                     )]);
@@ -148,7 +146,7 @@ pub fn exp(context: &mut Context, e: &mut T::Exp) {
                 E::Move { from_user, var }
             }
         }
-        E::InferredNum(v) => {
+        E::Value(sp!(vloc, Value_::InferredNum(v))) => {
             use BuiltinTypeName_ as BT;
             let bt = match e.ty.value.builtin_name() {
                 Some(sp!(_, bt)) if bt.is_numeric() => bt,
@@ -180,7 +178,7 @@ pub fn exp(context: &mut Context, e: &mut T::Exp) {
                     value=v,
                     type=fix_bt,
                 );
-                context.error(vec![
+                context.env.add_error(vec![
                     (e.exp.loc, "Invalid numerical literal".into()),
                     (e.ty.loc, msg),
                     (e.exp.loc, fix),
@@ -193,7 +191,7 @@ pub fn exp(context: &mut Context, e: &mut T::Exp) {
                     BT::U128 => Value_::U128(v),
                     _ => unreachable!(),
                 };
-                E::Value(sp(e.exp.loc, value_))
+                E::Value(sp(*vloc, value_))
             };
             e.exp.value = new_exp;
         }

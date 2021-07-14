@@ -4,21 +4,20 @@
 use crate::compiler::{as_module, compile_units};
 use move_core_types::{
     account_address::AccountAddress,
-    gas_schedule::{GasAlgebra, GasUnits},
     identifier::Identifier,
     language_storage::ModuleId,
     value::{serialize_values, MoveValue},
 };
 use move_vm_runtime::{logging::NoContextLog, move_vm::MoveVM};
 use move_vm_test_utils::InMemoryStorage;
-use move_vm_types::gas_schedule::{zero_cost_schedule, CostStrategy};
+use move_vm_types::gas_schedule::GasStatus;
 
 const TEST_ADDR: AccountAddress = AccountAddress::new([42; AccountAddress::LENGTH]);
 
 #[test]
 fn mutated_accounts() {
     let code = r#"
-        module M {
+        module {{ADDR}}::M {
             struct Foo has key { a: bool }
             public fun get(addr: address): bool acquires Foo {
                 borrow_global<Foo>(addr).a
@@ -33,7 +32,8 @@ fn mutated_accounts() {
         }
     "#;
 
-    let mut units = compile_units(TEST_ADDR, &code).unwrap();
+    let code = code.replace("{{ADDR}}", &format!("0x{}", TEST_ADDR.to_string()));
+    let mut units = compile_units(&code).unwrap();
     let m = as_module(units.pop().unwrap());
     let mut blob = vec![];
     m.serialize(&mut blob).unwrap();
@@ -45,8 +45,7 @@ fn mutated_accounts() {
     let vm = MoveVM::new();
     let mut sess = vm.new_session(&storage);
 
-    let cost_table = zero_cost_schedule();
-    let mut cost_strategy = CostStrategy::system(&cost_table, GasUnits::new(0));
+    let mut gas_status = GasStatus::new_unmetered();
     let context = NoContextLog::new();
 
     let publish = Identifier::new("publish").unwrap();
@@ -60,7 +59,7 @@ fn mutated_accounts() {
         &publish,
         vec![],
         serialize_values(&vec![MoveValue::Signer(account1)]),
-        &mut cost_strategy,
+        &mut gas_status,
         &context,
     )
     .unwrap();
@@ -75,7 +74,7 @@ fn mutated_accounts() {
         &get,
         vec![],
         serialize_values(&vec![MoveValue::Address(account1)]),
-        &mut cost_strategy,
+        &mut gas_status,
         &context,
     )
     .unwrap();
@@ -87,7 +86,7 @@ fn mutated_accounts() {
         &flip,
         vec![],
         serialize_values(&vec![MoveValue::Address(account1)]),
-        &mut cost_strategy,
+        &mut gas_status,
         &context,
     )
     .unwrap();
@@ -102,7 +101,7 @@ fn mutated_accounts() {
         &get,
         vec![],
         serialize_values(&vec![MoveValue::Address(account1)]),
-        &mut cost_strategy,
+        &mut gas_status,
         &context,
     )
     .unwrap();

@@ -21,18 +21,18 @@
 //!```
 //!, the value of `a` will be `{ 0x1, Footprint(x/f) }` at program point 1.
 
-use crate::{
-    dataflow_analysis::{AbstractDomain, SetDomain},
-    function_target::FunctionTarget,
-};
-use move_core_types::language_storage::StructTag;
+use crate::dataflow_domains::{AbstractDomain, SetDomain};
+use move_core_types::{account_address::AccountAddress, language_storage::StructTag};
 use move_model::{
     ast::TempIndex,
-    model::{GlobalEnv, ModuleId, QualifiedId, StructId},
+    model::{FunctionEnv, GlobalEnv, ModuleId, QualifiedId, StructId},
     ty::{PrimitiveType, Type, TypeDisplayContext},
 };
 use num::BigUint;
-use std::{fmt, fmt::Formatter};
+use std::{
+    fmt,
+    fmt::{Debug, Formatter},
+};
 
 type Address = BigUint;
 
@@ -75,7 +75,9 @@ pub struct GlobalKey {
 pub enum Root {
     /// A key in global storage
     Global(GlobalKey), // TODO: this could (and maybe should) be AbsAddr + Offset::Global
-    /// A local variable or formal parameter
+    /// A formal parameter
+    Formal(TempIndex),
+    /// A local variable
     Local(TempIndex),
     /// A return variable
     Return(usize),
@@ -108,7 +110,7 @@ pub trait AccessPathMap<T: AbstractDomain> {
 }
 
 /// Trait for an abstract domain that can represent footprint values
-pub trait FootprintDomain: AbstractDomain {
+pub trait FootprintDomain: AbstractDomain + Clone + Debug + PartialEq + Sized {
     /// Create a footprint value for access path `ap`
     fn make_footprint(ap: AccessPath) -> Option<Self>;
 }
@@ -121,6 +123,15 @@ impl Addr {
 
     /// Create a footprint address from access path `ap`
     pub fn footprint(ap: AccessPath) -> Self {
+        assert!(
+            !ap.root.is_return(),
+            "Attempting to create footprint from return access path"
+        );
+        assert!(
+            !ap.root.is_local(),
+            "Attempting to create footprint from local access path"
+        );
+
         Self::Footprint(ap)
     }
 
@@ -144,8 +155,17 @@ impl Addr {
         }
     }
 
+    /// Convert `self` into a concrete `AccountAddress` if it is a constant. Returns `None`
+    /// otherwise.
+    pub fn get_concrete_address(&self) -> Option<AccountAddress> {
+        match self {
+            Addr::Constant(a) => Some(move_model::big_uint_to_addr(a)),
+            Addr::Footprint(_) => None,
+        }
+    }
+
     /// Return a wrapper of `self` that implements `Display` using `env`
-    pub fn display<'a>(&'a self, env: &'a FunctionTarget) -> AddrDisplay<'a> {
+    pub fn display<'a>(&'a self, env: &'a FunctionEnv) -> AddrDisplay<'a> {
         AddrDisplay { addr: self, env }
     }
 }
@@ -162,13 +182,27 @@ impl AbsAddr {
     }
 
     /// Create a footprint address read from formal `temp_index`
-    pub fn formal(formal_index: TempIndex) -> Self {
-        SetDomain::footprint(AccessPath::new_local(formal_index))
+    pub fn formal(formal_index: TempIndex, func_env: &FunctionEnv) -> Self {
+        assert!(
+            func_env.is_parameter(formal_index),
+            "Attempting to create formal from local index"
+        );
+        Self::footprint(AccessPath::from_index(formal_index, func_env))
     }
 
     /// Return `true` if `self` is a constant
     pub fn is_constant(&self) -> bool {
-        self.0.iter().all(|a| a.is_constant())
+        self.iter().all(|a| a.is_constant())
+    }
+
+    /// Return `true` if `self` consists only of statically known constants
+    pub fn is_statically_known(&self) -> bool {
+        for a in self.iter() {
+            if !a.is_constant() {
+                return false;
+            }
+        }
+        true
     }
 
     /// Substitute all occurences of Footprint(ap) in `self` by resolving the accesss path
@@ -180,7 +214,7 @@ impl AbsAddr {
         sub_map: &dyn AccessPathMap<AbsAddr>,
     ) {
         let mut acc = SetDomain::default();
-        for a in self.0.iter() {
+        for a in self.iter() {
             match a {
                 Addr::Footprint(ap) => {
                     acc.join(&ap.substitute_footprint(actuals, type_actuals, sub_map));
@@ -197,7 +231,7 @@ impl AbsAddr {
     /// of `self`
     pub fn add_struct_offset(self, mid: &ModuleId, sid: StructId, types: Vec<Type>) -> Self {
         let mut acc = Self::default();
-        for v in self.0.into_iter() {
+        for v in self.into_iter() {
             acc.insert(Addr::Footprint(v.add_struct_offset(
                 mid,
                 sid,
@@ -229,7 +263,7 @@ impl AbsAddr {
     /// value
     pub fn prepend(self, prefix: AccessPath) -> Self {
         let mut acc = Self::default();
-        for v in self.0.into_iter() {
+        for v in self.into_iter() {
             match v {
                 Addr::Footprint(ap) => {
                     let mut new_ap = ap.clone();
@@ -252,15 +286,30 @@ impl AbsAddr {
         })
     }
 
+    /// Return an iterator over the concrete addresses in `self`
+    pub fn get_concrete_addresses(&self) -> Vec<AccountAddress> {
+        self.iter().flat_map(|a| a.get_concrete_address()).collect()
+    }
+
     /// Return a wrapper of `self` that implements `Display` using `env`
-    pub fn display<'a>(&'a self, env: &'a FunctionTarget) -> AbsAddrDisplay<'a> {
+    pub fn display<'a>(&'a self, env: &'a FunctionEnv) -> AbsAddrDisplay<'a> {
         AbsAddrDisplay { addr: self, env }
     }
 }
 
 impl FootprintDomain for AbsAddr {
     fn make_footprint(ap: AccessPath) -> Option<Self> {
-        Some(AbsAddr::footprint(ap))
+        if !ap.root.is_return() && !ap.root.is_local() {
+            Some(AbsAddr::footprint(ap))
+        } else {
+            None
+        }
+    }
+}
+
+impl From<&AccountAddress> for AbsAddr {
+    fn from(addr: &AccountAddress) -> Self {
+        Self::constant(move_model::addr_to_big_uint(addr))
     }
 }
 
@@ -280,9 +329,19 @@ impl GlobalKey {
         }
     }
 
+    /// Return the abstract address associated with `self`
+    pub fn address(&self) -> &AbsAddr {
+        &self.addr
+    }
+
+    /// Return the abstract struct type associated with `self`
+    pub fn struct_type(&self) -> &AbsStructType {
+        &self.ty
+    }
+
     /// Return true if the address and type parameters of this global key are known statically
     pub fn is_statically_known(&self) -> bool {
-        self.addr.is_constant() && self.ty.is_closed()
+        self.addr.is_statically_known() && self.ty.is_closed()
     }
 
     /// Substitute all occurences of Footprint(ap) in `self.addr` by resolving the accesss path
@@ -299,15 +358,19 @@ impl GlobalKey {
     }
 
     /// Return a wrapper of `self` that implements `Display` using `env`
-    pub fn display<'a>(&'a self, env: &'a FunctionTarget) -> GlobalKeyDisplay<'a> {
+    pub fn display<'a>(&'a self, env: &'a FunctionEnv) -> GlobalKeyDisplay<'a> {
         GlobalKeyDisplay { g: self, env }
     }
 }
 
 impl Root {
-    /// Create a `Root` from local variable `index`
-    pub fn local(index: TempIndex) -> Self {
-        Root::Local(index)
+    /// Create a `Root` from local index `index`
+    pub fn from_index(index: TempIndex, fun: &FunctionEnv) -> Self {
+        if fun.is_parameter(index) {
+            Root::Formal(index)
+        } else {
+            Root::Local(index)
+        }
     }
 
     /// Create a `Root` from global storage key `key`
@@ -321,20 +384,42 @@ impl Root {
     }
 
     /// Return the type of `self` in `fun`
-    pub fn get_type(&self, fun: &FunctionTarget) -> Type {
+    pub fn get_type(&self, fun: &FunctionEnv) -> Type {
         match self {
             Self::Global(g) => g.ty.get_type(),
-            Self::Local(i) => fun.get_local_type(*i).clone(),
-            Self::Return(i) => fun.get_return_type(*i).clone(),
+            Self::Formal(i) => fun.get_local_type(*i),
+            Self::Local(i) => {
+                if *i < fun.get_local_count() {
+                    fun.get_local_type(*i)
+                } else {
+                    // temporary local generated by stackless bytecode. use dummy type
+                    Type::Error
+                }
+            }
+            Self::Return(i) => fun.get_return_type(*i),
         }
     }
 
-    /// Return true if this variable is a formal parameter of `fun`
-    pub fn is_formal(&self, fun: &FunctionTarget) -> bool {
+    /// Return true if this variable is a formal parameter
+    pub fn is_formal(&self) -> bool {
+        matches!(self, Self::Formal(_))
+    }
+
+    /// Return `true` if this variable is a return value
+    pub fn is_return(&self) -> bool {
+        matches!(self, Self::Return(_))
+    }
+
+    /// Return `true` if this variable is a lol
+    pub fn is_local(&self) -> bool {
+        matches!(self, Self::Local(_))
+    }
+
+    /// Return true if `self` can be determined statically
+    pub fn is_statically_known(&self) -> bool {
         match self {
-            Self::Local(i) => fun.func_env.is_parameter(*i),
-            Self::Global(_) => false,
-            Self::Return(_) => false,
+            Self::Local(..) | Self::Return(..) | Self::Formal(..) => false,
+            Self::Global(g) => g.is_statically_known(),
         }
     }
 
@@ -348,12 +433,12 @@ impl Root {
     ) {
         match self {
             Self::Global(g) => g.substitute_footprint(actuals, type_actuals, sub_map),
-            Self::Local(_) | Self::Return(_) => (),
+            Self::Formal(_) | Self::Local(_) | Self::Return(_) => (),
         }
     }
 
     /// Return a wrapper of `self` that implements `Display` using `env`
-    pub fn display<'a>(&'a self, env: &'a FunctionTarget) -> RootDisplay<'a> {
+    pub fn display<'a>(&'a self, env: &'a FunctionEnv) -> RootDisplay<'a> {
         RootDisplay { root: self, env }
     }
 }
@@ -404,7 +489,10 @@ impl Offset {
         use Offset::*;
         match self {
             Field(..) => true,
-            Global(..) | VectorIndex => false,
+            Global(..) // Note: even if `g.is_statically_known()`, we should return
+		// false here because `g` will always have a successor field that
+		// is an offset determined at runtime
+		| VectorIndex => false,
         }
     }
 
@@ -447,8 +535,8 @@ impl AccessPath {
         Self::new_root(Root::Global(GlobalKey::constant(addr, ty)))
     }
 
-    pub fn new_local(i: TempIndex) -> Self {
-        Self::new_root(Root::Local(i))
+    pub fn from_index(i: TempIndex, func_env: &FunctionEnv) -> Self {
+        Self::new_root(Root::from_index(i, func_env))
     }
 
     /// Unpack `self` into its root and offsets
@@ -470,10 +558,10 @@ impl AccessPath {
     }
 
     /// Return the type of this access path
-    pub fn get_type(&self, fun: &FunctionTarget) -> Type {
+    pub fn get_type(&self, fun: &FunctionEnv) -> Type {
         let mut ty = self.root.get_type(fun);
         for offset in &self.offsets {
-            let offset_ty = offset.get_type(&ty, fun.module_env().env);
+            let offset_ty = offset.get_type(&ty, fun.module_env.env);
             ty = offset_ty;
         }
         ty
@@ -539,7 +627,7 @@ impl AccessPath {
     ) -> AbsAddr {
         let mut acc = AbsAddr::default();
         match &self.root {
-            Root::Local(i) => {
+            Root::Formal(i) => {
                 acc.join(&self.prepend_addrs(&actuals[*i]));
             }
             Root::Global(g) => {
@@ -554,13 +642,42 @@ impl AccessPath {
                     new_offsets,
                 )));
             }
-            Root::Return(_) => (),
+            Root::Local(_) | Root::Return(_) => (),
         }
         acc
     }
 
+    /// Return true if `self` can be converted to a compact set of concrete access paths.
+    /// Returns false if (e.g.) `self` contains an global root with an unbound
+    /// address/type parameter, a global offset, or a vector index offset.
+    pub fn is_statically_known(&self) -> bool {
+        self.root.is_statically_known() && {
+            for offset in &self.offsets {
+                if !offset.is_statically_known() {
+                    return false;
+                }
+            }
+            true
+        }
+    }
+
+    /// Return `true` if `self` has no unbound address or type variables (i.e., the type variables
+    /// and addresses in `self.root` are statically known and `self` has no `Global` offsets.
+    /// This function is the same as `is_statically_known` except that `is_statically_known` returns
+    /// `false` if `self` has `Vector` offsets, but this function will not.
+    pub fn all_addresses_types_bound(&self) -> bool {
+        self.root.is_statically_known() && {
+            for offset in &self.offsets {
+                if matches!(offset, Offset::Global(_)) {
+                    return false;
+                }
+            }
+            true
+        }
+    }
+
     /// Return a wrapper of `self` that implements `Display` using `env`
-    pub fn display<'a>(&'a self, env: &'a FunctionTarget) -> AccessPathDisplay<'a> {
+    pub fn display<'a>(&'a self, env: &'a FunctionEnv) -> AccessPathDisplay<'a> {
         AccessPathDisplay { ap: self, env }
     }
 }
@@ -578,6 +695,12 @@ impl AbsStructType {
         Type::Struct(self.base.module_id, self.base.id, self.types.clone())
     }
 
+    /// If this `self` is closed, convert it to a `StructTag`. Return
+    /// `None` otherwise
+    pub fn get_type_tag(&self, env: &GlobalEnv) -> Option<StructTag> {
+        self.get_type().into_struct_tag(env)
+    }
+
     /// Substitue the open types in self.types with caller `type_actuals`
     pub fn substitute_footprint(&mut self, type_actuals: &[Type]) {
         for t in self.types.iter_mut() {
@@ -593,7 +716,12 @@ impl AbsStructType {
 
     /// Return `true` if `self` has no type variables or if all of `self`'s type variables are bound
     pub fn is_closed(&self) -> bool {
-        self.types.iter().all(|t| t.is_open())
+        for t in &self.types {
+            if t.is_open() {
+                return false;
+            }
+        }
+        true
     }
 
     /// Return a wrapper of `self` that implements `Display` using `env`
@@ -631,7 +759,7 @@ impl<'a> fmt::Display for AbsStructTypeDisplay<'a> {
 
 pub struct AddrDisplay<'a> {
     addr: &'a Addr,
-    env: &'a FunctionTarget<'a>,
+    env: &'a FunctionEnv<'a>,
 }
 
 impl<'a> fmt::Display for AddrDisplay<'a> {
@@ -645,7 +773,7 @@ impl<'a> fmt::Display for AddrDisplay<'a> {
 
 pub struct AbsAddrDisplay<'a> {
     addr: &'a AbsAddr,
-    env: &'a FunctionTarget<'a>,
+    env: &'a FunctionEnv<'a>,
 }
 
 impl<'a> fmt::Display for AbsAddrDisplay<'a> {
@@ -666,7 +794,7 @@ impl<'a> fmt::Display for AbsAddrDisplay<'a> {
 
 pub struct GlobalKeyDisplay<'a> {
     g: &'a GlobalKey,
-    env: &'a FunctionTarget<'a>,
+    env: &'a FunctionEnv<'a>,
 }
 
 impl<'a> fmt::Display for GlobalKeyDisplay<'a> {
@@ -675,14 +803,14 @@ impl<'a> fmt::Display for GlobalKeyDisplay<'a> {
             f,
             "{}/{}",
             self.g.addr.display(self.env),
-            self.g.ty.display(self.env.module_env().env)
+            self.g.ty.display(self.env.module_env.env)
         )
     }
 }
 
 pub struct RootDisplay<'a> {
     root: &'a Root,
-    env: &'a FunctionTarget<'a>,
+    env: &'a FunctionEnv<'a>,
 }
 
 impl<'a> fmt::Display for RootDisplay<'a> {
@@ -690,6 +818,7 @@ impl<'a> fmt::Display for RootDisplay<'a> {
         match self.root {
             Root::Global(g) => write!(f, "{}", g.display(self.env)),
             Root::Local(i) => write!(f, "Loc({})", i), // TODO: print name if available
+            Root::Formal(i) => write!(f, "Formal({})", i), // TODO: print name if available
             Root::Return(i) => write!(f, "Ret({})", i),
         }
     }
@@ -727,12 +856,12 @@ impl<'a> fmt::Display for OffsetDisplay<'a> {
 
 pub struct AccessPathDisplay<'a> {
     ap: &'a AccessPath,
-    env: &'a FunctionTarget<'a>,
+    env: &'a FunctionEnv<'a>,
 }
 
 impl<'a> fmt::Display for AccessPathDisplay<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        let genv = self.env.func_env.module_env.env;
+        let genv = self.env.module_env.env;
         write!(f, "{}", self.ap.root.display(self.env))?;
         let mut root_ty = self.ap.root.get_type(self.env);
         for offset in &self.ap.offsets {

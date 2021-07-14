@@ -7,6 +7,8 @@ use diem_types::{
     account_address::AccountAddress,
     account_config::diem_root_address,
     account_state::AccountState,
+    contract_event::{ContractEvent, EventWithProof},
+    event::EventKey,
     transaction::{ChangeSet, Transaction, TransactionOutput, Version, WriteSetPayload},
     write_set::WriteOp,
 };
@@ -14,21 +16,15 @@ use diem_validator_interface::{
     DBDebuggerInterface, DebuggerStateView, DiemValidatorInterface, JsonRpcDebuggerInterface,
 };
 use diem_vm::{convert_changeset_and_events, data_cache::RemoteStorage, DiemVM, VMExecutor};
-use move_cli::OnDiskStateView;
-use move_core_types::{
-    effects::ChangeSet as MoveChanges,
-    gas_schedule::{GasAlgebra, GasUnits},
-};
-use move_lang::{compiled_unit::CompiledUnit, move_compile, shared::Address};
+use move_binary_format::{errors::VMResult, file_format::CompiledModule};
+use move_cli::on_disk_state_view::OnDiskStateView;
+use move_core_types::{effects::ChangeSet as MoveChanges, language_storage::TypeTag};
+use move_lang::{compiled_unit::CompiledUnit, move_compile, shared::Flags};
 use move_vm_runtime::{logging::NoContextLog, move_vm::MoveVM, session::Session};
 use move_vm_test_utils::DeltaStorage;
-use move_vm_types::gas_schedule::{zero_cost_schedule, CostStrategy};
-use resource_viewer::{AnnotatedAccountStateBlob, MoveValueAnnotator};
-use std::{
-    convert::TryFrom,
-    path::{Path, PathBuf},
-};
-use vm::{errors::VMResult, file_format::CompiledModule};
+use move_vm_types::gas_schedule::GasStatus;
+use resource_viewer::{AnnotatedAccountStateBlob, AnnotatedMoveStruct, MoveValueAnnotator};
+use std::path::{Path, PathBuf};
 
 #[cfg(test)]
 mod unit_tests;
@@ -212,6 +208,41 @@ impl DiemDebugger {
         Ok(modules)
     }
 
+    pub fn pretty_print_events(
+        &self,
+        event_key: &EventKey,
+        start_seq: u64,
+        limit: u64,
+    ) -> Result<()> {
+        let events = self.debugger.get_events(event_key, start_seq, limit)?;
+        let events_data = self.annotate_events(events.as_slice())?;
+        for (event_proof, event_data) in events.iter().zip(events_data.iter()) {
+            println!("Transaction Version: {}", event_proof.transaction_version);
+            println!("Event index: {}", event_proof.event_index);
+            println!("Event payload: {}", event_data);
+        }
+        Ok(())
+    }
+
+    pub fn annotate_events(&self, events: &[EventWithProof]) -> Result<Vec<AnnotatedMoveStruct>> {
+        let version = self.debugger.get_latest_version()?;
+        let state_view = DebuggerStateView::new(&*self.debugger, version);
+        let remote_storage = RemoteStorage::new(&state_view);
+        let annotator = MoveValueAnnotator::new(&remote_storage);
+        let mut events_data = vec![];
+        for event in events {
+            match &event.event {
+                ContractEvent::V0(event_v0) => match event_v0.type_tag() {
+                    TypeTag::Struct(s) => {
+                        events_data.push(annotator.view_resource(s, event_v0.event_data())?)
+                    }
+                    ty => bail!("Unexpected TypeTag: got {:?}", ty),
+                },
+            }
+        }
+        Ok(events_data)
+    }
+
     pub fn annotate_account_state_at_version(
         &self,
         account: AccountAddress,
@@ -303,18 +334,17 @@ impl DiemDebugger {
     ) -> Result<Option<Version>> {
         // TODO: The code here is compiled against the local move stdlib instead of the one from on
         // chain storage.
-        let predicate = compile_move_script(code_path, sender)?;
-        let gas_table = zero_cost_schedule();
+        let predicate = compile_move_script(code_path)?;
         let is_version_ok = |version| {
             self.run_session_at_version(version, override_changeset.clone(), |session| {
-                let mut cost_strategy = CostStrategy::system(&gas_table, GasUnits::new(0));
+                let mut gas_status = GasStatus::new_unmetered();
                 let log_context = NoContextLog::new();
                 session.execute_script(
                     predicate.clone(),
                     vec![],
                     vec![],
                     vec![diem_root_address(), sender],
-                    &mut cost_strategy,
+                    &mut gas_status,
                     &log_context,
                 )
             })
@@ -362,17 +392,14 @@ fn is_reconfiguration(vm_output: &TransactionOutput) -> bool {
         .any(|event| *event.key() == new_epoch_event_key)
 }
 
-fn compile_move_script(file_path: &str, sender: AccountAddress) -> Result<Vec<u8>> {
-    let sender_addr = Address::try_from(sender.as_ref()).unwrap();
+fn compile_move_script(file_path: &str) -> Result<Vec<u8>> {
     let cur_path = file_path.to_owned();
     let targets = &vec![cur_path];
-    let sender_opt = Some(sender_addr);
     let (files, units_or_errors) = move_compile(
         targets,
         &diem_framework::diem_stdlib_files(),
-        sender_opt,
         None,
-        false,
+        Flags::empty().set_sources_shadow_deps(false),
     )?;
     let unit = match units_or_errors {
         Err(errors) => {

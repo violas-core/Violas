@@ -1,4 +1,4 @@
-module Test {
+module 0x42::Test {
     struct R<T> has key {
         x: u64,
         s: S,
@@ -9,21 +9,21 @@ module Test {
         y: u64
     }
 
-    spec struct R {
+    spec R {
         invariant x > s.y;
     }
 
-    spec struct S {
+    spec S {
         invariant y > 0;
     }
 
     public fun test_borrow_imm<T: store>(): u64 acquires R {
-        let r = borrow_global<R<T>>(0x1);
+        let r = borrow_global<R<T>>(@0x1);
         r.x
     }
 
     public fun test_borrow_mut<T: store>(): u64 acquires R {
-        let r = borrow_global_mut<R<T>>(0x1);
+        let r = borrow_global_mut<R<T>>(@0x1);
         r.s.y = 2;
         r.x = 3;
         r.x

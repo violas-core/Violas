@@ -1,5 +1,5 @@
 chain:
-  era: 24
+  era: 26
   name: testnet
   genesisConfigmap:
 
@@ -125,3 +125,4 @@ restore:
       container:
       sas:
     trusted_waypoints: []
+    concurrent_downloads: 2

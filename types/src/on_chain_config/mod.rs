@@ -9,9 +9,10 @@ use crate::{
 };
 use anyhow::{format_err, Result};
 use move_core_types::{
-    identifier::Identifier,
+    ident_str,
+    identifier::{IdentStr, Identifier},
     language_storage::{StructTag, TypeTag},
-    move_resource::MoveResource,
+    move_resource::{MoveResource, MoveStructType},
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{collections::HashMap, fmt, sync::Arc};
@@ -23,7 +24,7 @@ mod vm_config;
 mod vm_publishing_option;
 
 pub use self::{
-    diem_version::{DiemVersion, DIEM_MAX_KNOWN_VERSION, DIEM_VERSION_2},
+    diem_version::{DiemVersion, DIEM_MAX_KNOWN_VERSION, DIEM_VERSION_2, DIEM_VERSION_3},
     registered_currencies::RegisteredCurrencies,
     validator_set::ValidatorSet,
     vm_config::VMConfig,
@@ -165,8 +166,8 @@ pub fn access_path_for_config(address: AccountAddress, config_name: Identifier) 
         address,
         AccessPath::resource_access_vec(StructTag {
             address: CORE_CODE_ADDRESS,
-            module: Identifier::new("DiemConfig").unwrap(),
-            name: Identifier::new("DiemConfig").unwrap(),
+            module: ConfigurationResource::MODULE_NAME.to_owned(),
+            name: ConfigurationResource::MODULE_NAME.to_owned(),
             type_params: vec![TypeTag::Struct(StructTag {
                 address: CORE_CODE_ADDRESS,
                 module: config_name.clone(),
@@ -223,7 +224,9 @@ impl Default for ConfigurationResource {
     }
 }
 
-impl MoveResource for ConfigurationResource {
-    const MODULE_NAME: &'static str = "DiemConfig";
-    const STRUCT_NAME: &'static str = "Configuration";
+impl MoveStructType for ConfigurationResource {
+    const MODULE_NAME: &'static IdentStr = ident_str!("DiemConfig");
+    const STRUCT_NAME: &'static IdentStr = ident_str!("Configuration");
 }
+
+impl MoveResource for ConfigurationResource {}

@@ -13,26 +13,37 @@ use crate::{
     },
 };
 use diem_client::views::VMStatusView;
-use diem_config::config::SecureBackend;
+use diem_config::{
+    config::{PeerRole, SecureBackend},
+    network_id::NetworkId,
+};
 use diem_crypto::{
     ed25519::{Ed25519PrivateKey, Ed25519PublicKey},
-    HashValue, PrivateKey, Uniform,
+    x25519, HashValue, PrivateKey, Uniform, ValidCryptoMaterialStringExt,
 };
 use diem_global_constants::{
-    CONSENSUS_KEY, GENESIS_WAYPOINT, OPERATOR_ACCOUNT, OPERATOR_KEY, OWNER_ACCOUNT, OWNER_KEY,
-    VALIDATOR_NETWORK_ADDRESS_KEYS, VALIDATOR_NETWORK_KEY, WAYPOINT,
+    CONSENSUS_KEY, FULLNODE_NETWORK_KEY, GENESIS_WAYPOINT, OPERATOR_ACCOUNT, OPERATOR_KEY,
+    OWNER_ACCOUNT, OWNER_KEY, VALIDATOR_NETWORK_ADDRESS_KEYS, VALIDATOR_NETWORK_KEY, WAYPOINT,
 };
 use diem_key_manager::diem_interface::DiemInterface;
 use diem_management::storage::to_x25519;
-use diem_operational_tool::test_helper::OperationalTool;
+use diem_operational_tool::{
+    keys::{EncodingType, KeyType},
+    test_helper::OperationalTool,
+};
 use diem_secure_storage::{CryptoStorage, KVStorage, Storage};
+use diem_temppath::TempPath;
 use diem_types::{
-    account_address::AccountAddress, block_info::BlockInfo, ledger_info::LedgerInfo,
-    network_address::NetworkAddress, transaction::authenticator::AuthenticationKey,
+    account_address::{from_identity_public_key, AccountAddress},
+    block_info::BlockInfo,
+    ledger_info::LedgerInfo,
+    network_address::NetworkAddress,
+    transaction::authenticator::AuthenticationKey,
     waypoint::Waypoint,
 };
 use rand::rngs::OsRng;
 use std::{
+    collections::HashSet,
     convert::{TryFrom, TryInto},
     fs,
     path::PathBuf,
@@ -107,14 +118,14 @@ fn test_consensus_key_rotation() {
     // Verify that the config has been updated correctly with the new consensus key
     let validator_account = storage.get::<AccountAddress>(OWNER_ACCOUNT).unwrap().value;
     let config_consensus_key = op_tool
-        .validator_config(validator_account, &backend)
+        .validator_config(validator_account, Some(&backend))
         .unwrap()
         .consensus_public_key;
     assert_eq!(new_consensus_key, config_consensus_key);
 
     // Verify that the validator set info contains the new consensus key
     let info_consensus_key = op_tool
-        .validator_set(Some(validator_account), &backend)
+        .validator_set(Some(validator_account), Some(&backend))
         .unwrap()[0]
         .consensus_public_key
         .clone();
@@ -275,7 +286,13 @@ fn test_extract_private_key() {
     let (_, node_config_path) = load_node_config(&env.validator_swarm, 0);
     let key_file_path = node_config_path.with_file_name(OPERATOR_KEY);
     let _ = op_tool
-        .extract_private_key(OPERATOR_KEY, key_file_path.to_str().unwrap(), &backend)
+        .extract_private_key(
+            OPERATOR_KEY,
+            key_file_path.to_str().unwrap(),
+            KeyType::Ed25519,
+            EncodingType::BCS,
+            &backend,
+        )
         .unwrap();
 
     // Verify the operator private key has been written correctly
@@ -293,7 +310,13 @@ fn test_extract_public_key() {
     let (_, node_config_path) = load_node_config(&env.validator_swarm, 0);
     let key_file_path = node_config_path.with_file_name(OPERATOR_KEY);
     let _ = op_tool
-        .extract_public_key(OPERATOR_KEY, key_file_path.to_str().unwrap(), &backend)
+        .extract_public_key(
+            OPERATOR_KEY,
+            key_file_path.to_str().unwrap(),
+            KeyType::Ed25519,
+            EncodingType::BCS,
+            &backend,
+        )
         .unwrap();
 
     // Verify the operator key has been written correctly
@@ -301,6 +324,134 @@ fn test_extract_public_key() {
     let key_from_file = bcs::from_bytes(&file_contents).unwrap();
     let key_from_storage = storage.get_public_key(OPERATOR_KEY).unwrap().public_key;
     assert_eq!(key_from_storage, key_from_file);
+}
+
+#[test]
+fn test_extract_peer_from_storage() {
+    let (mut env, op_tool, backend, _) = launch_swarm_with_op_tool_and_backend(1, 0);
+    env.setup_vfn_swarm();
+
+    // Check Validator
+    let (config, _) = load_node_config(&env.validator_swarm, 0);
+    let map = op_tool
+        .extract_peer_from_storage(VALIDATOR_NETWORK_KEY, &backend)
+        .unwrap();
+    let network_config = config.validator_network.unwrap();
+    let expected_peer_id = network_config.peer_id();
+    let expected_public_key = network_config.identity_key().public_key();
+    let (peer_id, peer) = map.iter().next().unwrap();
+    assert_eq!(expected_public_key, *peer.keys.iter().next().unwrap());
+    assert_eq!(expected_peer_id, *peer_id);
+
+    // Check VFN now
+    let (config, _) = load_node_config(&env.vfn_swarm().lock(), 0);
+    let map = op_tool
+        .extract_peer_from_storage(FULLNODE_NETWORK_KEY, &backend)
+        .unwrap();
+    let network_config = config
+        .full_node_networks
+        .iter()
+        .find(|network| network.network_id == NetworkId::Public)
+        .unwrap();
+    let expected_peer_id = network_config.peer_id();
+    let expected_public_key = network_config.identity_key().public_key();
+    let (peer_id, peer) = map.iter().next().unwrap();
+    assert_eq!(expected_public_key, *peer.keys.iter().next().unwrap());
+    assert_eq!(expected_peer_id, *peer_id);
+}
+
+#[test]
+fn test_extract_peer_from_file() {
+    let op_tool = OperationalTool::test();
+    let path = TempPath::new();
+    path.create_as_file().unwrap();
+    let key = op_tool
+        .generate_key(KeyType::X25519, path.as_ref(), EncodingType::Hex)
+        .unwrap();
+
+    let peer = op_tool
+        .extract_peer_from_file(path.as_ref(), EncodingType::Hex)
+        .unwrap();
+    assert_eq!(1, peer.len());
+    let (peer_id, peer) = peer.iter().next().unwrap();
+    let public_key = key.public_key();
+    assert_eq!(public_key, *peer.keys.iter().next().unwrap());
+    assert_eq!(from_identity_public_key(public_key), *peer_id);
+}
+
+#[test]
+fn test_extract_peers_from_keys() {
+    let op_tool = OperationalTool::test();
+    let output_path = TempPath::new();
+    output_path.create_as_file().unwrap();
+
+    let mut keys = HashSet::new();
+    for _ in 1..10 {
+        let key_path = TempPath::new();
+        key_path.create_as_file().unwrap();
+        keys.insert(
+            op_tool
+                .generate_key(KeyType::X25519, key_path.as_ref(), EncodingType::Hex)
+                .unwrap()
+                .public_key(),
+        );
+    }
+    let peers = op_tool
+        .extract_peers_from_keys(keys.clone(), output_path.as_ref())
+        .unwrap();
+    assert_eq!(keys.len(), peers.len());
+    for key in keys {
+        let address = from_identity_public_key(key);
+        let peer = peers.get(&address).unwrap();
+        let keys = &peer.keys;
+
+        assert_eq!(1, keys.len());
+        assert!(keys.contains(&key));
+        assert_eq!(PeerRole::Downstream, peer.role);
+        assert!(peer.addresses.is_empty());
+    }
+}
+
+#[test]
+fn test_generate_key() {
+    let op_tool = OperationalTool::test();
+    let path = TempPath::new();
+    path.create_as_file().unwrap();
+
+    // Base64
+    let expected_key = op_tool
+        .generate_key(KeyType::X25519, path.as_ref(), EncodingType::Base64)
+        .unwrap();
+    assert_eq!(
+        expected_key,
+        x25519::PrivateKey::try_from(
+            base64::decode(fs::read(path.as_ref()).unwrap())
+                .unwrap()
+                .as_slice()
+        )
+        .unwrap(),
+    );
+
+    // Hex
+    let expected_key = op_tool
+        .generate_key(KeyType::X25519, path.as_ref(), EncodingType::Hex)
+        .unwrap();
+    assert_eq!(
+        expected_key,
+        x25519::PrivateKey::from_encoded_string(
+            &String::from_utf8(fs::read(path.as_ref()).unwrap()).unwrap()
+        )
+        .unwrap()
+    );
+
+    // BCS
+    let expected_key = op_tool
+        .generate_key(KeyType::X25519, path.as_ref(), EncodingType::BCS)
+        .unwrap();
+    assert_eq!(
+        expected_key,
+        bcs::from_bytes(&fs::read(path.as_ref()).unwrap()).unwrap()
+    );
 }
 
 #[test]
@@ -355,7 +506,7 @@ fn test_fullnode_network_key_rotation() {
     // Verify that the config has been loaded correctly with new key
     let validator_account = storage.get::<AccountAddress>(OWNER_ACCOUNT).unwrap().value;
     let config_network_key = op_tool
-        .validator_config(validator_account, &backend)
+        .validator_config(validator_account, Some(&backend))
         .unwrap()
         .fullnode_network_address
         .find_noise_proto()
@@ -364,7 +515,7 @@ fn test_fullnode_network_key_rotation() {
 
     // Verify that the validator set info contains the new network key
     let info_network_key = op_tool
-        .validator_set(Some(validator_account), &backend)
+        .validator_set(Some(validator_account), Some(&backend))
         .unwrap()[0]
         .fullnode_network_address
         .find_noise_proto()
@@ -389,7 +540,7 @@ fn test_network_key_rotation() {
     // Verify that config has been loaded correctly with new key
     let validator_account = storage.get::<AccountAddress>(OWNER_ACCOUNT).unwrap().value;
     let config_network_key = op_tool
-        .validator_config(validator_account, &backend)
+        .validator_config(validator_account, Some(&backend))
         .unwrap()
         .validator_network_address
         .find_noise_proto()
@@ -398,7 +549,7 @@ fn test_network_key_rotation() {
 
     // Verify that the validator set info contains the new network key
     let info_network_key = op_tool
-        .validator_set(Some(validator_account), &backend)
+        .validator_set(Some(validator_account), Some(&backend))
         .unwrap()[0]
         .validator_network_address
         .find_noise_proto()
@@ -408,7 +559,7 @@ fn test_network_key_rotation() {
     // Restart validator
     // At this point, the `add_node` call ensures connectivity to all nodes
     env.validator_swarm.kill_node(0);
-    env.validator_swarm.add_node(0).unwrap();
+    env.validator_swarm.start_node(0).unwrap();
 }
 
 #[test]
@@ -433,7 +584,7 @@ fn test_network_key_rotation_recovery() {
     // Verify that config has been loaded correctly with new key
     let validator_account = storage.get::<AccountAddress>(OWNER_ACCOUNT).unwrap().value;
     let config_network_key = op_tool
-        .validator_config(validator_account, &backend)
+        .validator_config(validator_account, Some(&backend))
         .unwrap()
         .validator_network_address
         .find_noise_proto()
@@ -442,7 +593,7 @@ fn test_network_key_rotation_recovery() {
 
     // Verify that the validator set info contains the new network key
     let info_network_key = op_tool
-        .validator_set(Some(validator_account), &backend)
+        .validator_set(Some(validator_account), Some(&backend))
         .unwrap()[0]
         .validator_network_address
         .find_noise_proto()
@@ -452,7 +603,7 @@ fn test_network_key_rotation_recovery() {
     // Restart validator
     // At this point, the `add_node` call ensures connectivity to all nodes
     env.validator_swarm.kill_node(0);
-    env.validator_swarm.add_node(0).unwrap();
+    env.validator_swarm.start_node(0).unwrap();
 }
 
 #[test]
@@ -481,7 +632,7 @@ fn test_operator_key_rotation() {
     // Verify that the config has been updated correctly with the new consensus key
     let validator_account = storage.get::<AccountAddress>(OWNER_ACCOUNT).unwrap().value;
     let config_consensus_key = op_tool
-        .validator_config(validator_account, &backend)
+        .validator_config(validator_account, Some(&backend))
         .unwrap()
         .consensus_public_key;
     assert_eq!(new_consensus_key, config_consensus_key);
@@ -640,7 +791,9 @@ fn test_validator_config() {
     // Fetch the initial validator config for this operator's owner
     let owner_account = storage.get::<AccountAddress>(OWNER_ACCOUNT).unwrap().value;
     let consensus_key = storage.get_public_key(CONSENSUS_KEY).unwrap().public_key;
-    let original_validator_config = op_tool.validator_config(owner_account, &backend).unwrap();
+    let original_validator_config = op_tool
+        .validator_config(owner_account, Some(&backend))
+        .unwrap();
     assert_eq!(
         consensus_key,
         original_validator_config.consensus_public_key
@@ -661,7 +814,9 @@ fn test_validator_config() {
     assert_eq!(VMStatusView::Executed, txn_ctx.execution_result.unwrap());
 
     // Re-fetch the validator config and verify the changes
-    let new_validator_config = op_tool.validator_config(owner_account, &backend).unwrap();
+    let new_validator_config = op_tool
+        .validator_config(owner_account, Some(&backend))
+        .unwrap();
     assert_eq!(new_consensus_key, new_validator_config.consensus_public_key);
     assert!(new_validator_config
         .validator_network_address
@@ -680,9 +835,11 @@ fn test_validator_decryption() {
 
     // Fetch the validator config and validator info for this operator's owner
     let owner_account = storage.get::<AccountAddress>(OWNER_ACCOUNT).unwrap().value;
-    let validator_config = op_tool.validator_config(owner_account, &backend).unwrap();
+    let validator_config = op_tool
+        .validator_config(owner_account, Some(&backend))
+        .unwrap();
     let validator_set_infos = op_tool
-        .validator_set(Some(owner_account), &backend)
+        .validator_set(Some(owner_account), Some(&backend))
         .unwrap();
     assert_eq!(1, validator_set_infos.len());
 
@@ -698,17 +855,20 @@ fn test_validator_decryption() {
         .set(VALIDATOR_NETWORK_ADDRESS_KEYS, "INVALID KEY")
         .unwrap();
 
-    // Fetch the validator config and validator info for this operator's owner again
-    let validator_config = op_tool.validator_config(owner_account, &backend).unwrap();
-    let validator_set_infos = op_tool
-        .validator_set(Some(owner_account), &backend)
-        .unwrap();
+    // Verify that any failure to decrypt the address will still produce a result
+    for backend in &[Some(&backend), None] {
+        // Fetch the validator config and validator info for this operator's owner
+        let validator_config = op_tool.validator_config(owner_account, *backend).unwrap();
+        let validator_set_infos = op_tool
+            .validator_set(Some(owner_account), *backend)
+            .unwrap();
 
-    // Ensure the validator network addresses failed to decrypt, but everything else was fetched
-    let config_network_address = validator_config.validator_network_address;
-    let info_network_address = validator_set_infos[0].validator_network_address.clone();
-    assert_eq!(config_network_address, info_network_address,);
-    assert_eq!(failed_decryption_address, config_network_address);
+        // Ensure the validator network addresses failed to decrypt, but everything else was fetched
+        let config_network_address = validator_config.validator_network_address;
+        let info_network_address = validator_set_infos[0].validator_network_address.clone();
+        assert_eq!(config_network_address, info_network_address);
+        assert_eq!(failed_decryption_address, config_network_address);
+    }
 }
 
 #[test]
@@ -718,9 +878,11 @@ fn test_validator_set() {
 
     // Fetch the validator config and validator info for this operator's owner
     let owner_account = storage.get::<AccountAddress>(OWNER_ACCOUNT).unwrap().value;
-    let validator_config = op_tool.validator_config(owner_account, &backend).unwrap();
+    let validator_config = op_tool
+        .validator_config(owner_account, Some(&backend))
+        .unwrap();
     let validator_set_infos = op_tool
-        .validator_set(Some(owner_account), &backend)
+        .validator_set(Some(owner_account), Some(&backend))
         .unwrap();
     assert_eq!(1, validator_set_infos.len());
 
@@ -742,7 +904,7 @@ fn test_validator_set() {
     );
 
     // Fetch the entire validator set and check this account is included
-    let validator_set_infos = op_tool.validator_set(None, &backend).unwrap();
+    let validator_set_infos = op_tool.validator_set(None, Some(&backend)).unwrap();
     assert_eq!(num_nodes, validator_set_infos.len());
     let _ = validator_set_infos
         .iter()
@@ -755,7 +917,7 @@ fn test_validator_set() {
     let _ = storage
         .set(VALIDATOR_NETWORK_ADDRESS_KEYS, "random string")
         .unwrap();
-    let validator_set_infos = op_tool.validator_set(None, &backend).unwrap();
+    let validator_set_infos = op_tool.validator_set(None, Some(&backend)).unwrap();
     assert_eq!(num_nodes, validator_set_infos.len());
 
     let validator_info = validator_set_infos
@@ -1040,7 +1202,7 @@ fn set_operator_and_add_new_validator_helper() -> VMStatusView {
         .unwrap();
 
     // Check the validator set size
-    let validator_set_infos = op_tool.validator_set(None, &backend).unwrap();
+    let validator_set_infos = op_tool.validator_set(None, Some(&backend)).unwrap();
     assert_eq!(num_nodes, validator_set_infos.len());
     assert!(validator_set_infos
         .iter()
@@ -1063,7 +1225,7 @@ fn set_operator_and_add_new_validator_helper() -> VMStatusView {
     assert_eq!(VMStatusView::Executed, txn_ctx.execution_result.unwrap());
 
     // Check the new validator has been added to the set
-    let validator_set_infos = op_tool.validator_set(None, &backend).unwrap();
+    let validator_set_infos = op_tool.validator_set(None, Some(&backend)).unwrap();
     assert_eq!(num_nodes + 1, validator_set_infos.len());
     let validator_info = validator_set_infos
         .iter()

@@ -1,5 +1,5 @@
 // Contains tests for treatment of opaque calls
-module Test {
+module 0x42::Test {
 
 	struct R has key { v: u64 }
 
@@ -10,9 +10,9 @@ module Test {
 	    r.v = r.v + 1;
 	    v
 	}
-	spec fun get_and_incr {
+	spec get_and_incr {
 	    pragma opaque;
-	    requires addr != 0x0;
+	    requires addr != @0x0;
 	    aborts_if !exists<R>(addr) with 33;
 	    aborts_if global<R>(addr).v + 1 >= 18446744073709551615;
 	    modifies global<R>(addr);
@@ -21,11 +21,11 @@ module Test {
 	}
 
 	fun incr_twice() acquires R {
-	    get_and_incr(0x1);
-	    get_and_incr(0x1);
+	    get_and_incr(@0x1);
+	    get_and_incr(@0x1);
 	}
-	spec fun incr_twice {
-	    aborts_if !exists<R>(0x1) with 33;
-	    ensures global<R>(0x1).v == old(global<R>(0x1)).v + 2;
+	spec incr_twice {
+	    aborts_if !exists<R>(@0x1) with 33;
+	    ensures global<R>(@0x1).v == old(global<R>(@0x1)).v + 2;
 	}
 }

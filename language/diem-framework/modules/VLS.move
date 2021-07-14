@@ -89,14 +89,14 @@ module VLS {
             Diem::currency_code<CoinType>() == Diem::currency_code<VLS>()
     }
 
-    spec fun is_vls {
+    spec is_vls {
         pragma verify = false, opaque = true;
         /// The following is correct because currency codes are unique.
         ensures result == spec_is_vls<CoinType>();
     }
 
     /// Returns true if CoinType is VLS.
-    spec define spec_is_vls<CoinType>(): bool {
+    spec fun spec_is_vls<CoinType>(): bool {
         type<CoinType>() == type<VLS>()
     }
 
@@ -114,7 +114,7 @@ module VLS {
         Diem::mint_with_capability<VLS>(amount_vls, &reserve.mint_cap)
     }
 
-    spec fun mint {
+    spec mint {
         pragma opaque;
         modifies global<Reserve>(CoreAddresses::DIEM_ROOT_ADDRESS());
         modifies global<Diem::CurrencyInfo<VLS>>(CoreAddresses::CURRENCY_INFO_ADDRESS());
@@ -177,23 +177,23 @@ module VLS {
 
     /// The address of Violas association account 
     public fun VLS_TRASH_ADDRESS(): address {
-        0x564C5300  //'V' 'L' 'S' 00
+        @0x564C5300  //'V' 'L' 'S' 00
     }
 
     /// The address of Violas association account 
     public fun VIOLAS_ASSOCIATION_ADDRESS(): address {
-        0x564C5302  //'V' 'L' 'S' 02
+        @0x564C5302  //'V' 'L' 'S' 02
     }
 
     /// retrieve all receiver' address and distribution ratio
     public fun get_receivers() : vector<Receiver> {    
         let receivers = Vector::empty<Receiver>();
 
-        let element1 = Receiver { addr: 0x564C5301, ratio: FixedPoint32::create_from_rational(71,100) };   //VLS-COMM, 'V' 'L' 'S' 01
-        let element2 = Receiver { addr: 0x564C5302, ratio: FixedPoint32::create_from_rational(15,100) };   //VLS-ASSOCA, 'V' 'L' 'S' 02
-        let element3 = Receiver { addr: 0x564C5303, ratio: FixedPoint32::create_from_rational(12,100) };   //VLS-TEAM, 'V' 'L' 'S' 03
-        let element4 = Receiver { addr: 0x564C5304, ratio: FixedPoint32::create_from_rational(1,100)  };   //VLS-ADVS, 'V' 'L' 'S' 04
-        let element5 = Receiver { addr: 0x564C5305, ratio: FixedPoint32::create_from_rational(1,100)  };   //VLS-OPEN, 'V' 'L' 'S' 05
+        let element1 = Receiver { addr: @0x564C5301, ratio: FixedPoint32::create_from_rational(71,100) };   //VLS-COMM, 'V' 'L' 'S' 01
+        let element2 = Receiver { addr: @0x564C5302, ratio: FixedPoint32::create_from_rational(15,100) };   //VLS-ASSOCA, 'V' 'L' 'S' 02
+        let element3 = Receiver { addr: @0x564C5303, ratio: FixedPoint32::create_from_rational(12,100) };   //VLS-TEAM, 'V' 'L' 'S' 03
+        let element4 = Receiver { addr: @0x564C5304, ratio: FixedPoint32::create_from_rational(1,100)  };   //VLS-ADVS, 'V' 'L' 'S' 04
+        let element5 = Receiver { addr: @0x564C5305, ratio: FixedPoint32::create_from_rational(1,100)  };   //VLS-OPEN, 'V' 'L' 'S' 05
 
         Vector::push_back(&mut receivers, element1);
         Vector::push_back(&mut receivers, element2);

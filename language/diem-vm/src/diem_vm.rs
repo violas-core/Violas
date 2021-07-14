@@ -9,35 +9,38 @@ use crate::{
     system_module_names::*,
     transaction_metadata::TransactionMetadata,
 };
+use diem_crypto::HashValue;
 use diem_logger::prelude::*;
 use diem_state_view::StateView;
 use diem_types::{
     account_config,
     contract_event::ContractEvent,
     event::EventKey,
-    on_chain_config::{ConfigStorage, DiemVersion, OnChainConfig, VMConfig, VMPublishingOption},
+    on_chain_config::{
+        ConfigStorage, DiemVersion, OnChainConfig, VMConfig, VMPublishingOption, DIEM_VERSION_3,
+    },
     transaction::{TransactionOutput, TransactionStatus},
     vm_status::{KeptVMStatus, StatusCode, VMStatus},
     write_set::{WriteOp, WriteSet, WriteSetMut},
 };
 use fail::fail_point;
+use move_binary_format::errors::Location;
 use move_core_types::{
     account_address::AccountAddress,
     effects::{ChangeSet as MoveChangeSet, Event as MoveEvent},
-    gas_schedule::{CostTable, GasAlgebra, GasUnits, InternalGasUnits},
+    gas_schedule::{CostTable, GasAlgebra, GasCarrier, GasUnits, InternalGasUnits},
     identifier::IdentStr,
     language_storage::ModuleId,
     value::{serialize_values, MoveValue},
 };
 use move_vm_runtime::{
-    data_cache::RemoteCache,
+    data_cache::MoveStorage,
     logging::{expect_no_verification_errors, LogContext},
     move_vm::MoveVM,
     session::Session,
 };
-use move_vm_types::gas_schedule::{calculate_intrinsic_gas, zero_cost_schedule, CostStrategy};
+use move_vm_types::gas_schedule::{calculate_intrinsic_gas, GasStatus};
 use std::{convert::TryFrom, sync::Arc};
-use vm::errors::Location;
 
 #[derive(Clone)]
 /// A wrapper to make VMRuntime standalone and thread safe.
@@ -203,12 +206,11 @@ impl DiemVMImpl {
         Ok(())
     }
 
-    /// Run the prologue of a transaction by calling into `SCRIPT_PROLOGUE_NAME` function stored
-    /// in the `ACCOUNT_MODULE` on chain.
-    pub(crate) fn run_script_prologue<R: RemoteCache>(
+    /// Run the prologue of a transaction by calling into either `SCRIPT_PROLOGUE_NAME` function
+    /// or `MULTI_AGENT_SCRIPT_PROLOGUE_NAME` function stored in the `ACCOUNT_MODULE` on chain.
+    pub(crate) fn run_script_prologue<S: MoveStorage>(
         &self,
-        session: &mut Session<R>,
-        cost_strategy: &mut CostStrategy,
+        session: &mut Session<S>,
         txn_data: &TransactionMetadata,
         account_currency_symbol: &IdentStr,
         log_context: &impl LogContext,
@@ -221,22 +223,51 @@ impl DiemVMImpl {
         let txn_max_gas_units = txn_data.max_gas_amount().get();
         let txn_expiration_timestamp_secs = txn_data.expiration_timestamp_secs();
         let chain_id = txn_data.chain_id();
+        let mut gas_status = GasStatus::new_unmetered();
+        let secondary_public_key_hashes: Vec<MoveValue> = txn_data
+            .secondary_authentication_key_preimages
+            .iter()
+            .map(|preimage| {
+                MoveValue::vector_u8(HashValue::sha3_256_of(&preimage.to_vec()).to_vec())
+            })
+            .collect();
+        let args = if self.get_diem_version()? >= DIEM_VERSION_3 && txn_data.is_multi_agent() {
+            vec![
+                MoveValue::Signer(txn_data.sender),
+                MoveValue::U64(txn_sequence_number),
+                MoveValue::vector_u8(txn_public_key),
+                MoveValue::vector_address(txn_data.secondary_signers()),
+                MoveValue::Vector(secondary_public_key_hashes),
+                MoveValue::U64(txn_gas_price),
+                MoveValue::U64(txn_max_gas_units),
+                MoveValue::U64(txn_expiration_timestamp_secs),
+                MoveValue::U8(chain_id.id()),
+            ]
+        } else {
+            vec![
+                MoveValue::Signer(txn_data.sender),
+                MoveValue::U64(txn_sequence_number),
+                MoveValue::vector_u8(txn_public_key),
+                MoveValue::U64(txn_gas_price),
+                MoveValue::U64(txn_max_gas_units),
+                MoveValue::U64(txn_expiration_timestamp_secs),
+                MoveValue::U8(chain_id.id()),
+                MoveValue::vector_u8(txn_data.script_hash.clone()),
+            ]
+        };
+        let prologue_function_name =
+            if self.get_diem_version()? >= DIEM_VERSION_3 && txn_data.is_multi_agent() {
+                &MULTI_AGENT_SCRIPT_PROLOGUE_NAME
+            } else {
+                &SCRIPT_PROLOGUE_NAME
+            };
         session
             .execute_function(
                 &account_config::ACCOUNT_MODULE,
-                &SCRIPT_PROLOGUE_NAME,
+                prologue_function_name,
                 vec![gas_currency_ty],
-                serialize_values(&vec![
-                    MoveValue::Signer(txn_data.sender),
-                    MoveValue::U64(txn_sequence_number),
-                    MoveValue::vector_u8(txn_public_key),
-                    MoveValue::U64(txn_gas_price),
-                    MoveValue::U64(txn_max_gas_units),
-                    MoveValue::U64(txn_expiration_timestamp_secs),
-                    MoveValue::U8(chain_id.id()),
-                    MoveValue::vector_u8(txn_data.script_hash.clone()),
-                ]),
-                cost_strategy,
+                serialize_values(&args),
+                &mut gas_status,
                 log_context,
             )
             .map(|_return_vals| ())
@@ -246,10 +277,9 @@ impl DiemVMImpl {
 
     /// Run the prologue of a transaction by calling into `MODULE_PROLOGUE_NAME` function stored
     /// in the `ACCOUNT_MODULE` on chain.
-    pub(crate) fn run_module_prologue<R: RemoteCache>(
+    pub(crate) fn run_module_prologue<S: MoveStorage>(
         &self,
-        session: &mut Session<R>,
-        cost_strategy: &mut CostStrategy,
+        session: &mut Session<S>,
         txn_data: &TransactionMetadata,
         account_currency_symbol: &IdentStr,
         log_context: &impl LogContext,
@@ -262,6 +292,7 @@ impl DiemVMImpl {
         let txn_max_gas_units = txn_data.max_gas_amount().get();
         let txn_expiration_timestamp_secs = txn_data.expiration_timestamp_secs();
         let chain_id = txn_data.chain_id();
+        let mut gas_status = GasStatus::new_unmetered();
         session
             .execute_function(
                 &account_config::ACCOUNT_MODULE,
@@ -276,7 +307,7 @@ impl DiemVMImpl {
                     MoveValue::U64(txn_expiration_timestamp_secs),
                     MoveValue::U8(chain_id.id()),
                 ]),
-                cost_strategy,
+                &mut gas_status,
                 log_context,
             )
             .map(|_return_vals| ())
@@ -286,10 +317,10 @@ impl DiemVMImpl {
 
     /// Run the epilogue of a transaction by calling into `EPILOGUE_NAME` function stored
     /// in the `ACCOUNT_MODULE` on chain.
-    pub(crate) fn run_success_epilogue<R: RemoteCache>(
+    pub(crate) fn run_success_epilogue<S: MoveStorage>(
         &self,
-        session: &mut Session<R>,
-        cost_strategy: &mut CostStrategy,
+        session: &mut Session<S>,
+        gas_status: &mut GasStatus,
         txn_data: &TransactionMetadata,
         account_currency_symbol: &IdentStr,
         log_context: &impl LogContext,
@@ -305,7 +336,7 @@ impl DiemVMImpl {
         let txn_sequence_number = txn_data.sequence_number();
         let txn_gas_price = txn_data.gas_unit_price().get();
         let txn_max_gas_units = txn_data.max_gas_amount().get();
-        let gas_remaining = cost_strategy.remaining_gas().get();
+        let gas_remaining = gas_status.remaining_gas().get();
         session
             .execute_function(
                 &account_config::ACCOUNT_MODULE,
@@ -318,7 +349,7 @@ impl DiemVMImpl {
                     MoveValue::U64(txn_max_gas_units),
                     MoveValue::U64(gas_remaining),
                 ]),
-                cost_strategy,
+                gas_status,
                 log_context,
             )
             .map(|_return_vals| ())
@@ -328,10 +359,10 @@ impl DiemVMImpl {
 
     /// Run the failure epilogue of a transaction by calling into `USER_EPILOGUE_NAME` function
     /// stored in the `ACCOUNT_MODULE` on chain.
-    pub(crate) fn run_failure_epilogue<R: RemoteCache>(
+    pub(crate) fn run_failure_epilogue<S: MoveStorage>(
         &self,
-        session: &mut Session<R>,
-        cost_strategy: &mut CostStrategy,
+        session: &mut Session<S>,
+        gas_status: &mut GasStatus,
         txn_data: &TransactionMetadata,
         account_currency_symbol: &IdentStr,
         log_context: &impl LogContext,
@@ -341,7 +372,7 @@ impl DiemVMImpl {
         let txn_sequence_number = txn_data.sequence_number();
         let txn_gas_price = txn_data.gas_unit_price().get();
         let txn_max_gas_units = txn_data.max_gas_amount().get();
-        let gas_remaining = cost_strategy.remaining_gas().get();
+        let gas_remaining = gas_status.remaining_gas().get();
         session
             .execute_function(
                 &account_config::ACCOUNT_MODULE,
@@ -354,7 +385,7 @@ impl DiemVMImpl {
                     MoveValue::U64(txn_max_gas_units),
                     MoveValue::U64(gas_remaining),
                 ]),
-                cost_strategy,
+                gas_status,
                 log_context,
             )
             .map(|_return_vals| ())
@@ -366,9 +397,9 @@ impl DiemVMImpl {
 
     /// Run the prologue of a transaction by calling into `PROLOGUE_NAME` function stored
     /// in the `WRITESET_MODULE` on chain.
-    pub(crate) fn run_writeset_prologue<R: RemoteCache>(
+    pub(crate) fn run_writeset_prologue<S: MoveStorage>(
         &self,
-        session: &mut Session<R>,
+        session: &mut Session<S>,
         txn_data: &TransactionMetadata,
         log_context: &impl LogContext,
     ) -> Result<(), VMStatus> {
@@ -377,8 +408,7 @@ impl DiemVMImpl {
         let txn_expiration_timestamp_secs = txn_data.expiration_timestamp_secs();
         let chain_id = txn_data.chain_id();
 
-        let gas_schedule = zero_cost_schedule();
-        let mut cost_strategy = CostStrategy::system(&gas_schedule, GasUnits::new(0));
+        let mut gas_status = GasStatus::new_unmetered();
         session
             .execute_function(
                 &account_config::ACCOUNT_MODULE,
@@ -391,7 +421,7 @@ impl DiemVMImpl {
                     MoveValue::U64(txn_expiration_timestamp_secs),
                     MoveValue::U8(chain_id.id()),
                 ]),
-                &mut cost_strategy,
+                &mut gas_status,
                 log_context,
             )
             .map(|_return_vals| ())
@@ -401,15 +431,14 @@ impl DiemVMImpl {
 
     /// Run the epilogue of a transaction by calling into `WRITESET_EPILOGUE_NAME` function stored
     /// in the `WRITESET_MODULE` on chain.
-    pub(crate) fn run_writeset_epilogue<R: RemoteCache>(
+    pub(crate) fn run_writeset_epilogue<S: MoveStorage>(
         &self,
-        session: &mut Session<R>,
+        session: &mut Session<S>,
         txn_data: &TransactionMetadata,
         should_trigger_reconfiguration: bool,
         log_context: &impl LogContext,
     ) -> Result<(), VMStatus> {
-        let gas_schedule = zero_cost_schedule();
-        let mut cost_strategy = CostStrategy::system(&gas_schedule, GasUnits::new(0));
+        let mut gas_status = GasStatus::new_unmetered();
         session
             .execute_function(
                 &account_config::ACCOUNT_MODULE,
@@ -420,7 +449,7 @@ impl DiemVMImpl {
                     MoveValue::U64(txn_data.sequence_number),
                     MoveValue::Bool(should_trigger_reconfiguration),
                 ]),
-                &mut cost_strategy,
+                &mut gas_status,
                 log_context,
             )
             .map(|_return_vals| ())
@@ -430,7 +459,7 @@ impl DiemVMImpl {
             })
     }
 
-    pub fn new_session<'r, R: RemoteCache>(&self, r: &'r R) -> Session<'r, '_, R> {
+    pub fn new_session<'r, R: MoveStorage>(&self, r: &'r R) -> Session<'r, '_, R> {
         self.move_vm.new_session(r)
     }
 }
@@ -483,8 +512,9 @@ pub fn convert_changeset_and_events_cached<C: AccessPathCache>(
     // TODO: Cache access path computations if necessary.
     let mut ops = vec![];
 
-    for (addr, account_changeset) in changeset.accounts {
-        for (struct_tag, blob_opt) in account_changeset.resources {
+    for (addr, account_changeset) in changeset.into_inner() {
+        let (modules, resources) = account_changeset.into_inner();
+        for (struct_tag, blob_opt) in resources {
             let ap = ap_cache.get_resource_path(addr, struct_tag);
             let op = match blob_opt {
                 None => WriteOp::Deletion,
@@ -493,7 +523,7 @@ pub fn convert_changeset_and_events_cached<C: AccessPathCache>(
             ops.push((ap, op))
         }
 
-        for (name, blob_opt) in account_changeset.modules {
+        for (name, blob_opt) in modules {
             let ap = ap_cache.get_module_path(ModuleId::new(addr, name));
             let op = match blob_opt {
                 None => WriteOp::Deletion,
@@ -527,39 +557,31 @@ pub fn convert_changeset_and_events(
     convert_changeset_and_events_cached(&mut (), changeset, events)
 }
 
-pub(crate) fn charge_global_write_gas_usage<R: RemoteCache>(
-    cost_strategy: &mut CostStrategy,
+pub(crate) fn charge_global_write_gas_usage<R: MoveStorage>(
+    gas_status: &mut GasStatus,
     session: &Session<R>,
     sender: &AccountAddress,
 ) -> Result<(), VMStatus> {
     let total_cost = session.num_mutated_accounts(sender)
-        * cost_strategy
+        * gas_status
             .cost_table()
             .gas_constants
             .global_memory_per_byte_write_cost
-            .mul(
-                cost_strategy
-                    .cost_table()
-                    .gas_constants
-                    .default_account_size,
-            )
+            .mul(gas_status.cost_table().gas_constants.default_account_size)
             .get();
-    cost_strategy
+    gas_status
         .deduct_gas(InternalGasUnits::new(total_cost))
         .map_err(|p_err| p_err.finish(Location::Undefined).into_vm_status())
 }
 
-pub(crate) fn get_transaction_output<A: AccessPathCache, R: RemoteCache>(
+pub(crate) fn get_transaction_output<A: AccessPathCache, S: MoveStorage>(
     ap_cache: &mut A,
-    session: Session<R>,
-    cost_strategy: &CostStrategy,
+    session: Session<S>,
+    gas_left: GasUnits<GasCarrier>,
     txn_data: &TransactionMetadata,
     status: KeptVMStatus,
 ) -> Result<TransactionOutput, VMStatus> {
-    let gas_used: u64 = txn_data
-        .max_gas_amount()
-        .sub(cost_strategy.remaining_gas())
-        .get();
+    let gas_used: u64 = txn_data.max_gas_amount().sub(gas_left).get();
 
     let (changeset, events) = session.finish().map_err(|e| e.into_vm_status())?;
     let (write_set, events) = convert_changeset_and_events_cached(ap_cache, changeset, events)?;

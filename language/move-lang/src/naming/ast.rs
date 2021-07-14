@@ -3,13 +3,10 @@
 
 use crate::{
     expansion::ast::{
-        ability_constraints_ast_debug, ability_modifiers_ast_debug, AbilitySet, Fields, SpecId,
-        Value, Value_,
+        ability_constraints_ast_debug, ability_modifiers_ast_debug, AbilitySet, Attribute, Fields,
+        Friend, ModuleIdent, SpecId, Value, Value_,
     },
-    parser::ast::{
-        BinOp, ConstantName, Field, FunctionName, FunctionVisibility, ModuleIdent, StructName,
-        UnaryOp, Var,
-    },
+    parser::ast::{BinOp, ConstantName, Field, FunctionName, StructName, UnaryOp, Var, Visibility},
     shared::{ast_debug::*, unique_map::UniqueMap, *},
 };
 use move_ir_types::location::*;
@@ -25,6 +22,8 @@ use std::{
 
 #[derive(Debug, Clone)]
 pub struct Program {
+    // Map of known named address values. Not all addresses will be present
+    pub addresses: UniqueMap<Name, AddressBytes>,
     pub modules: UniqueMap<ModuleIdent, ModuleDefinition>,
     pub scripts: BTreeMap<String, Script>,
 }
@@ -35,6 +34,7 @@ pub struct Program {
 
 #[derive(Debug, Clone)]
 pub struct Script {
+    pub attributes: Vec<Attribute>,
     pub loc: Loc,
     pub constants: UniqueMap<ConstantName, Constant>,
     pub function_name: FunctionName,
@@ -47,11 +47,12 @@ pub struct Script {
 
 #[derive(Debug, Clone)]
 pub struct ModuleDefinition {
+    pub attributes: Vec<Attribute>,
     pub is_source_module: bool,
     /// `dependency_order` is the topological order/rank in the dependency graph.
     /// `dependency_order` is initialized at `0` and set in the uses pass
     pub dependency_order: usize,
-    pub friends: UniqueMap<ModuleIdent, Loc>,
+    pub friends: UniqueMap<ModuleIdent, Friend>,
     pub structs: UniqueMap<StructName, StructDefinition>,
     pub constants: UniqueMap<ConstantName, Constant>,
     pub functions: UniqueMap<FunctionName, Function>,
@@ -63,6 +64,7 @@ pub struct ModuleDefinition {
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct StructDefinition {
+    pub attributes: Vec<Attribute>,
     pub abilities: AbilitySet,
     pub type_parameters: Vec<TParam>,
     pub fields: StructFields,
@@ -94,7 +96,8 @@ pub type FunctionBody = Spanned<FunctionBody_>;
 
 #[derive(PartialEq, Debug, Clone)]
 pub struct Function {
-    pub visibility: FunctionVisibility,
+    pub attributes: Vec<Attribute>,
+    pub visibility: Visibility,
     pub signature: FunctionSignature,
     pub acquires: BTreeMap<StructName, Loc>,
     pub body: FunctionBody,
@@ -106,6 +109,7 @@ pub struct Function {
 
 #[derive(PartialEq, Debug, Clone)]
 pub struct Constant {
+    pub attributes: Vec<Attribute>,
     pub loc: Loc,
     pub signature: Type,
     pub value: Exp,
@@ -206,7 +210,6 @@ pub type BuiltinFunction = Spanned<BuiltinFunction_>;
 #[allow(clippy::large_enum_variant)]
 pub enum Exp_ {
     Value(Value),
-    InferredNum(u128),
     Move(Var),
     Copy(Var),
     Use(Var),
@@ -494,16 +497,17 @@ impl Type_ {
 }
 
 impl Value_ {
-    pub fn type_(&self, loc: Loc) -> Type {
+    pub fn type_(&self, loc: Loc) -> Option<Type> {
         use Value_::*;
-        match self {
+        Some(match self {
             Address(_) => Type_::address(loc),
+            InferredNum(_) => return None,
             U8(_) => Type_::u8(loc),
             U64(_) => Type_::u64(loc),
             U128(_) => Type_::u128(loc),
             Bool(_) => Type_::bool(loc),
             Bytearray(_) => Type_::vector(loc, Type_::u8(loc)),
-        }
+        })
     }
 }
 
@@ -547,7 +551,15 @@ impl fmt::Display for TypeName_ {
 
 impl AstDebug for Program {
     fn ast_debug(&self, w: &mut AstWriter) {
-        let Program { modules, scripts } = self;
+        let Program {
+            addresses,
+            modules,
+            scripts,
+        } = self;
+        for (_, addr, bytes) in addresses {
+            w.writeln(&format!("address {} = {};", addr, bytes));
+        }
+
         for (m, mdef) in modules.key_cloned_iter() {
             w.write(&format!("module {}", m));
             w.block(|w| mdef.ast_debug(w));
@@ -565,11 +577,13 @@ impl AstDebug for Program {
 impl AstDebug for Script {
     fn ast_debug(&self, w: &mut AstWriter) {
         let Script {
+            attributes,
             loc: _loc,
             constants,
             function_name,
             function,
         } = self;
+        attributes.ast_debug(w);
         for cdef in constants.key_cloned_iter() {
             cdef.ast_debug(w);
             w.new_line();
@@ -581,6 +595,7 @@ impl AstDebug for Script {
 impl AstDebug for ModuleDefinition {
     fn ast_debug(&self, w: &mut AstWriter) {
         let ModuleDefinition {
+            attributes,
             is_source_module,
             dependency_order,
             friends,
@@ -588,6 +603,7 @@ impl AstDebug for ModuleDefinition {
             constants,
             functions,
         } = self;
+        attributes.ast_debug(w);
         if *is_source_module {
             w.writeln("library module")
         } else {
@@ -618,11 +634,13 @@ impl AstDebug for (StructName, &StructDefinition) {
         let (
             name,
             StructDefinition {
+                attributes,
                 abilities,
                 type_parameters,
                 fields,
             },
         ) = self;
+        attributes.ast_debug(w);
         if let StructFields::Native(_) = fields {
             w.write("native ");
         }
@@ -647,12 +665,14 @@ impl AstDebug for (FunctionName, &Function) {
         let (
             name,
             Function {
+                attributes,
                 visibility,
                 signature,
                 acquires,
                 body,
             },
         ) = self;
+        attributes.ast_debug(w);
         visibility.ast_debug(w);
         if let FunctionBody_::Native = &body.value {
             w.write("native ");
@@ -704,11 +724,13 @@ impl AstDebug for (ConstantName, &Constant) {
         let (
             name,
             Constant {
+                attributes,
                 loc: _loc,
                 signature,
                 value,
             },
         ) = self;
+        attributes.ast_debug(w);
         w.write(&format!("const {}:", name));
         signature.ast_debug(w);
         w.write(" = ");
@@ -842,7 +864,6 @@ impl AstDebug for Exp_ {
                 trailing: _trailing,
             } => w.write("/*()*/"),
             E::Value(v) => v.ast_debug(w),
-            E::InferredNum(u) => w.write(&format!("{}", u)),
             E::Move(v) => w.write(&format!("move {}", v)),
             E::Copy(v) => w.write(&format!("copy {}", v)),
             E::Use(v) => w.write(&format!("{}", v)),

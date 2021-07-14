@@ -31,7 +31,7 @@ use network::{
     logging::NetworkSchema,
     peer_manager::{
         builder::{AuthenticationMode, PeerManagerBuilder},
-        conn_notifs_channel, ConnectionRequestSender,
+        ConnectionRequestSender,
     },
     protocols::{
         health_checker::{self, builder::HealthCheckerBuilder},
@@ -40,7 +40,7 @@ use network::{
     ProtocolId,
 };
 use network_simple_onchain_discovery::{
-    builder::ConfigurationChangeListenerBuilder, gen_simple_discovery_reconfig_subscription,
+    builder::ValidatorSetChangeListenerBuilder, gen_simple_discovery_reconfig_subscription,
 };
 use std::{clone::Clone, collections::HashMap, sync::Arc};
 use subscription_service::ReconfigSubscription;
@@ -64,7 +64,7 @@ pub struct NetworkBuilder {
     time_service: TimeService,
     network_context: Arc<NetworkContext>,
 
-    configuration_change_listener_builder: Option<ConfigurationChangeListenerBuilder>,
+    validator_set_listener_builder: Option<ValidatorSetChangeListenerBuilder>,
     connectivity_manager_builder: Option<ConnectivityManagerBuilder>,
     health_checker_builder: Option<HealthCheckerBuilder>,
     peer_manager_builder: PeerManagerBuilder,
@@ -114,7 +114,7 @@ impl NetworkBuilder {
             executor: None,
             time_service,
             network_context,
-            configuration_change_listener_builder: None,
+            validator_set_listener_builder: None,
             connectivity_manager_builder: None,
             health_checker_builder: None,
             peer_manager_builder,
@@ -124,7 +124,7 @@ impl NetworkBuilder {
 
     pub fn new_for_test(
         chain_id: ChainId,
-        seeds: &PeerSet,
+        seeds: PeerSet,
         trusted_peers: Arc<RwLock<PeerSet>>,
         network_context: Arc<NetworkContext>,
         time_service: TimeService,
@@ -177,7 +177,7 @@ impl NetworkBuilder {
         let authentication_mode = if config.mutual_authentication {
             AuthenticationMode::Mutual(identity_key)
         } else {
-            AuthenticationMode::ServerOnly(identity_key)
+            AuthenticationMode::MaybeMutual(identity_key)
         };
 
         let network_context = Arc::new(NetworkContext::new(
@@ -210,9 +210,6 @@ impl NetworkBuilder {
             config.ping_failures_tolerated,
         );
 
-        // Sanity check seed addresses.
-        config.verify_seeds().expect("Seeds must be well formed");
-
         // Don't turn on connectivity manager if we're a public-facing server,
         // for example.
         //
@@ -230,29 +227,10 @@ impl NetworkBuilder {
             || !config.seed_addrs.is_empty()
             || !config.seeds.is_empty()
         {
-            let mut seeds = config.seeds.clone();
-
-            // Merge old seed configuration with new seed configuration
-            // TODO(gnazario): Once fully migrated, remove `seed_addrs`
-            config
-                .seed_addrs
-                .iter()
-                .map(|(peer_id, addrs)| {
-                    (
-                        peer_id,
-                        Peer::from_addrs(PeerRole::ValidatorFullNode, addrs.clone()),
-                    )
-                })
-                .for_each(|(peer_id, peer)| {
-                    seeds
-                        .entry(*peer_id)
-                        // Sad clone due to Rust not realizing these are two distinct paths
-                        .and_modify(|seed| seed.extend(peer.clone()).unwrap())
-                        .or_insert(peer);
-                });
+            let seeds = merge_seeds(config);
 
             network_builder.add_connectivity_manager(
-                &seeds,
+                seeds,
                 trusted_peers,
                 config.max_outbound_connections,
                 config.connection_backoff_base,
@@ -265,7 +243,7 @@ impl NetworkBuilder {
 
         match &config.discovery_method {
             DiscoveryMethod::Onchain => {
-                network_builder.add_configuration_change_listener(pubkey, config.encryptor());
+                network_builder.add_validator_set_listener(pubkey, config.encryptor());
             }
             DiscoveryMethod::None => {}
         }
@@ -278,20 +256,47 @@ impl NetworkBuilder {
         assert_eq!(self.state, State::CREATED);
         self.state = State::BUILT;
         self.executor = Some(executor);
-        self.build_peer_manager()
-            .build_configuration_change_listener()
-            .build_connectivity_manager()
-            .build_connection_monitoring()
+        self.peer_manager_builder
+            .build(self.executor.as_mut().expect("Executor must exist"));
+        self
     }
 
     /// Start the built Networking components.
     pub fn start(&mut self) -> &mut Self {
         assert_eq!(self.state, State::BUILT);
         self.state = State::STARTED;
-        self.start_peer_manager()
-            .start_connectivity_manager()
-            .start_connection_monitoring()
-            .start_configuration_change_listener()
+
+        let executor = self.executor.as_mut().expect("Executor must exist");
+        self.peer_manager_builder.start(executor);
+        debug!(
+            NetworkSchema::new(&self.network_context),
+            "{} Started peer manager", self.network_context
+        );
+
+        if let Some(conn_mgr_builder) = self.connectivity_manager_builder.as_mut() {
+            conn_mgr_builder.start(executor);
+            debug!(
+                NetworkSchema::new(&self.network_context),
+                "{} Started conn manager", self.network_context
+            );
+        }
+
+        if let Some(health_checker_builder) = self.health_checker_builder.as_mut() {
+            health_checker_builder.start(executor);
+            debug!(
+                NetworkSchema::new(&self.network_context),
+                "{} Started health checker", self.network_context
+            );
+        }
+
+        if let Some(validator_set_listener_builder) = self.validator_set_listener_builder.as_mut() {
+            validator_set_listener_builder.start(executor);
+            debug!(
+                NetworkSchema::new(&self.network_context),
+                "{} Started validator set listener", self.network_context
+            );
+        }
+        self
     }
 
     pub fn reconfig_subscriptions(&mut self) -> &mut Vec<ReconfigSubscription> {
@@ -303,30 +308,13 @@ impl NetworkBuilder {
     }
 
     pub fn conn_mgr_reqs_tx(&self) -> Option<channel::Sender<ConnectivityRequest>> {
-        match self.connectivity_manager_builder.as_ref() {
-            Some(conn_mgr_builder) => Some(conn_mgr_builder.conn_mgr_reqs_tx()),
-            None => None,
-        }
-    }
-
-    fn add_connection_event_listener(&mut self) -> conn_notifs_channel::Receiver {
-        self.peer_manager_builder.add_connection_event_listener()
+        self.connectivity_manager_builder
+            .as_ref()
+            .map(|conn_mgr_builder| conn_mgr_builder.conn_mgr_reqs_tx())
     }
 
     pub fn listen_address(&self) -> NetworkAddress {
         self.peer_manager_builder.listen_address()
-    }
-
-    fn build_peer_manager(&mut self) -> &mut Self {
-        self.peer_manager_builder
-            .build(self.executor.as_mut().expect("Executor must exist"));
-        self
-    }
-
-    fn start_peer_manager(&mut self) -> &mut Self {
-        self.peer_manager_builder
-            .start(self.executor.as_mut().expect("Executor must exist"));
-        self
     }
 
     /// Add a [`ConnectivityManager`] to the network.
@@ -340,7 +328,7 @@ impl NetworkBuilder {
     /// permissioned.
     pub fn add_connectivity_manager(
         &mut self,
-        seeds: &PeerSet,
+        seeds: PeerSet,
         trusted_peers: Arc<RwLock<PeerSet>>,
         max_outbound_connections: usize,
         connection_backoff_base: u64,
@@ -349,28 +337,13 @@ impl NetworkBuilder {
         channel_size: usize,
         mutual_authentication: bool,
     ) -> &mut Self {
-        let pm_conn_mgr_notifs_rx = self.add_connection_event_listener();
+        let pm_conn_mgr_notifs_rx = self.peer_manager_builder.add_connection_event_listener();
         let outbound_connection_limit = if !self.network_context.network_id().is_validator_network()
         {
             Some(max_outbound_connections)
         } else {
             None
         };
-
-        // Merge pubkeys that may be in the seed addresses
-        let mut seeds = seeds.clone();
-        seeds.values_mut().for_each(
-            |Peer {
-                 addresses, keys, ..
-             }| {
-                addresses
-                    .iter()
-                    .filter_map(NetworkAddress::find_noise_proto)
-                    .for_each(|pubkey| {
-                        keys.insert(pubkey);
-                    });
-            },
-        );
 
         self.connectivity_manager_builder = Some(ConnectivityManagerBuilder::create(
             self.network_context(),
@@ -389,25 +362,7 @@ impl NetworkBuilder {
         self
     }
 
-    fn build_connectivity_manager(&mut self) -> &mut Self {
-        if let Some(builder) = self.connectivity_manager_builder.as_mut() {
-            builder.build(self.executor.as_mut().expect("Executor must exist"));
-        }
-        self
-    }
-
-    fn start_connectivity_manager(&mut self) -> &mut Self {
-        if let Some(builder) = self.connectivity_manager_builder.as_mut() {
-            builder.start(self.executor.as_mut().expect("Executor must exist"));
-        }
-        self
-    }
-
-    fn add_configuration_change_listener(
-        &mut self,
-        pubkey: PublicKey,
-        encryptor: Encryptor,
-    ) -> &mut Self {
+    fn add_validator_set_listener(&mut self, pubkey: PublicKey, encryptor: Encryptor) -> &mut Self {
         let conn_mgr_reqs_tx = self
             .conn_mgr_reqs_tx()
             .expect("ConnectivityManager must be installed for validator");
@@ -416,33 +371,13 @@ impl NetworkBuilder {
         self.reconfig_subscriptions
             .push(simple_discovery_reconfig_subscription);
 
-        self.configuration_change_listener_builder =
-            Some(ConfigurationChangeListenerBuilder::create(
-                self.network_context.clone(),
-                pubkey,
-                encryptor,
-                conn_mgr_reqs_tx,
-                simple_discovery_reconfig_rx,
-            ));
-        self
-    }
-
-    fn build_configuration_change_listener(&mut self) -> &mut Self {
-        if let Some(configuration_change_listener) =
-            self.configuration_change_listener_builder.as_mut()
-        {
-            configuration_change_listener.build();
-        }
-        self
-    }
-
-    fn start_configuration_change_listener(&mut self) -> &mut Self {
-        if let Some(configuration_change_listener) =
-            self.configuration_change_listener_builder.as_mut()
-        {
-            configuration_change_listener
-                .start(self.executor.as_mut().expect("Executor must exist"));
-        }
+        self.validator_set_listener_builder = Some(ValidatorSetChangeListenerBuilder::create(
+            self.network_context.clone(),
+            pubkey,
+            encryptor,
+            conn_mgr_reqs_tx,
+            simple_discovery_reconfig_rx,
+        ));
         self
     }
 
@@ -457,7 +392,7 @@ impl NetworkBuilder {
         let (hc_network_tx, hc_network_rx) =
             self.add_protocol_handler(health_checker::network_endpoint_config());
 
-        self.health_checker_builder = Some(HealthCheckerBuilder::create(
+        self.health_checker_builder = Some(HealthCheckerBuilder::new(
             self.network_context(),
             self.time_service.clone(),
             ping_interval_ms,
@@ -470,30 +405,6 @@ impl NetworkBuilder {
             NetworkSchema::new(&self.network_context),
             "{} Created health checker", self.network_context
         );
-        self
-    }
-
-    /// Build the HealthChecker, if it has been added.
-    fn build_connection_monitoring(&mut self) -> &mut Self {
-        if let Some(health_checker) = self.health_checker_builder.as_mut() {
-            health_checker.build(self.executor.as_mut().expect("Executor must exist"));
-            debug!(
-                NetworkSchema::new(&self.network_context),
-                "{} Built health checker", self.network_context
-            );
-        };
-        self
-    }
-
-    /// Star the built HealthChecker.
-    fn start_connection_monitoring(&mut self) -> &mut Self {
-        if let Some(health_checker) = self.health_checker_builder.as_mut() {
-            health_checker.start(self.executor.as_mut().expect("Executor must exist"));
-            debug!(
-                NetworkSchema::new(&self.network_context),
-                "{} Started health checker", self.network_context
-            );
-        };
         self
     }
 
@@ -526,4 +437,44 @@ impl NetworkBuilder {
             EventT::new(peer_mgr_reqs_rx, connection_notifs_rx),
         )
     }
+}
+
+/// Retrieve and merge seeds so that they have all keys associated
+fn merge_seeds(config: &NetworkConfig) -> PeerSet {
+    config.verify_seeds().expect("Seeds must be well formed");
+    let mut seeds = config.seeds.clone();
+
+    // Merge old seed configuration with new seed configuration
+    // TODO(gnazario): Once fully migrated, remove `seed_addrs`
+    config
+        .seed_addrs
+        .iter()
+        .map(|(peer_id, addrs)| {
+            (
+                peer_id,
+                Peer::from_addrs(PeerRole::ValidatorFullNode, addrs.clone()),
+            )
+        })
+        .for_each(|(peer_id, peer)| {
+            seeds
+                .entry(*peer_id)
+                // Sad clone due to Rust not realizing these are two distinct paths
+                .and_modify(|seed| seed.extend(peer.clone()).unwrap())
+                .or_insert(peer);
+        });
+
+    // Pull public keys out of addresses
+    seeds.values_mut().for_each(
+        |Peer {
+             addresses, keys, ..
+         }| {
+            addresses
+                .iter()
+                .filter_map(NetworkAddress::find_noise_proto)
+                .for_each(|pubkey| {
+                    keys.insert(pubkey);
+                });
+        },
+    );
+    seeds
 }

@@ -2,10 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{
-    account_config::{PreburnQueueResource, PreburnResource},
+    account_config::{PreburnQueueResource, PreburnResource, DESIGNATED_DEALER_MODULE_IDENTIFIER},
     event::EventHandle,
 };
-use move_core_types::{identifier::Identifier, move_resource::MoveResource};
+use move_core_types::{
+    ident_str,
+    identifier::{IdentStr, Identifier},
+    move_resource::{MoveResource, MoveStructType},
+};
 use serde::{Deserialize, Serialize};
 use std::collections::btree_map::BTreeMap;
 
@@ -21,10 +25,12 @@ impl DesignatedDealer {
     }
 }
 
-impl MoveResource for DesignatedDealer {
-    const MODULE_NAME: &'static str = "DesignatedDealer";
-    const STRUCT_NAME: &'static str = "Dealer";
+impl MoveStructType for DesignatedDealer {
+    const MODULE_NAME: &'static IdentStr = DESIGNATED_DEALER_MODULE_IDENTIFIER;
+    const STRUCT_NAME: &'static IdentStr = ident_str!("Dealer");
 }
+
+impl MoveResource for DesignatedDealer {}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum DesignatedDealerPreburns {

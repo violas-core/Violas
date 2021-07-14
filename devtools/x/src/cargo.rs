@@ -4,7 +4,10 @@
 use crate::{
     cargo::selected_package::{SelectedInclude, SelectedPackages},
     config::CargoConfig,
-    utils::{apply_sccache_if_possible, project_root},
+    utils::{
+        apply_sccache_if_possible, log_sccache_stats, project_root, sccache_should_run,
+        stop_sccache_server,
+    },
     Result,
 };
 use anyhow::{anyhow, Context};
@@ -27,6 +30,13 @@ pub struct Cargo {
     inner: Command,
     pass_through_args: Vec<OsString>,
     env_additions: IndexMap<OsString, Option<OsString>>,
+    on_close: fn(),
+}
+
+impl Drop for Cargo {
+    fn drop(&mut self) {
+        (self.on_close)();
+    }
 }
 
 impl Cargo {
@@ -62,11 +72,21 @@ impl Cargo {
             IndexMap::new()
         };
 
+        let on_drop = if sccache_should_run(cargo_config, false) {
+            || {
+                log_sccache_stats();
+                stop_sccache_server();
+            }
+        } else {
+            || ()
+        };
+
         inner.arg(command);
         Self {
             inner,
             pass_through_args: Vec::new(),
             env_additions: envs,
+            on_close: on_drop,
         }
     }
 
@@ -149,11 +169,7 @@ impl Cargo {
         K: AsRef<OsStr>,
         V: AsRef<OsStr>,
     {
-        let converted_val = if let Some(s) = val {
-            Some(s.as_ref().to_owned())
-        } else {
-            None
-        };
+        let converted_val = val.map(|s| s.as_ref().to_owned());
 
         self.env_additions
             .insert(key.as_ref().to_owned(), converted_val);

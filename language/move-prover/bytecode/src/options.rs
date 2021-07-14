@@ -1,9 +1,32 @@
 // Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
+use codespan_reporting::diagnostic::Severity;
 use move_model::model::{GlobalEnv, VerificationScope};
 use serde::{Deserialize, Serialize};
 use std::rc::Rc;
+
+#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
+pub enum AutoTraceLevel {
+    Off,
+    VerifiedFunction,
+    AllFunctions,
+}
+
+impl AutoTraceLevel {
+    pub fn verified_functions(self) -> bool {
+        use AutoTraceLevel::*;
+        matches!(self, VerifiedFunction | AllFunctions)
+    }
+    pub fn functions(self) -> bool {
+        use AutoTraceLevel::*;
+        matches!(self, AllFunctions)
+    }
+    pub fn invariants(self) -> bool {
+        use AutoTraceLevel::*;
+        matches!(self, VerifiedFunction | AllFunctions)
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -32,11 +55,10 @@ pub struct ProverOptions {
     pub assume_invariant_on_access: bool,
     /// Whether pack/unpack should recurse over the structure.
     pub deep_pack_unpack: bool,
-    /// Whether to automatically debug trace values of specification expression leafs.
-    pub debug_trace: bool,
-    /// Report warnings. This is not on by default. We may turn it on if the warnings
-    /// are better filtered, e.g. do not contain unused schemas intended for other modules.
-    pub report_warnings: bool,
+    /// Auto trace level.
+    pub auto_trace_level: AutoTraceLevel,
+    /// Minimal severity level for diagnostics to be reported.
+    pub report_severity: Severity,
     /// Whether to dump the transformed stackless bytecode to a file
     pub dump_bytecode: bool,
     /// Whether to dump the control-flow graphs (in dot format) to files, one per each function
@@ -47,6 +69,14 @@ pub struct ProverOptions {
     pub sequential_task: bool,
     /// Whether to check the inconsistency
     pub check_inconsistency: bool,
+    /// Whether to use exclusively weak edges in borrow analysis
+    pub weak_edges: bool,
+    /// Whether to run monomorphization analysis & transformation
+    pub run_mono: bool,
+    /// Whether to use new global invariant checking
+    pub invariants_v2: bool,
+    /// Whether to run the transformation passes for concrete interpretation (instead of proving)
+    pub for_interpretation: bool,
 }
 
 impl Default for ProverOptions {
@@ -61,14 +91,18 @@ impl Default for ProverOptions {
             resource_wellformed_axiom: false,
             assume_wellformed_on_access: false,
             deep_pack_unpack: false,
-            debug_trace: false,
-            report_warnings: false,
+            auto_trace_level: AutoTraceLevel::Off,
+            report_severity: Severity::Warning,
             assume_invariant_on_access: false,
             dump_bytecode: false,
             dump_cfg: false,
             num_instances: 1,
             sequential_task: false,
             check_inconsistency: false,
+            weak_edges: false,
+            run_mono: true,
+            invariants_v2: true,
+            for_interpretation: false,
         }
     }
 }
@@ -79,5 +113,9 @@ impl ProverOptions {
             env.set_extension(ProverOptions::default())
         }
         env.get_extension::<ProverOptions>().unwrap()
+    }
+
+    pub fn set(env: &GlobalEnv, options: ProverOptions) {
+        env.set_extension::<ProverOptions>(options);
     }
 }

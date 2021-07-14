@@ -1,4 +1,4 @@
-module M {
+module 0x8675309::M {
     struct R has key {}
 
     fun t0() acquires R {
@@ -19,12 +19,12 @@ module M {
     }
 
     fun t2(a: &signer) acquires R {
-        let _ : bool = exists<R>(0x0, 0);
+        let _ : bool = exists<R>(@0x0, 0);
         let () = move_to<R>(a, R{}, 0);
         let () = move_to(a, R{}, 0);
-        let _ : &R = borrow_global<R>(0x0, false);
-        let _ : &mut R = borrow_global_mut<R>(0x0, true);
-        let R {} = move_from<R>(0x0, 0);
+        let _ : &R = borrow_global<R>(@0x0, false);
+        let _ : &mut R = borrow_global_mut<R>(@0x0, true);
+        let R {} = move_from<R>(@0x0, 0);
     }
 
 }

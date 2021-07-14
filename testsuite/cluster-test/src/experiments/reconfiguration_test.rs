@@ -7,17 +7,14 @@ use crate::{
     cluster::Cluster,
     experiments::{Context, Experiment, ExperimentParam},
     instance::Instance,
-    tx_emitter::{execute_and_wait_transactions, gen_submit_transaction_request, EmitJobRequest},
+    tx_emitter::{execute_and_wait_transactions, EmitJobRequest},
 };
 use anyhow::ensure;
 use async_trait::async_trait;
 use diem_client::Client;
 use diem_logger::prelude::*;
 use diem_operational_tool::json_rpc::JsonRpcClientWrapper;
-use diem_transaction_builder::stdlib::{
-    encode_add_validator_and_reconfigure_script, encode_remove_validator_and_reconfigure_script,
-    encode_update_diem_version_script,
-};
+use diem_sdk::transaction_builder::TransactionFactory;
 use diem_types::{
     account_address::AccountAddress, chain_id::ChainId, ledger_info::LedgerInfoWithSignatures,
 };
@@ -47,7 +44,7 @@ impl ExperimentParam for ReconfigurationParams {
     type E = Reconfiguration;
     fn build(self, cluster: &Cluster) -> Self::E {
         let full_node = cluster.random_fullnode_instance();
-        let client = JsonRpcClientWrapper::new(full_node.json_rpc_url().into_string());
+        let client = JsonRpcClientWrapper::new(full_node.json_rpc_url().into());
         let validator_info = client
             .validator_set(None)
             .expect("Unable to fetch validator set");
@@ -95,6 +92,7 @@ impl Experiment for Reconfiguration {
 
     async fn run(&mut self, context: &mut Context<'_>) -> anyhow::Result<()> {
         let full_node = context.cluster.random_fullnode_instance();
+        let tx_factory = TransactionFactory::new(ChainId::test());
         let mut full_node_client = full_node.json_rpc_client();
         let mut diem_root_account = context
             .tx_emitter
@@ -133,15 +131,12 @@ impl Experiment for Reconfiguration {
         let validator_name = self.affected_pod_name.as_bytes().to_vec();
         let timer = Instant::now();
         for i in 0..self.count / 2 {
-            let remove_txn = gen_submit_transaction_request(
-                encode_remove_validator_and_reconfigure_script(
+            let remove_txn = diem_root_account.sign_with_transaction_builder(
+                tx_factory.remove_validator_and_reconfigure(
                     allowed_nonce,
                     validator_name.clone(),
                     self.affected_peer_id,
                 ),
-                &mut diem_root_account,
-                ChainId::test(),
-                0,
             );
             execute_and_wait_transactions(
                 &mut full_node_client,
@@ -150,15 +145,12 @@ impl Experiment for Reconfiguration {
             )
             .await?;
             version = expect_epoch(&full_node_client, version, (i + 1) * 2).await?;
-            let add_txn = gen_submit_transaction_request(
-                encode_add_validator_and_reconfigure_script(
+            let add_txn = diem_root_account.sign_with_transaction_builder(
+                tx_factory.add_validator_and_reconfigure(
                     allowed_nonce,
                     validator_name.clone(),
                     self.affected_peer_id,
                 ),
-                &mut diem_root_account,
-                ChainId::test(),
-                0,
             );
             execute_and_wait_transactions(
                 &mut full_node_client,
@@ -172,13 +164,10 @@ impl Experiment for Reconfiguration {
         if self.count % 2 == 1 {
             let magic_number = 42;
             info!("Bump DiemVersion to {}", magic_number);
-            let update_txn = gen_submit_transaction_request(
-                encode_update_diem_version_script(allowed_nonce, magic_number),
-                &mut diem_root_account,
-                ChainId::test(),
-                0,
+            let update_txn = diem_root_account.sign_with_transaction_builder(
+                TransactionFactory::new(ChainId::test())
+                    .update_diem_version(allowed_nonce, magic_number),
             );
-
             execute_and_wait_transactions(
                 &mut full_node_client,
                 &mut diem_root_account,

@@ -9,17 +9,20 @@ use super::{
 };
 use crate::{
     error::WaitForTransactionError,
+    move_deserialize::{self, Event},
     views::{
-        AccountStateWithProofView, AccountView, CurrencyInfoView, EventView, MetadataView,
-        StateProofView, TransactionView,
+        AccountStateWithProofView, AccountView, CurrencyInfoView, EventView, EventWithProofView,
+        MetadataView, StateProofView, TransactionView, TransactionsWithProofsView,
     },
     Error, Result, Retry, State,
 };
 use diem_crypto::{hash::CryptoHash, HashValue};
 use diem_types::{
     account_address::AccountAddress,
+    event::EventKey,
     transaction::{SignedTransaction, Transaction},
 };
+use move_core_types::move_resource::{MoveResource, MoveStructType};
 use serde::{de::DeserializeOwned, Serialize};
 use std::time::Duration;
 
@@ -118,8 +121,15 @@ impl BlockingClient {
         self.send_batch(requests)
     }
 
+    pub fn request(&self, request: MethodRequest) -> Result<Response<MethodResponse>> {
+        let method = request.method();
+        let resp: Response<serde_json::Value> = self.send(request)?;
+        resp.and_then(|json| MethodResponse::from_json(method, json).map_err(Error::decode))
+    }
+
     pub fn submit(&self, txn: &SignedTransaction) -> Result<Response<()>> {
-        self.send(MethodRequest::submit(txn).map_err(Error::request)?)
+        let request = JsonRpcRequest::new(MethodRequest::submit(txn).map_err(Error::request)?);
+        self.send_without_retry(&request, true)
     }
 
     pub fn get_metadata_by_version(&self, version: u64) -> Result<Response<MetadataView>> {
@@ -132,6 +142,14 @@ impl BlockingClient {
 
     pub fn get_account(&self, address: AccountAddress) -> Result<Response<Option<AccountView>>> {
         self.send(MethodRequest::get_account(address))
+    }
+
+    pub fn get_account_by_version(
+        &self,
+        address: AccountAddress,
+        version: u64,
+    ) -> Result<Response<Option<AccountView>>> {
+        self.send(MethodRequest::get_account_by_version(address, version))
     }
 
     pub fn get_transactions(
@@ -177,7 +195,7 @@ impl BlockingClient {
 
     pub fn get_events(
         &self,
-        key: &str,
+        key: EventKey,
         start_seq: u64,
         limit: u64,
     ) -> Result<Response<Vec<EventView>>> {
@@ -217,20 +235,56 @@ impl BlockingClient {
         &self,
         start_version: u64,
         limit: u64,
-    ) -> Result<Response<()>> {
+        include_events: bool,
+    ) -> Result<Response<Option<TransactionsWithProofsView>>> {
         self.send(MethodRequest::get_transactions_with_proofs(
             start_version,
             limit,
+            include_events,
         ))
     }
 
     pub fn get_events_with_proofs(
         &self,
-        key: &str,
+        key: EventKey,
         start_seq: u64,
         limit: u64,
-    ) -> Result<Response<()>> {
+    ) -> Result<Response<Vec<EventWithProofView>>> {
         self.send(MethodRequest::get_events_with_proofs(key, start_seq, limit))
+    }
+
+    /// Return the events of type `T` that have been emitted to `event_key` since `start_seq`, with a max of `limit`
+    /// results
+    /// Returns an empty vector if there are no such event
+    /// The type `T` must match the event types associated with `event_key`
+    pub fn get_deserialized_events<T: MoveStructType + DeserializeOwned>(
+        &self,
+        event_key: &EventKey,
+        start_seq: u64,
+        limit: u64,
+    ) -> Result<Response<Vec<Event<T>>>> {
+        let (events, state) = self
+            .get_events_with_proofs(*event_key, start_seq, limit)?
+            .into_parts();
+        Ok(Response::new(
+            move_deserialize::get_events::<T>(events)?,
+            state,
+        ))
+    }
+
+    /// Deserialize and return the resource value of type `T` stored under `address`
+    /// Returns None if there is no such value
+    pub fn get_deserialized_resource<T: MoveResource>(
+        &self,
+        address: AccountAddress,
+    ) -> Result<Response<Option<T>>> {
+        let (account, state) = self
+            .get_account_state_with_proof(address, None, None)?
+            .into_parts();
+        Ok(Response::new(
+            move_deserialize::get_resource(account)?,
+            state,
+        ))
     }
 
     //
@@ -239,18 +293,25 @@ impl BlockingClient {
 
     fn send<T: DeserializeOwned>(&self, request: MethodRequest) -> Result<Response<T>> {
         let request = JsonRpcRequest::new(request);
-        self.retry.retry(|| {
-            let resp: diem_json_rpc_types::response::JsonRpcResponse = self.send_impl(&request)?;
+        self.retry
+            .retry(|| self.send_without_retry(&request, false))
+    }
 
-            let (id, state, result) = validate(&self.state, &resp)?;
+    fn send_without_retry<T: DeserializeOwned>(
+        &self,
+        request: &JsonRpcRequest,
+        ignore_stale: bool,
+    ) -> Result<Response<T>> {
+        let resp: diem_json_rpc_types::response::JsonRpcResponse = self.send_impl(&request)?;
 
-            if request.id() != id {
-                return Err(Error::rpc_response("invalid response id"));
-            }
+        let (id, state, result) = validate(&self.state, &resp, ignore_stale)?;
 
-            let inner = serde_json::from_value(result).map_err(Error::decode)?;
-            Ok(Response::new(inner, state))
-        })
+        if request.id() != id {
+            return Err(Error::rpc_response("invalid response id"));
+        }
+
+        let inner = serde_json::from_value(result).map_err(Error::decode)?;
+        Ok(Response::new(inner, state))
     }
 
     fn send_batch(

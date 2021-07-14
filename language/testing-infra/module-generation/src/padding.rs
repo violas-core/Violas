@@ -2,10 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{options::ModuleGeneratorOptions, utils::random_string};
-use diem_types::account_address::AccountAddress;
-use move_core_types::identifier::Identifier;
+use move_binary_format::file_format::{Bytecode, CompiledModuleMut, Signature};
+use move_core_types::{account_address::AccountAddress, identifier::Identifier};
 use rand::{rngs::StdRng, Rng, SeedableRng};
-use vm::file_format::{Bytecode, CompiledModuleMut, Signature};
 
 ///////////////////////////////////////////////////////////////////////////
 // Padding of tables in compiled modules

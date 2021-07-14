@@ -7,8 +7,9 @@ use crate::{
     stackless_bytecode::{AttrId, Bytecode, Label},
 };
 use itertools::Itertools;
+use move_binary_format::file_format::CodeOffset;
 use move_model::{
-    ast::{Exp, Spec},
+    ast::Spec,
     model::{
         FunId, FunctionEnv, FunctionVisibility, GlobalEnv, Loc, ModuleEnv, QualifiedId, StructId,
         TypeParameter,
@@ -18,9 +19,16 @@ use move_model::{
 };
 
 use crate::function_target_pipeline::FunctionVariant;
-use move_model::ast::TempIndex;
-use std::{cell::RefCell, collections::BTreeMap, fmt, ops::Range};
-use vm::file_format::CodeOffset;
+use move_model::{
+    ast::{Exp, TempIndex},
+    model::QualifiedInstId,
+};
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+    ops::Range,
+};
 
 /// A FunctionTarget is a drop-in replacement for a FunctionEnv which allows to rewrite
 /// and analyze bytecode and parameter/local types. It encapsulates a FunctionEnv and information
@@ -75,11 +83,6 @@ pub struct FunctionData {
     pub name_to_index: BTreeMap<Symbol, usize>,
     /// A cache of targets modified by this function.
     pub modify_targets: BTreeMap<QualifiedId<StructId>, Vec<Exp>>,
-}
-
-pub struct FunctionDataBuilder<'a> {
-    pub data: &'a mut FunctionData,
-    pub next_attr_index: usize,
 }
 
 impl<'env> FunctionTarget<'env> {
@@ -219,11 +222,7 @@ impl<'env> FunctionTarget<'env> {
     pub fn get_local_index(&self, name: Symbol) -> Option<usize> {
         self.data.name_to_index.get(&name).cloned().or_else(|| {
             let str = self.global_env().symbol_pool().string(name);
-            if let Some(s) = str.strip_prefix("$t") {
-                Some(s.parse::<usize>().unwrap())
-            } else {
-                None
-            }
+            str.strip_prefix("$t").map(|s| s.parse::<usize>().unwrap())
         })
     }
 
@@ -302,12 +301,6 @@ impl<'env> FunctionTarget<'env> {
         res
     }
 
-    /// Returns true if this is an unchecked parameter.
-    pub fn is_unchecked_param(&self, _idx: TempIndex) -> bool {
-        // This is currently disabled, may want to turn on again so keeping the logic.
-        false
-    }
-
     /// Gets modify targets for a type
     pub fn get_modify_targets_for_type(&self, ty: &QualifiedId<StructId>) -> Option<&Vec<Exp>> {
         self.get_modify_targets().get(ty)
@@ -316,6 +309,41 @@ impl<'env> FunctionTarget<'env> {
     /// Gets all modify targets
     pub fn get_modify_targets(&self) -> &BTreeMap<QualifiedId<StructId>, Vec<Exp>> {
         &self.data.modify_targets
+    }
+
+    /// Get all modifies targets, as instantiated struct ids.
+    pub fn get_modify_ids(&self) -> BTreeSet<QualifiedInstId<StructId>> {
+        self.data
+            .modify_targets
+            .iter()
+            .map(|(qid, exps)| {
+                exps.iter().map(move |e| {
+                    let env = self.global_env();
+                    let rty = &env.get_node_instantiation(e.node_id())[0];
+                    let (_, _, inst) = rty.require_struct();
+                    qid.instantiate(inst.to_owned())
+                })
+            })
+            .flatten()
+            .collect()
+    }
+
+    pub fn get_modify_ids_and_exps(&self) -> BTreeMap<QualifiedInstId<StructId>, Vec<&Exp>> {
+        // TODO: for now we compute this from the legacy representation, but if this
+        //   viewpoint becomes the major use case, we should store it instead directly.
+        let mut res = BTreeMap::new();
+        for (qid, exps) in &self.data.modify_targets {
+            for target in exps {
+                let env = self.global_env();
+                let rty = &env.get_node_instantiation(target.node_id())[0];
+                let (_, _, inst) = rty.require_struct();
+                let qinstid = qid.instantiate(inst.to_owned());
+                res.entry(qinstid)
+                    .or_insert_with(Vec::new)
+                    .push(&target.call_args()[0]);
+            }
+        }
+        res
     }
 
     /// Pretty print a bytecode instruction with offset, comments, annotations, and VC information.
@@ -478,10 +506,18 @@ impl<'env> FunctionTarget<'env> {
 
 impl<'env> fmt::Display for FunctionTarget<'env> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let modifier = if self.func_env.is_native() {
+            "native "
+        } else if self.func_env.is_intrinsic() {
+            "intrinsic "
+        } else {
+            ""
+        };
         write!(
             f,
-            "{}fun {}::{}",
+            "{}{}fun {}::{}",
             self.func_env.visibility_str(),
+            modifier,
             self.func_env
                 .module_env
                 .get_name()
@@ -491,11 +527,11 @@ impl<'env> fmt::Display for FunctionTarget<'env> {
         let tparams = &self.get_type_parameters();
         if !tparams.is_empty() {
             write!(f, "<")?;
-            for (i, TypeParameter(name, _)) in tparams.iter().enumerate() {
+            for i in 0..tparams.len() {
                 if i > 0 {
                     write!(f, ", ")?;
                 }
-                write!(f, "{}", name.display(self.symbol_pool()))?;
+                write!(f, "#{}", i)?;
             }
             write!(f, ">")?;
         }
@@ -541,21 +577,25 @@ impl<'env> fmt::Display for FunctionTarget<'env> {
                 write!(f, ")")?;
             }
         }
-        writeln!(f, " {{")?;
-        for i in self.get_parameter_count()..self.get_local_count() {
-            write!(f, "     var ")?;
-            write_decl(f, i)?;
-            writeln!(f)?;
+        if self.func_env.is_native_or_intrinsic() {
+            writeln!(f, ";")?;
+        } else {
+            writeln!(f, " {{")?;
+            for i in self.get_parameter_count()..self.get_local_count() {
+                write!(f, "     var ")?;
+                write_decl(f, i)?;
+                writeln!(f)?;
+            }
+            let label_offsets = Bytecode::label_offsets(self.get_bytecode());
+            for (offset, code) in self.get_bytecode().iter().enumerate() {
+                writeln!(
+                    f,
+                    "{}",
+                    self.pretty_print_bytecode(&label_offsets, offset, code)
+                )?;
+            }
+            writeln!(f, "}}")?;
         }
-        let label_offsets = Bytecode::label_offsets(self.get_bytecode());
-        for (offset, code) in self.get_bytecode().iter().enumerate() {
-            writeln!(
-                f,
-                "{}",
-                self.pretty_print_bytecode(&label_offsets, offset, code)
-            )?;
-        }
-        writeln!(f, "}}")?;
         Ok(())
     }
 }

@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use diem_logger::prelude::*;
+use move_binary_format::errors::VMError;
 use move_core_types::vm_status::{known_locations, StatusCode, VMStatus};
 use move_vm_runtime::logging::LogContext;
-use vm::errors::VMError;
 
 /// Error codes that can be emitted by the prologue. These have special significance to the VM when
 /// they are raised during the prologue.
@@ -24,6 +24,7 @@ pub const EMODULE_NOT_ALLOWED: u64 = 1009;
 pub const EINVALID_WRITESET_SENDER: u64 = 1010; // invalid sender (not diem root) for write set
 pub const ESEQUENCE_NUMBER_TOO_BIG: u64 = 1011;
 pub const EBAD_TRANSACTION_FEE_CURRENCY: u64 = 1012;
+pub const ESECONDARY_KEYS_ADDRESSES_COUNT_MISMATCH: u64 = 1013;
 
 const INVALID_STATE: u8 = 1;
 const INVALID_ARGUMENT: u8 = 7;
@@ -84,6 +85,9 @@ pub fn convert_prologue_error(
                 // The gas currency is not registered as a TransactionFee currency
                 (INVALID_ARGUMENT, EBAD_TRANSACTION_FEE_CURRENCY) => {
                     StatusCode::BAD_TRANSACTION_FEE_CURRENCY
+                }
+                (INVALID_ARGUMENT, ESECONDARY_KEYS_ADDRESSES_COUNT_MISMATCH) => {
+                    StatusCode::SECONDARY_KEYS_ADDRESSES_COUNT_MISMATCH
                 }
                 (category, reason) => {
                     log_context.alert();

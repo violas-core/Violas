@@ -10,6 +10,7 @@ use diem_types::{
     account_address::AccountAddress,
     account_config::xus_tag,
     contract_event::EventWithProof,
+    diem_id_identifier::DiemIdVaspDomainIdentifier,
     epoch_change::EpochChangeProof,
     ledger_info::LedgerInfoWithSignatures,
     on_chain_config::DIEM_MAX_KNOWN_VERSION,
@@ -20,6 +21,10 @@ use diem_types::{
 use std::{convert::TryInto, ops::Deref};
 
 use diem_json_rpc_types::views::EventView;
+use diem_transaction_builder::stdlib::{
+    encode_rotate_authentication_key_with_nonce_admin_script,
+    encode_rotate_authentication_key_with_nonce_admin_script_function,
+};
 
 mod node;
 mod testing;
@@ -113,7 +118,7 @@ fn create_test_cases() -> Vec<Test> {
                 // list of allowed scripts and publishing off
                 assert_ne!(metadata["script_hash_allow_list"], json!([]));
                 assert_eq!(metadata["module_publishing_allowed"], false);
-                assert_eq!(metadata["diem_version"], 2);
+                assert_eq!(metadata["diem_version"], 3);
                 assert_eq!(metadata["dual_attestation_limit"], 1000000000);
                 assert_ne!(diem_ledger_timestampusec, 0);
                 assert_ne!(diem_ledger_version, 0);
@@ -341,10 +346,11 @@ fn create_test_cases() -> Vec<Test> {
                             "base_url_rotation_events_key": format!("0100000000000000{}", address),
                             "compliance_key": "",
                             "compliance_key_rotation_events_key": format!("0000000000000000{}", address),
+                            "diem_id_domains": [],
                             "expiration_time": 18446744073709551615_u64,
                             "human_name": "Novi 0",
                             "num_children": 1,
-                            "type": "parent_vasp"
+                            "type": "parent_vasp",
                         },
                         "sent_events_key": format!("0300000000000000{}", address),
                         "sequence_number": 1,
@@ -381,6 +387,7 @@ fn create_test_cases() -> Vec<Test> {
                             "base_url_rotation_events_key": format!("0100000000000000{}", address),
                             "compliance_key": "",
                             "compliance_key_rotation_events_key": format!("0000000000000000{}", address),
+                            "diem_id_domains": [],
                             "expiration_time": 18446744073709551615_u64,
                             "human_name": "Novi 0",
                             "num_children": 0,
@@ -494,6 +501,10 @@ fn create_test_cases() -> Vec<Test> {
                             "gas_unit_price": 0,
                             "max_gas_amount": 1000000,
                             "public_key": sender.public_key.to_string(),
+                            "secondary_signers": [],
+                            "secondary_signature_schemes": [],
+                            "secondary_signatures": [],
+                            "secondary_public_keys": [],
                             "script": {
                                 "type": "peer_to_peer_with_metadata",
                                 "type_arguments": [
@@ -516,7 +527,7 @@ fn create_test_cases() -> Vec<Test> {
                             "script_hash": script_hash,
                             "sender": format!("{:x}", &sender.address),
                             "sequence_number": 0,
-                            "signature": hex::encode(txn.authenticator().signature_bytes()),
+                            "signature": hex::encode(txn.authenticator().sender().signature_bytes()),
                             "signature_scheme": "Scheme::Ed25519",
                             "type": "user"
                         },
@@ -1090,6 +1101,7 @@ fn create_test_cases() -> Vec<Test> {
                 let resp = env.send("get_metadata", json!([]));
 
                 let limit = 10;
+                let include_events = false;
                 assert!(resp.diem_ledger_version > limit);
                 // We test 2 cases:
                 //      1. base_version + limit > resp.diem_ledger_version
@@ -1098,7 +1110,7 @@ fn create_test_cases() -> Vec<Test> {
                    // We use a batched call to ensure we get an answer using the same latest server ledger_info for both
                     let responses = env.send_request(json!([
                         {"jsonrpc": "2.0", "method": "get_state_proof", "params": json!([0]), "id": 1},
-                        {"jsonrpc": "2.0", "method": "get_transactions_with_proofs", "params": json!([*base_version, limit]), "id": 2}
+                        {"jsonrpc": "2.0", "method": "get_transactions_with_proofs", "params": json!([*base_version, limit, include_events]), "id": 2}
                     ]));
 
                     let f:Vec<serde_json::Value> = serde_json::from_value(responses).expect("should be valid serde_json::Value");
@@ -1170,6 +1182,123 @@ fn create_test_cases() -> Vec<Test> {
             },
         },
         Test {
+            name: "add and remove diem id domain to parent vasp account",
+            run: |env: &mut testing::Env| {
+                // add domain
+                let domain = DiemIdVaspDomainIdentifier::new(&"diem").unwrap().as_str().as_bytes().to_vec();
+                let txn = env.create_txn_by_payload(
+                    &env.tc,
+                    stdlib::encode_add_diem_id_domain_script_function(
+                        env.vasps[0].address,
+                        domain,
+                    ),
+                );
+                let result = env.submit_and_wait(txn);
+                let version1 = result["version"].as_u64().unwrap();
+
+                // get account
+                let account = &env.vasps[0];
+                let address = format!("{:x}", &account.address);
+                let resp = env.send("get_account", json!([address]));
+                let result = resp.result.unwrap();
+                assert_eq!(
+                    result["role"]["diem_id_domains"],
+                    json!(
+                        ["diem"]
+                    ),
+                );
+
+                // remove domain
+                let domain = DiemIdVaspDomainIdentifier::new(&"diem").unwrap().as_str().as_bytes().to_vec();
+                let txn = env.create_txn_by_payload(
+                    &env.tc,
+                    stdlib::encode_remove_diem_id_domain_script_function(
+                        env.vasps[0].address,
+                        domain,
+                    ),
+                );
+                let result = env.submit_and_wait(txn);
+                let version2 = result["version"].as_u64().unwrap();
+
+                // get account
+                let account = &env.vasps[0];
+                let address = format!("{:x}", &account.address);
+                let resp = env.send("get_account", json!([address]));
+                let result = resp.result.unwrap();
+                assert_eq!(
+                    result["role"]["diem_id_domains"],
+                    json!(
+                        []
+                    ),
+                );
+
+                // get event
+                let tc_address = format!("{:x}", &env.tc.address);
+                let resp = env.send("get_account", json!([tc_address]));
+                let result = resp.result.unwrap();
+                let diem_id_domain_events_key = result["role"]["diem_id_domain_events_key"].clone();
+                let response = env.send(
+                    "get_events",
+                    json!([diem_id_domain_events_key, 0, 3]),
+                );
+                let events = response.result.unwrap();
+                assert_eq!(
+                    events,
+                    json!([
+                        {
+                            "data":{
+                                "domain": "diem",
+                                "removed": false,
+                                "address": address,
+                                "type":"diemiddomain"
+                            },
+                            "key": format!("0000000000000000{}", tc_address),
+                            "sequence_number": 0,
+                            "transaction_version": version1,
+                        },
+                        {
+                            "data":{
+                                "domain": "diem",
+                                "removed": true,
+                                "address": address,
+                                "type":"diemiddomain"
+                            },
+                            "key": format!("0000000000000000{}", tc_address),
+                            "sequence_number": 1,
+                            "transaction_version": version2,
+                        },
+                    ]),
+                );
+            },
+        },
+        Test {
+            name: "get tc account",
+            run: |env: &mut testing::Env| {
+                let address = format!("{:x}", &env.tc.address);
+                let resp = env.send("get_account", json!([address]));
+                let result = resp.result.unwrap();
+                assert_eq!(
+                    result,
+                    json!({
+                        "address": address,
+                        "authentication_key": &env.tc.auth_key().to_string(),
+                        "balances": [],
+                        "delegated_key_rotation_capability": false,
+                        "delegated_withdrawal_capability": false,
+                        "is_frozen": false,
+                        "received_events_key": format!("0100000000000000{}", address),
+                        "role": {
+                            "diem_id_domain_events_key": format!("0000000000000000{}", address),
+                            "type": "treasury_compliance",
+                        },
+                        "sent_events_key": format!("0200000000000000{}", address),
+                        "sequence_number": 8,
+                        "version": resp.diem_ledger_version,
+                    }),
+                );
+            }
+        },
+        Test {
             name: "get_events_with_proofs",
             run: |env: &mut testing::Env| {
                 let responses = env.send_request(json!([
@@ -1213,6 +1342,123 @@ fn create_test_cases() -> Vec<Test> {
                 }
 
                 assert_eq!(events.len(),3);
+            },
+        },
+        Test {
+            name: "multi-agent transaction with rotate_authentication_key_with_nonce_admin script function",
+            run: |env: &mut testing::Env| {
+                let root = env.root.clone();
+                let account = env.vasps[0].children[0].clone();
+                let private_key = generate_key::generate_key();
+                let public_key: diem_crypto::ed25519::Ed25519PublicKey = (&private_key).into();
+                let txn = env.create_multi_agent_txn(
+                    &root,
+                    vec![&account],
+                    encode_rotate_authentication_key_with_nonce_admin_script_function(
+                        0, public_key.to_bytes().to_vec()),
+                );
+                env.submit_and_wait(txn.clone());
+                let resp = env.send(
+                    "get_account_transaction",
+                    json!([root.address.to_string(), 3, true]),
+                );
+                let result = resp.result.unwrap();
+                let script = match txn.payload() {
+                    TransactionPayload::ScriptFunction(s) => s,
+                    _ => unreachable!(),
+                };
+                let script_hash = diem_crypto::HashValue::zero().to_hex();
+                let script_bytes = hex::encode(bcs::to_bytes(script).unwrap());
+                assert_eq!(result["vm_status"], json!({"type": "executed"}));
+                assert_eq!(
+                    result["transaction"],
+                    json!({
+                        "type": "user",
+                        "sender": format!("{:x}", &root.address),
+                        "signature_scheme": "Scheme::Ed25519",
+                        "signature": hex::encode(txn.authenticator().sender().signature_bytes()),
+                        "public_key": root.public_key.to_string(),
+                        "secondary_signers": [ format!("{:x}", &account.address) ],
+                        "secondary_signature_schemes": [ "Scheme::Ed25519" ],
+                        "secondary_signatures": [ hex::encode(txn.authenticator().secondary_signers()[0].signature_bytes())],
+                        "secondary_public_keys": [ account.public_key.to_string() ],
+                        "sequence_number": 3,
+                        "chain_id": 4,
+                        "max_gas_amount": 1000000,
+                        "gas_unit_price": 0,
+                        "gas_currency": "XUS",
+                        "expiration_timestamp_secs": txn.expiration_timestamp_secs(),
+                        "script_hash": script_hash,
+                        "script_bytes": script_bytes,
+                        "script": {
+                            "type": "script_function",
+                            "arguments_bcs": vec![ "0000000000000000", &hex::encode(bcs::to_bytes(&public_key).unwrap())],
+                            "type_arguments": [],
+                            "module_address": "00000000000000000000000000000001",
+                            "module_name": "AccountAdministrationScripts",
+                            "function_name": "rotate_authentication_key_with_nonce_admin"
+                        },
+                    }),
+                );
+            },
+        },
+        Test {
+            name: "multi-agent transaction with rotate_authentication_key_with_nonce_admin script",
+            run: |env: &mut testing::Env| {
+                let root = env.root.clone();
+                let account = env.vasps[1].children[0].clone();
+                let private_key = generate_key::generate_key();
+                let public_key: diem_crypto::ed25519::Ed25519PublicKey = (&private_key).into();
+                let txn = env.create_multi_agent_txn(
+                    &root,
+                    vec![&account],
+                    TransactionPayload::Script(encode_rotate_authentication_key_with_nonce_admin_script(
+                        0, public_key.to_bytes().to_vec())),
+                );
+                env.submit_and_wait(txn.clone());
+                let resp = env.send(
+                    "get_account_transaction",
+                    json!([root.address.to_string(), 4, true]),
+                );
+                let result = resp.result.unwrap();
+                let script = match txn.payload() {
+                    TransactionPayload::Script(s) => s,
+                    _ => unreachable!(),
+                };
+                let script_hash = diem_crypto::HashValue::sha3_256_of(script.code()).to_hex();
+                let script_bytes = hex::encode(bcs::to_bytes(script).unwrap());
+                assert_eq!(result["vm_status"], json!({"type": "executed"}));
+                assert_eq!(
+                    result["transaction"],
+                    json!({
+                        "type": "user",
+                        "sender": format!("{:x}", &root.address),
+                        "signature_scheme": "Scheme::Ed25519",
+                        "signature": hex::encode(txn.authenticator().sender().signature_bytes()),
+                        "public_key": root.public_key.to_string(),
+                        "secondary_signers": [ format!("{:x}", &account.address) ],
+                        "secondary_signature_schemes": [ "Scheme::Ed25519" ],
+                        "secondary_signatures": [ hex::encode(txn.authenticator().secondary_signers()[0].signature_bytes())],
+                        "secondary_public_keys": [ account.public_key.to_string() ],
+                        "sequence_number": 4,
+                        "chain_id": 4,
+                        "max_gas_amount": 1000000,
+                        "gas_unit_price": 0,
+                        "gas_currency": "XUS",
+                        "expiration_timestamp_secs": txn.expiration_timestamp_secs(),
+                        "script_hash": script_hash,
+                        "script_bytes": script_bytes,
+                        "script": {
+                            "type_arguments": [],
+                            "arguments": [
+                                "{U64: 0}",
+                                format!("{{U8Vector: 0x{}}}", public_key.to_string()),
+                            ],
+                            "code": hex::encode(script.code()),
+                            "type": "rotate_authentication_key_with_nonce_admin"
+                        },
+                    }),
+                );
             },
         },
         // no test after this one, as your scripts may not in allow list.

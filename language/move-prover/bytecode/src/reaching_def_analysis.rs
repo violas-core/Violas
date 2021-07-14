@@ -7,16 +7,17 @@
 // in the code. The subsequent livevar_analysis takes care of removing those.
 
 use crate::{
-    dataflow_analysis::{AbstractDomain, DataflowAnalysis, JoinResult, TransferFunctions},
+    dataflow_analysis::{DataflowAnalysis, TransferFunctions},
+    dataflow_domains::{AbstractDomain, JoinResult},
     function_target::{FunctionData, FunctionTarget},
     function_target_pipeline::{FunctionTargetProcessor, FunctionTargetsHolder},
     stackless_bytecode::{AbortAction, BorrowNode, Bytecode, Operation},
     stackless_control_flow_graph::StacklessControlFlowGraph,
 };
 use itertools::Itertools;
+use move_binary_format::file_format::CodeOffset;
 use move_model::{ast::TempIndex, model::FunctionEnv};
 use std::collections::{BTreeMap, BTreeSet};
-use vm::file_format::CodeOffset;
 
 /// The reaching definitions we are capturing. Currently we only capture
 /// aliases (assignment).
@@ -93,8 +94,10 @@ impl ReachingDefProcessor {
         code.iter()
             .filter_map(|bc| match bc {
                 Call(_, _, Operation::BorrowLoc, srcs, _) => Some(srcs[0]),
-                Call(_, _, Operation::WriteBack(BorrowNode::LocalRoot(src), _), ..) => Some(*src),
-                Call(_, _, Operation::WriteBack(BorrowNode::Reference(src), _), ..) => Some(*src),
+                Call(_, _, Operation::WriteBack(BorrowNode::LocalRoot(src), ..), ..)
+                | Call(_, _, Operation::IsParent(BorrowNode::LocalRoot(src), ..), ..) => Some(*src),
+                Call(_, _, Operation::WriteBack(BorrowNode::Reference(src), ..), ..)
+                | Call(_, _, Operation::IsParent(BorrowNode::Reference(src), ..), ..) => Some(*src),
                 _ => None,
             })
             .collect()
@@ -179,7 +182,7 @@ impl<'a> TransferFunctions for ReachingDefAnalysis<'a> {
                 state.kill(*dest);
             }
             Call(_, dests, oper, _, on_abort) => {
-                if let WriteBack(LocalRoot(dest), _) = oper {
+                if let WriteBack(LocalRoot(dest), ..) = oper {
                     state.kill(*dest);
                 }
                 for dest in dests {

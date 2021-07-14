@@ -10,18 +10,15 @@ use crate::{
     },
     instance,
     instance::Instance,
-    tx_emitter::{execute_and_wait_transactions, AccountData, EmitJobRequest},
+    tx_emitter::{execute_and_wait_transactions, EmitJobRequest},
 };
 use anyhow::format_err;
 use async_trait::async_trait;
 use diem_logger::prelude::*;
+use diem_sdk::{transaction_builder::TransactionFactory, types::LocalAccount};
 use diem_transaction_builder::stdlib::encode_update_diem_version_script;
-use diem_types::{
-    account_config::XUS_NAME,
-    chain_id::ChainId,
-    transaction::{helpers::create_user_txn, ScriptFunction, TransactionPayload},
-};
-use move_core_types::{identifier::Identifier, language_storage::ModuleId};
+use diem_types::{chain_id::ChainId, transaction::TransactionPayload};
+use language_e2e_tests::common_transactions::multi_agent_p2p_script;
 use std::{collections::HashSet, fmt, time::Duration};
 use structopt::StructOpt;
 
@@ -101,31 +98,22 @@ impl Experiment for ValidatorVersioning {
             )
             .await?;
         let mut account = context.tx_emitter.take_account();
+        let secondary_signer_account = context.tx_emitter.take_account();
 
         // Define the transaction generator
         //
         // TODO: In the future we may want to pass this functor as an argument to the experiment
         // to make versioning test extensible.
-        let txn_payload = TransactionPayload::ScriptFunction(ScriptFunction::new(
-            ModuleId::new(account.address, Identifier::new("PHANTOM_MODULE").unwrap()),
-            Identifier::new("PHANTOM_FUNCTION").unwrap(),
-            vec![],
-            vec![],
-        ));
+        // Define a multi-agent p2p transaction.
+        let txn_payload = TransactionPayload::Script(multi_agent_p2p_script(10));
 
-        let txn_gen = |account: &AccountData| {
-            create_user_txn(
-                &account.key_pair,
-                txn_payload.clone(),
-                account.address,
-                account.sequence_number,
-                123456,
-                0,
-                XUS_NAME.to_owned(),
-                10,
-                ChainId::test(),
+        let tx_factory =
+            TransactionFactory::new(ChainId::test()).with_transaction_expiration_time(420);
+        let txn_gen = |account: &mut LocalAccount, secondary_signer_account: &LocalAccount| {
+            account.sign_multi_agent_with_transaction_builder(
+                vec![secondary_signer_account],
+                tx_factory.payload(txn_payload.clone()),
             )
-            .map_err(|e| format_err!("Failed to create signed transaction: {}", e))
         };
 
         // grab a validator node
@@ -133,7 +121,7 @@ impl Experiment for ValidatorVersioning {
         let mut old_client = old_validator_node.json_rpc_client();
 
         info!("1. Send a transaction using the new feature to a validator node");
-        let txn1 = txn_gen(&account)?;
+        let txn1 = txn_gen(&mut account, &secondary_signer_account);
         if execute_and_wait_transactions(&mut old_client, &mut account, vec![txn1])
             .await
             .is_ok()
@@ -162,7 +150,7 @@ impl Experiment for ValidatorVersioning {
         let mut new_client = new_validator_node.json_rpc_client();
 
         info!("3. Send the transaction using the new feature to an updated validator node");
-        let txn3 = txn_gen(&account)?;
+        let txn3 = txn_gen(&mut account, &secondary_signer_account);
         if execute_and_wait_transactions(&mut new_client, &mut account, vec![txn3])
             .await
             .is_ok()
@@ -183,7 +171,7 @@ impl Experiment for ValidatorVersioning {
         .await?;
 
         info!("5. Send the transaction using the new feature to an updated validator node again");
-        let txn4 = txn_gen(&account)?;
+        let txn4 = txn_gen(&mut account, &secondary_signer_account);
         if execute_and_wait_transactions(&mut new_client, &mut account, vec![txn4])
             .await
             .is_ok()
@@ -194,31 +182,20 @@ impl Experiment for ValidatorVersioning {
         }
         info!("-- The transaction is still rejected as expected, because the new feature is gated");
 
-        info!("6. Activate the new feature");
+        info!("6. Activate the new feature multi agent");
         let mut diem_root_account = context
             .tx_emitter
             .load_diem_root_account(&new_client)
             .await?;
         let allowed_nonce = 0;
-        let update_txn = create_user_txn(
-            &diem_root_account.key_pair,
-            TransactionPayload::Script(encode_update_diem_version_script(allowed_nonce, 11)),
-            diem_root_account.address,
-            diem_root_account.sequence_number,
-            123456,
-            0,
-            XUS_NAME.to_owned(),
-            10,
-            ChainId::test(),
-        )
-        .map_err(|e| format_err!("Failed to create signed transaction: {}", e))?;
-        diem_root_account.sequence_number += 1;
+        let update_txn = diem_root_account.sign_with_transaction_builder(tx_factory.payload(
+            TransactionPayload::Script(encode_update_diem_version_script(allowed_nonce, 3)),
+        ));
         execute_and_wait_transactions(&mut new_client, &mut diem_root_account, vec![update_txn])
             .await?;
 
         info!("7. Send the transaction using the new feature after Diem version update");
-        let txn5 = txn_gen(&account)?;
-        account.sequence_number += 1;
+        let txn5 = txn_gen(&mut account, &secondary_signer_account);
         execute_and_wait_transactions(&mut new_client, &mut account, vec![txn5]).await?;
         info!("-- [Expected] The transaction goes through");
 

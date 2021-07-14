@@ -9,6 +9,22 @@ AccountAddress:
     TUPLEARRAY:
       CONTENT: U8
       SIZE: 16
+AccountAuthenticator:
+  ENUM:
+    0:
+      Ed25519:
+        STRUCT:
+          - public_key:
+              TYPENAME: Ed25519PublicKey
+          - signature:
+              TYPENAME: Ed25519Signature
+    1:
+      MultiEd25519:
+        STRUCT:
+          - public_key:
+              TYPENAME: MultiEd25519PublicKey
+          - signature:
+              TYPENAME: MultiEd25519Signature
 BlockMetadata:
   STRUCT:
     - id:
@@ -101,6 +117,10 @@ Metadata:
       CoinTradeMetadata:
         NEWTYPE:
           TYPENAME: CoinTradeMetadata
+    6:
+      PaymentMetadata:
+        NEWTYPE:
+          TYPENAME: PaymentMetadata
 Module:
   STRUCT:
     - code: BYTES
@@ -114,6 +134,18 @@ MultiEd25519PublicKey:
   NEWTYPESTRUCT: BYTES
 MultiEd25519Signature:
   NEWTYPESTRUCT: BYTES
+PaymentMetadata:
+  ENUM:
+    0:
+      PaymentMetadataVersion0:
+        NEWTYPE:
+          TYPENAME: PaymentMetadataV0
+PaymentMetadataV0:
+  STRUCT:
+    - reference_id:
+        TUPLEARRAY:
+          CONTENT: U8
+          SIZE: 16
 RawTransaction:
   STRUCT:
     - sender:
@@ -148,6 +180,8 @@ RefundReason:
       UserInitiatedPartialRefund: UNIT
     3:
       UserInitiatedFullRefund: UNIT
+    4:
+      InvalidReferenceId: UNIT
 Script:
   STRUCT:
     - code: BYTES
@@ -236,6 +270,17 @@ TransactionAuthenticator:
               TYPENAME: MultiEd25519PublicKey
           - signature:
               TYPENAME: MultiEd25519Signature
+    2:
+      MultiAgent:
+        STRUCT:
+          - sender:
+              TYPENAME: AccountAuthenticator
+          - secondary_signer_addresses:
+              SEQ:
+                TYPENAME: AccountAddress
+          - secondary_signers:
+              SEQ:
+                TYPENAME: AccountAuthenticator
 TransactionPayload:
   ENUM:
     0:

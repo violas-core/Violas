@@ -7,13 +7,7 @@ use crate::{
 };
 use anyhow::{anyhow, Result};
 use diem_types::account_address::AccountAddress;
-use move_core_types::{
-    identifier::{IdentStr, Identifier},
-    language_storage::{ModuleId, StructTag, TypeTag},
-};
-use move_vm_runtime::data_cache::RemoteCache;
-use std::rc::Rc;
-use vm::{
+use move_binary_format::{
     access::ModuleAccess,
     errors::PartialVMError,
     file_format::{
@@ -21,14 +15,20 @@ use vm::{
     },
     CompiledModule,
 };
+use move_core_types::{
+    identifier::{IdentStr, Identifier},
+    language_storage::{ModuleId, StructTag, TypeTag},
+};
+use move_vm_runtime::data_cache::MoveStorage;
+use std::rc::Rc;
 
 pub(crate) struct Resolver<'a> {
-    state: &'a dyn RemoteCache,
+    pub state: &'a dyn MoveStorage,
     cache: ModuleCache,
 }
 
 impl<'a> Resolver<'a> {
-    pub fn new(state: &'a dyn RemoteCache, use_stdlib: bool) -> Self {
+    pub fn new(state: &'a dyn MoveStorage, use_stdlib: bool) -> Self {
         let cache = ModuleCache::new();
         if use_stdlib {
             let modules = diem_framework_releases::current_modules();

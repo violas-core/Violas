@@ -6,16 +6,17 @@ use crate::debug::DebugContext;
 
 #[cfg(debug_assertions)]
 use ::{
-    diem_infallible::Mutex,
+    move_binary_format::file_format::Bytecode,
     move_vm_types::values::Locals,
     once_cell::sync::Lazy,
     std::{
         env,
         fs::{File, OpenOptions},
         io::Write,
-        process, thread,
+        process,
+        sync::Mutex,
+        thread,
     },
-    vm::file_format::Bytecode,
 };
 
 #[cfg(debug_assertions)]
@@ -69,7 +70,7 @@ pub(crate) fn trace<L: LogContext>(
     interp: &Interpreter<L>,
 ) {
     if *TRACING_ENABLED {
-        let f = &mut *LOGGING_FILE.lock();
+        let f = &mut *LOGGING_FILE.lock().unwrap();
         writeln!(
             f,
             "{}-{:?},{},{},{:?}",
@@ -84,6 +85,7 @@ pub(crate) fn trace<L: LogContext>(
     if *DEBUGGING_ENABLED {
         DEBUG_CONTEXT
             .lock()
+            .unwrap()
             .debug_loop(function_desc, locals, pc, instr, loader, interp);
     }
 }

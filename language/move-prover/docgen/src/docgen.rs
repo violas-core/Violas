@@ -11,8 +11,8 @@ use move_model::{
     code_writer::{CodeWriter, CodeWriterLabel},
     emit, emitln,
     model::{
-        FunId, FunctionEnv, GlobalEnv, Loc, ModuleEnv, ModuleId, NamedConstantEnv, Parameter,
-        QualifiedId, StructEnv, TypeConstraint, TypeParameter,
+        AbilitySet, FunId, FunctionEnv, GlobalEnv, Loc, ModuleEnv, ModuleId, NamedConstantEnv,
+        Parameter, QualifiedId, StructEnv, TypeParameter,
     },
     symbol::Symbol,
     ty::TypeDisplayContext,
@@ -69,7 +69,6 @@ const WEAK_KEYWORDS: &[&str] = &[
     "assert",
     "assume",
     "decreases",
-    "define",
     "except",
     "forall",
     "global",
@@ -979,9 +978,13 @@ impl<'env> Docgen<'env> {
 
     /// Returns "Struct `N`" or "Resource `N`".
     fn struct_title(&self, struct_env: &StructEnv<'_>) -> String {
+        // NOTE(mengxu): although we no longer declare structs with the `resource` keyword, it
+        // might be helpful in keeping `Resource N` in struct title as the boogie translator still
+        // depends on the `is_resource()` predicate to add additional functions to structs declared
+        // with the `key` ability.
         format!(
             "{} `{}`",
-            if struct_env.is_resource() {
+            if struct_env.has_memory() {
                 "Resource"
             } else {
                 "Struct"
@@ -1007,17 +1010,18 @@ impl<'env> Docgen<'env> {
     /// Generates code signature for a struct.
     fn struct_header_display(&self, struct_env: &StructEnv<'_>) -> String {
         let name = self.name_string(struct_env.get_name());
-        let kind = if struct_env.is_resource() {
-            "resource struct"
+        let type_params = self.type_parameter_list_display(&struct_env.get_named_type_parameters());
+        let ability_tokens = self.ability_tokens(struct_env.get_abilities());
+        if ability_tokens.is_empty() {
+            format!("struct {}{}", name, type_params)
         } else {
-            "struct"
-        };
-        format!(
-            "{} {}{}",
-            kind,
-            name,
-            self.type_parameter_list_display(&struct_env.get_named_type_parameters()),
-        )
+            format!(
+                "struct {}{} has {}",
+                name,
+                type_params,
+                ability_tokens.join(", ")
+            )
+        }
     }
 
     fn gen_struct_fields(&self, struct_env: &StructEnv<'_>) {
@@ -1307,6 +1311,24 @@ impl<'env> Docgen<'env> {
     /// Returns a string for a name symbol.
     fn name_string(&self, name: Symbol) -> Rc<String> {
         self.env.symbol_pool().string(name)
+    }
+
+    /// Collect tokens in an ability set
+    fn ability_tokens(&self, abilities: AbilitySet) -> Vec<&'static str> {
+        let mut ability_tokens = vec![];
+        if abilities.has_copy() {
+            ability_tokens.push("copy");
+        }
+        if abilities.has_drop() {
+            ability_tokens.push("drop");
+        }
+        if abilities.has_store() {
+            ability_tokens.push("store");
+        }
+        if abilities.has_key() {
+            ability_tokens.push("key");
+        }
+        ability_tokens
     }
 
     /// Creates a type display context for a function.
@@ -1632,11 +1654,7 @@ impl<'env> Docgen<'env> {
                 // A qualified name, but without the address. This must be an item in a module
                 // denoted by the first name.
                 let module_opt = if parts[0] == "Self" {
-                    if let Some(module) = &self.current_module {
-                        Some(module.clone())
-                    } else {
-                        None
-                    }
+                    self.current_module.as_ref().cloned()
                 } else {
                     self.env.find_module_by_name(parts_sym[0])
                 };
@@ -1741,15 +1759,12 @@ impl<'env> Docgen<'env> {
 
     /// Display a type parameter.
     fn type_parameter_display(&self, tp: &TypeParameter) -> String {
-        format!(
-            "{}{}",
-            self.name_string(tp.0),
-            match tp.1 {
-                TypeConstraint::None => "",
-                TypeConstraint::Resource => ": resource",
-                TypeConstraint::Copyable => ": copyable",
-            }
-        )
+        let ability_tokens = self.ability_tokens(tp.1 .0);
+        if ability_tokens.is_empty() {
+            self.name_string(tp.0).to_string()
+        } else {
+            format!("{}: {}", self.name_string(tp.0), ability_tokens.join(", "))
+        }
     }
 
     /// Display a type parameter list.

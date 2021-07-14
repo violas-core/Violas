@@ -12,6 +12,8 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: diem/build_environment:main
+      volumes:
+        - "${{github.workspace}}:/opt/git/diem"
     strategy:
       fail-fast: false
       matrix:
@@ -19,9 +21,9 @@ jobs:
         #to test in canary add in canary here.....
         target-branch: [main, release-1.1, release-1.2]
     env:
-      MESSAGE_PAYLOAD_FILE: /tmp/message
+      AUDIT_SUMMARY_FILE: /tmp/summary
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v2.3.4
         with:
           ref: ${{ matrix.target-branch }}
       - uses: ./.github/actions/build-setup
@@ -32,23 +34,41 @@ jobs:
         # 1. RUSTSEC-2021-0020 - Not impacted, see #7723
         # 2. RUSTSEC-2020-0146 - Not impacted, see #7826
         run: |
-          cargo audit --ignore RUSTSEC-2021-0020 --ignore RUSTSEC-2020-0146 >> $MESSAGE_PAYLOAD_FILE
-      - uses: ./.github/actions/slack-file
-        with:
-          webhook: ${{ secrets.WEBHOOK_AUDIT }}
-          payload-file: ${{ env.MESSAGE_PAYLOAD_FILE }}
+          cargo audit --color never --ignore RUSTSEC-2021-0020 --ignore RUSTSEC-2020-0146 > $AUDIT_SUMMARY_FILE
+      - name: set issue body content
         if: ${{ failure() }}
+        env:
+          JOB_URL: "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+        run: |
+          echo "ISSUE_BODY<<EOF" >> $GITHUB_ENV
+          echo "Found RUSTSEC in dependencies in job ${JOB_URL}" >> $GITHUB_ENV
+          echo "\`\`\`" >> $GITHUB_ENV
+          cat $AUDIT_SUMMARY_FILE >> $GITHUB_ENV
+          echo "\`\`\`" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+      - uses: diem/actions/create-issue@04f4286ca22e4b9efbc5eb49a20e2e5389c5318b
+        if: ${{ failure() }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          title: "RUSTSEC in dependencies in branch ${{ matrix.target-branch }}"
+          body: ${{ env.ISSUE_BODY }}
+          assignees: "@diem/diem-core-oncall"
+          labels: "dependecies"
       - uses: ./.github/actions/build-teardown
 
   coverage:
     runs-on: ubuntu-latest-xl
     container:
       image: diem/build_environment:main
+      volumes:
+        - "${{github.workspace}}:/opt/git/diem"
+    environment:
+      name: Sccache
     env:
       CODECOV_OUTPUT: codecov
       MESSAGE_PAYLOAD_FILE: /tmp/message
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v2.3.4
       - uses: ./.github/actions/build-setup
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v1
@@ -85,6 +105,8 @@ jobs:
     runs-on: ubuntu-latest-xl
     container:
       image: diem/build_environment:main
+      volumes:
+        - "${{github.workspace}}:/opt/git/diem"
     env:
       MESSAGE_PAYLOAD_FILE: /tmp/message
       ACCOUNT: ${{ secrets.TRANSACTION_REPLAY_ACCOUNT }}
@@ -93,7 +115,7 @@ jobs:
       SAS: ""
       CONFIG: .github/workflows/transaction-replay.toml
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v2.3.4
       - uses: ./.github/actions/build-setup
       - name: install azcopy
         run: |
@@ -106,7 +128,17 @@ jobs:
           rm -rf downloadazcopy-v10-linux azcopy_linux_amd64_*
       - name: replay transactions
         run: |
-          cargo run --release --bin db-restore -- --target-db-dir /var/tmp/dbrestore/ auto --replay-all command-adapter --config "$CONFIG"
+          cargo run --release --bin db-restore -- --concurrent-downloads 2 --target-db-dir /var/tmp/dbrestore/ auto --replay-all command-adapter --config "$CONFIG"
+      - uses: diem/actions/create-issue@04f4286ca22e4b9efbc5eb49a20e2e5389c5318b
+        if: ${{ failure() }}
+        env:
+          JOB_URL: "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          title: "DB restore in transaction replay failed"
+          body: "Found db-restore failure in job ${{ env.JOB_URL }}"
+          assignees: "msmouse"
+          labels: "storage"
       - uses: ./.github/actions/build-teardown
 
   json-rpc-backward-compat-test:
@@ -116,6 +148,8 @@ jobs:
     runs-on: ubuntu-latest-xl
     container:
       image: diem/build_environment:main
+      volumes:
+        - "${{github.workspace}}:/opt/git/diem"
     env:
       DEVNET_MINT_TEST_KEY: ${{ secrets.DEVNET_MINT_TEST_KEY }}
       DEVNET_ENDPOINT: dev.testnet.diem.com
@@ -125,7 +159,7 @@ jobs:
       matrix:
         release-branch: [release-1.1, release-1.2]
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v2.3.4
         with:
           ref: ${{ matrix.release-branch }}
       - uses: ./.github/actions/build-setup
@@ -148,7 +182,7 @@ jobs:
     container:
       image: diem/build_environment:${{ matrix.target-branch }}
       volumes:
-        - "/home/runner/work/diem/diem:/opt/git/diem"
+        - "${{github.workspace}}:/opt/git/diem"
     env:
       MESSAGE_PAYLOAD_FILE: /tmp/message
     strategy:
@@ -156,20 +190,20 @@ jobs:
       matrix:
         target-branch: [main, release-1.1, release-1.2]
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v2.3.4
         with:
           ref: ${{ matrix.target-branch }}
       - uses: ./.github/actions/build-setup
-      - uses: actions/cache@v2.1.4
+      - uses: actions/cache@v2.1.6
         with:
           path: "/opt/cargo/git\n/opt/cargo/registry\n/opt/cargo/.package-cache"
           key: crates-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: "crates-${{ runner.os }}"
-      - name: Run the prover tests with the inconsistency check
+      - name: Run the prover tests with the inconsistency check and other nightly checks
         run: |
           cd /opt/git/diem/
           MVP_TEST_INCONSISTENCY=1 cargo test -p move-prover --release >> $MESSAGE_PAYLOAD_FILE
-          sccache -s
+          MVP_TEST_FEATURE=cvc4 cargo test -p move-prover --release >> $MESSAGE_PAYLOAD_FILE
       - uses: ./.github/actions/slack-file
         with:
           webhook: ${{ secrets.WEBHOOK_MOVE_PROVER }}
@@ -183,7 +217,7 @@ jobs:
       name: Docker
       url: https://hub.docker.com/u/diem
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v2.3.4
       - name: sign in to DockerHub; install image signing cert
         uses: ./.github/actions/dockerhub_login
         with:

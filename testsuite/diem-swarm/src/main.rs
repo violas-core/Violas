@@ -62,6 +62,7 @@ fn main() {
     let mut full_node_swarm = if num_full_nodes > 0 {
         Some(
             DiemSwarm::configure_fn_swarm(
+                "ValidatorFullNode",
                 args.diem_node.as_ref(),
                 if let Some(dir) = args.config_dir.clone() {
                     Some(dir + "/full_nodes")

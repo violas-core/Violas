@@ -3,6 +3,14 @@
 
 //! Support for running the VM to execute and verify transactions.
 
+use serde::Serialize;
+use std::{
+    env,
+    fs::{self, OpenOptions},
+    io::Write,
+    path::{Path, PathBuf},
+};
+
 use crate::{
     account::{Account, AccountData},
     data_store::{FakeDataStore, GENESIS_CHANGE_SET, GENESIS_CHANGE_SET_FRESH},
@@ -18,7 +26,9 @@ use diem_types::{
     access_path::AccessPath,
     account_config::{AccountResource, BalanceResource, CORE_CODE_ADDRESS},
     block_metadata::{new_block_event_key, BlockMetadata, NewBlockEvent},
-    on_chain_config::{OnChainConfig, VMPublishingOption, ValidatorSet},
+    on_chain_config::{
+        DiemVersion, OnChainConfig, VMPublishingOption, ValidatorSet, DIEM_MAX_KNOWN_VERSION,
+    },
     transaction::{
         ChangeSet, SignedTransaction, Transaction, TransactionOutput, TransactionStatus,
         VMValidatorResult,
@@ -31,12 +41,11 @@ use diem_vm::{
     VMValidator,
 };
 use move_core_types::{
-    gas_schedule::{GasAlgebra, GasUnits},
     identifier::Identifier,
     language_storage::{ModuleId, TypeTag},
 };
 use move_vm_runtime::{logging::NoContextLog, move_vm::MoveVM};
-use move_vm_types::gas_schedule::{zero_cost_schedule, CostStrategy};
+use move_vm_types::gas_schedule::GasStatus;
 
 static RNG_SEED: [u8; 32] = [9u8; 32];
 
@@ -47,6 +56,19 @@ pub const RELEASE_1_1_GENESIS_PRIVKEY: &[u8] =
 pub const RELEASE_1_1_GENESIS_PUBKEY: &[u8] =
     include_bytes!("../genesis-release-1-1/release-1-1-pubkey.blob");
 
+const ENV_TRACE_DIR: &str = "TRACE";
+
+/// Directory structure of the trace dir
+pub const TRACE_FILE_NAME: &str = "name";
+pub const TRACE_FILE_ERROR: &str = "error";
+pub const TRACE_DIR_META: &str = "meta";
+pub const TRACE_DIR_DATA: &str = "data";
+pub const TRACE_DIR_INPUT: &str = "input";
+pub const TRACE_DIR_OUTPUT: &str = "output";
+
+/// Maps block number N to the index of the input and output transactions
+pub type TraceSeqMapping = (usize, Vec<usize>, Vec<usize>);
+
 /// Provides an environment to run a VM instance.
 ///
 /// This struct is a mock in-memory implementation of the Diem executor.
@@ -55,6 +77,7 @@ pub struct FakeExecutor {
     data_store: FakeDataStore,
     block_time: u64,
     executed_output: Option<GoldenOutputs>,
+    trace_dir: Option<PathBuf>,
     rng: KeyGen,
 }
 
@@ -65,6 +88,7 @@ impl FakeExecutor {
             data_store: FakeDataStore::default(),
             block_time: 0,
             executed_output: None,
+            trace_dir: None,
             rng: KeyGen::from_seed(RNG_SEED),
         };
         executor.apply_write_set(write_set);
@@ -112,6 +136,7 @@ impl FakeExecutor {
             data_store: FakeDataStore::default(),
             block_time: 0,
             executed_output: None,
+            trace_dir: None,
             rng: KeyGen::from_seed(RNG_SEED),
         }
     }
@@ -121,6 +146,38 @@ impl FakeExecutor {
         // files can persist on windows machines.
         let file_name = test_name.replace(':', "_");
         self.executed_output = Some(GoldenOutputs::new(&file_name));
+
+        // NOTE: tracing is only available when
+        //  - the e2e test outputs a golden file,
+        //  - the environment variable is properly set, and
+        //  - the diem version is at the latest version
+        if let Some(env_trace_dir) = env::var_os(ENV_TRACE_DIR) {
+            let diem_version = DiemVersion::fetch_config(&self.data_store);
+            if diem_version.map_or(false, |version| version == DIEM_MAX_KNOWN_VERSION) {
+                let trace_dir = Path::new(&env_trace_dir).join(file_name);
+                if trace_dir.exists() {
+                    fs::remove_dir_all(&trace_dir).expect("Failed to clean up the trace directory");
+                }
+                fs::create_dir_all(&trace_dir).expect("Failed to create the trace directory");
+                let mut name_file = OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(trace_dir.join(TRACE_FILE_NAME))
+                    .unwrap();
+                name_file.write_all(test_name.as_bytes()).unwrap();
+                for sub_dir in &[
+                    TRACE_DIR_META,
+                    TRACE_DIR_DATA,
+                    TRACE_DIR_INPUT,
+                    TRACE_DIR_OUTPUT,
+                ] {
+                    fs::create_dir(trace_dir.join(sub_dir)).unwrap_or_else(|err| {
+                        panic!("Failed to create <trace>/{} directory: {}", sub_dir, err)
+                    });
+                }
+                self.trace_dir = Some(trace_dir);
+            }
+        }
     }
 
     /// Creates an executor with only the standard library Move modules published and not other
@@ -159,6 +216,11 @@ impl FakeExecutor {
     /// Create one instance of [`AccountData`] without saving it to data store.
     pub fn create_raw_account_data(&mut self, balance: u64, seq_num: u64) -> AccountData {
         AccountData::new_from_seed(&mut self.rng, balance, seq_num)
+    }
+
+    /// Create one instance of [`AccountData`] with XDX balance without saving it to data store.
+    pub fn create_xdx_raw_account_data(&mut self, balance: u64, seq_num: u64) -> AccountData {
+        AccountData::new_xdx_from_seed(&mut self.rng, balance, seq_num)
     }
 
     /// Creates a number of [`Account`] instances all with the same balance and sequence number,
@@ -270,9 +332,45 @@ impl FakeExecutor {
         &self,
         txn_block: Vec<Transaction>,
     ) -> Result<Vec<TransactionOutput>, VMStatus> {
+        let mut trace_map = TraceSeqMapping::default();
+
+        // dump serialized transaction details before execution, if tracing
+        if let Some(trace_dir) = &self.trace_dir {
+            let trace_data_dir = trace_dir.join(TRACE_DIR_DATA);
+            trace_map.0 = Self::trace(trace_data_dir.as_path(), self.get_state_view());
+            let trace_input_dir = trace_dir.join(TRACE_DIR_INPUT);
+            for txn in &txn_block {
+                let input_seq = Self::trace(trace_input_dir.as_path(), txn);
+                trace_map.1.push(input_seq);
+            }
+        }
+
         let output = DiemVM::execute_block(txn_block, &self.data_store);
         if let Some(logger) = &self.executed_output {
             logger.log(format!("{:?}\n", output).as_str());
+        }
+
+        // dump serialized transaction output after execution, if tracing
+        if let Some(trace_dir) = &self.trace_dir {
+            match &output {
+                Ok(results) => {
+                    let trace_output_dir = trace_dir.join(TRACE_DIR_OUTPUT);
+                    for res in results {
+                        let output_seq = Self::trace(trace_output_dir.as_path(), res);
+                        trace_map.2.push(output_seq);
+                    }
+                }
+                Err(e) => {
+                    let mut error_file = OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .open(trace_dir.join(TRACE_FILE_ERROR))
+                        .unwrap();
+                    error_file.write_all(e.to_string().as_bytes()).unwrap();
+                }
+            }
+            let trace_meta_dir = trace_dir.join(TRACE_DIR_META);
+            Self::trace(trace_meta_dir.as_path(), &trace_map);
         }
         output
     }
@@ -285,6 +383,21 @@ impl FakeExecutor {
         outputs
             .pop()
             .expect("A block with one transaction should have one output")
+    }
+
+    fn trace<P: AsRef<Path>, T: Serialize>(dir: P, item: &T) -> usize {
+        let dir = dir.as_ref();
+        let seq = fs::read_dir(dir).expect("Unable to read trace dir").count();
+        let bytes = bcs::to_bytes(item)
+            .unwrap_or_else(|err| panic!("Failed to serialize the trace item: {:?}", err));
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(dir.join(seq.to_string()))
+            .expect("Unable to create a trace file");
+        file.write_all(&bytes)
+            .expect("Failed to write to the trace file");
+        seq
     }
 
     /// Get the blob for the associated AccessPath
@@ -353,8 +466,7 @@ impl FakeExecutor {
         args: Vec<Vec<u8>>,
     ) {
         let write_set = {
-            let cost_table = zero_cost_schedule();
-            let mut cost_strategy = CostStrategy::system(&cost_table, GasUnits::new(100_000_000));
+            let mut gas_status = GasStatus::new_unmetered();
             let vm = MoveVM::new();
             let remote_view = RemoteStorage::new(&self.data_store);
             let mut session = vm.new_session(&remote_view);
@@ -365,7 +477,7 @@ impl FakeExecutor {
                     &Self::name(function_name),
                     type_params,
                     args,
-                    &mut cost_strategy,
+                    &mut gas_status,
                     &log_context,
                 )
                 .unwrap_or_else(|e| {
@@ -391,8 +503,7 @@ impl FakeExecutor {
         type_params: Vec<TypeTag>,
         args: Vec<Vec<u8>>,
     ) -> Result<WriteSet, VMStatus> {
-        let cost_table = zero_cost_schedule();
-        let mut cost_strategy = CostStrategy::system(&cost_table, GasUnits::new(100_000_000));
+        let mut gas_status = GasStatus::new_unmetered();
         let vm = MoveVM::new();
         let remote_view = RemoteStorage::new(&self.data_store);
         let mut session = vm.new_session(&remote_view);
@@ -403,7 +514,7 @@ impl FakeExecutor {
                 &Self::name(function_name),
                 type_params,
                 args,
-                &mut cost_strategy,
+                &mut gas_status,
                 &log_context,
             )
             .map_err(|e| e.into_vm_status())?;

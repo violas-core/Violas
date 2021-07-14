@@ -4,145 +4,46 @@
 use crate::{
     errors::ServerCode,
     runtime::check_latest_ledger_info_timestamp,
-    tests::{
-        genesis::generate_genesis_state,
-        utils::{test_bootstrap, MockDiemDB},
+    tests::utils::{
+        create_database_client_and_runtime, create_db_and_runtime, mock_db, test_bootstrap,
+        MockDiemDB,
     },
-    util::{
-        sdk_info_from_user_agent, vm_status_view_from_kept_vm_status, SdkInfo, SdkLang, SdkVersion,
-    },
+    util::{sdk_info_from_user_agent, SdkInfo, SdkLang, SdkVersion},
+    views::VMStatusView,
 };
 use diem_client::{views::TransactionDataView, BlockingClient, MethodRequest};
 use diem_config::{config::DEFAULT_CONTENT_LENGTH_LIMIT, utils};
 use diem_crypto::{ed25519::Ed25519PrivateKey, hash::CryptoHash, HashValue, PrivateKey, Uniform};
-use diem_mempool::SubmissionStatus;
 use diem_metrics::get_all_metrics;
-use diem_proptest_helpers::ValueGenerator;
 use diem_types::{
     account_address::AccountAddress,
-    account_config::{from_currency_code_string, AccountResource, FreezingBit, XUS_NAME},
+    account_config::AccountResource,
     account_state::AccountState,
     account_state_blob::{AccountStateBlob, AccountStateWithProof},
     chain_id::ChainId,
-    contract_event::ContractEvent,
     event::EventKey,
     ledger_info::LedgerInfoWithSignatures,
     mempool_status::{MempoolStatus, MempoolStatusCode},
     proof::{SparseMerkleProof, TransactionAccumulatorProof, TransactionInfoWithProof},
     test_helpers::transaction_test_helpers::get_test_signed_txn,
-    transaction::{SignedTransaction, Transaction, TransactionInfo, TransactionPayload},
+    transaction::{Transaction, TransactionInfo, TransactionPayload},
     vm_status::StatusCode,
 };
-use diemdb::test_helper::arb_blocks_to_commit;
-use futures::{
-    channel::{
-        mpsc::{channel, Receiver},
-        oneshot,
-    },
-    StreamExt,
-};
-use move_core_types::{
-    language_storage::TypeTag,
-    move_resource::MoveResource,
-    value::{MoveStructLayout, MoveTypeLayout},
-};
-use move_vm_types::values::{Struct, Value};
-use proptest::prelude::*;
+use futures::{channel::mpsc::channel, StreamExt};
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
 use std::{
     cmp::{max, min},
-    collections::HashMap,
     convert::TryFrom,
     ops::Sub,
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use storage_interface::DbReader;
-use tokio::runtime::Runtime;
 use vm_validator::{
     mocks::mock_vm_validator::MockVMValidator, vm_validator::TransactionValidation,
 };
 
 use serde_json::json;
-
-// returns MockDiemDB for unit-testing
-fn mock_db() -> MockDiemDB {
-    let mut gen = ValueGenerator::new();
-    let blocks = gen.generate(arb_blocks_to_commit());
-    let mut account_state_with_proof = gen.generate(any::<AccountStateWithProof>());
-
-    let mut version = 1;
-    let mut all_accounts = HashMap::new();
-    let mut all_txns = vec![];
-    let mut events = vec![];
-    let mut timestamps = vec![0_u64];
-
-    for (txns_to_commit, ledger_info_with_sigs) in &blocks {
-        for (idx, txn) in txns_to_commit.iter().enumerate() {
-            timestamps.push(ledger_info_with_sigs.ledger_info().timestamp_usecs());
-            events.extend(
-                txn.events()
-                    .iter()
-                    .map(|e| ((idx + version) as u64, e.clone())),
-            );
-        }
-        version += txns_to_commit.len();
-        let mut account_states = HashMap::new();
-        // Get the ground truth of account states.
-        txns_to_commit.iter().for_each(|txn_to_commit| {
-            account_states.extend(txn_to_commit.account_states().clone())
-        });
-
-        // Record all account states.
-        for (address, blob) in account_states.into_iter() {
-            let mut state = AccountState::try_from(&blob).unwrap();
-            let freezing_bit = Value::struct_(Struct::pack(vec![Value::bool(false)]))
-                .value_as::<Struct>()
-                .unwrap()
-                .simple_serialize(&MoveStructLayout::new(vec![MoveTypeLayout::Bool]))
-                .unwrap();
-            state.insert(FreezingBit::resource_path(), freezing_bit);
-            all_accounts.insert(address, AccountStateBlob::try_from(&state).unwrap());
-        }
-
-        // Record all transactions.
-        all_txns.extend(txns_to_commit.iter().map(|txn_to_commit| {
-            (
-                txn_to_commit.transaction().clone(),
-                txn_to_commit.status().clone(),
-            )
-        }));
-    }
-
-    if account_state_with_proof.blob.is_none() {
-        let (_, blob) = all_accounts.iter().next().unwrap();
-        account_state_with_proof.blob = Some(blob.clone());
-    }
-
-    let account_state_with_proof = vec![account_state_with_proof];
-
-    if events.is_empty() {
-        // mock the first event
-        let mock_event = ContractEvent::new(
-            EventKey::new_from_address(&AccountAddress::random(), 0),
-            0,
-            TypeTag::Bool,
-            b"event_data".to_vec(),
-        );
-        events.push((version as u64, mock_event));
-    }
-
-    let (genesis, _) = generate_genesis_state();
-    MockDiemDB {
-        version: version as u64,
-        genesis,
-        all_accounts,
-        all_txns,
-        events,
-        account_state_with_proof,
-        timestamps,
-    }
-}
 
 #[test]
 fn test_cors() {
@@ -295,7 +196,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid params: wrong number of arguments (given 2, expected 0)",
+                    "message": "Invalid params for method 'get_currencies'",
                     "data": null
                 },
                 "id": 1,
@@ -311,7 +212,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid params: wrong number of arguments (given 0, expected 3)",
+                    "message": "Invalid params for method 'get_events'",
                     "data": null
                 },
                 "id": 1,
@@ -327,7 +228,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid params: wrong number of arguments (given 2, expected 0..1)",
+                    "message": "Invalid params for method 'get_metadata'",
                     "data": null
                 },
                 "id": 1,
@@ -343,7 +244,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": format!("Invalid param version(params[0]): should be <= known latest version {}", version),
+                    "message": format!("Invalid param version should be <= known latest version {}", version),
                     "data": null
                 },
                 "id": 1,
@@ -359,7 +260,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid param account address(params[0]): should be hex-encoded string",
+                    "message": "Invalid params for method 'get_account'",
                     "data": null
                 },
                 "id": 1,
@@ -375,7 +276,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid param account address(params[0]): should be hex-encoded string",
+                    "message": "Invalid params for method 'get_account'",
                     "data": null
                 },
                 "id": 1,
@@ -391,7 +292,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid param version(params[1]): should be unsigned int64",
+                    "message": "Invalid params for method 'get_account'",
                     "data": null
                 },
                 "id": 1,
@@ -407,7 +308,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid param data(params[0]): should be hex-encoded string of BCS serialized Diem SignedTransaction type",
+                    "message": "Invalid params for method 'submit'",
                     "data": null
                 },
                 "id": 1,
@@ -423,7 +324,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid param start_version(params[0]): should be unsigned int64",
+                    "message": "Invalid params for method 'get_transactions'",
                     "data": null
                 },
                 "id": 1,
@@ -451,7 +352,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid param limit(params[1]): should be unsigned int64",
+                    "message": "Invalid params for method 'get_transactions'",
                     "data": null
                 },
                 "id": 1,
@@ -467,7 +368,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid param include_events(params[2]): should be boolean",
+                    "message": "Invalid params for method 'get_transactions'",
                     "data": null
                 },
                 "id": 1,
@@ -479,11 +380,11 @@ fn test_json_rpc_protocol_invalid_requests() {
         ),
         (
             "get_transactions_with_proofs: invalid start_version param",
-            json!({"jsonrpc": "2.0", "method": "get_transactions_with_proofs", "params": ["helloworld", 1], "id": 1}),
+            json!({"jsonrpc": "2.0", "method": "get_transactions_with_proofs", "params": ["helloworld", 1, true], "id": 1}),
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid param start_version(params[0]): should be unsigned int64",
+                    "message": "Invalid params for method 'get_transactions_with_proofs'",
                     "data": null
                 },
                 "id": 1,
@@ -495,7 +396,7 @@ fn test_json_rpc_protocol_invalid_requests() {
         ),
         (
             "get_transactions_with_proofs: start_version is too big, returns empty array",
-            json!({"jsonrpc": "2.0", "method": "get_transactions_with_proofs", "params": [version+1, 1], "id": 1}),
+            json!({"jsonrpc": "2.0", "method": "get_transactions_with_proofs", "params": [version+1, 1, false], "id": 1}),
             json!({
                 "id": 1,
                 "jsonrpc": "2.0",
@@ -507,11 +408,11 @@ fn test_json_rpc_protocol_invalid_requests() {
         ),
         (
             "get_transactions_with_proofs: invalid limit param",
-            json!({"jsonrpc": "2.0", "method": "get_transactions_with_proofs", "params": [1, false], "id": 1}),
+            json!({"jsonrpc": "2.0", "method": "get_transactions_with_proofs", "params": [1, false, false], "id": 1}),
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid param limit(params[1]): should be unsigned int64",
+                    "message": "Invalid params for method 'get_transactions_with_proofs'",
                     "data": null
                 },
                 "id": 1,
@@ -523,7 +424,7 @@ fn test_json_rpc_protocol_invalid_requests() {
         ),
         (
             "get_transactions_with_proofs: limit is too big",
-            json!({"jsonrpc": "2.0", "method": "get_transactions_with_proofs", "params": [1, 1001], "id": 1}),
+            json!({"jsonrpc": "2.0", "method": "get_transactions_with_proofs", "params": [1, 1001, false], "id": 1}),
             json!({
                 "error": {
                     "code": -32600,
@@ -543,7 +444,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid param event key(params[0]): should be hex-encoded string",
+                    "message": "Invalid params for method 'get_events'",
                     "data": null
                 },
                 "id": 1,
@@ -559,7 +460,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid param event key(params[0]): should be hex-encoded string",
+                    "message": "Invalid params for method 'get_events'",
                     "data": null
                 },
                 "id": 1,
@@ -575,7 +476,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid param start(params[1]): should be unsigned int64",
+                    "message": "Invalid params for method 'get_events'",
                     "data": null
                 },
                 "id": 1,
@@ -603,7 +504,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid param limit(params[2]): should be unsigned int64",
+                    "message": "Invalid params for method 'get_events'",
                     "data": null
                 },
                 "id": 1,
@@ -619,7 +520,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid param event key(params[0]): should be hex-encoded string",
+                    "message": "Invalid params for method 'get_events_with_proofs'",
                     "data": null
                 },
                 "id": 1,
@@ -635,7 +536,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid param event key(params[0]): should be hex-encoded string",
+                    "message": "Invalid params for method 'get_events_with_proofs'",
                     "data": null
                 },
                 "id": 1,
@@ -651,7 +552,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid param start(params[1]): should be unsigned int64",
+                    "message": "Invalid params for method 'get_events_with_proofs'",
                     "data": null
                 },
                 "id": 1,
@@ -667,7 +568,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid param limit(params[2]): should be unsigned int64",
+                    "message": "Invalid params for method 'get_events_with_proofs'",
                     "data": null
                 },
                 "id": 1,
@@ -683,7 +584,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid param account address(params[0]): should be hex-encoded string",
+                    "message": "Invalid params for method 'get_account_transaction'",
                     "data": null
                 },
                 "id": 1,
@@ -699,7 +600,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid param account sequence number(params[1]): should be unsigned int64",
+                    "message": "Invalid params for method 'get_account_transaction'",
                     "data": null
                 },
                 "id": 1,
@@ -715,7 +616,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid param include_events(params[2]): should be boolean",
+                    "message": "Invalid params for method 'get_account_transaction'",
                     "data": null
                 },
                 "id": 1,
@@ -743,7 +644,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid param account address(params[0]): should be hex-encoded string",
+                    "message": "Invalid params for method 'get_account_transactions'",
                     "data": null
                 },
                 "id": 1,
@@ -775,7 +676,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid param start(params[1]): should be unsigned int64",
+                    "message": "Invalid params for method 'get_account_transactions'",
                     "data": null
                 },
                 "id": 1,
@@ -803,7 +704,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid param limit(params[2]): should be unsigned int64",
+                    "message": "Invalid params for method 'get_account_transactions'",
                     "data": null
                 },
                 "id": 1,
@@ -819,7 +720,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid param include_events(params[3]): should be boolean",
+                    "message": "Invalid params for method 'get_account_transactions'",
                     "data": null
                 },
                 "id": 1,
@@ -835,7 +736,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid param version(params[0]): should be unsigned int64",
+                    "message": "Invalid params for method 'get_state_proof'",
                     "data": null
                 },
                 "id": 1,
@@ -851,7 +752,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": format!("Invalid param version(params[0]): should be <= known latest version {}", version),
+                    "message": format!("Invalid param version should be <= known latest version {}", version),
                     "data": null
                 },
                 "id": 1,
@@ -867,7 +768,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid param account address(params[0]): should be hex-encoded string",
+                    "message": "Invalid params for method 'get_account_state_with_proof'",
                     "data": null
                 },
                 "id": 1,
@@ -883,7 +784,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid param version(params[1]): should be unsigned int64",
+                    "message": "Invalid params for method 'get_account_state_with_proof'",
                     "data": null
                 },
                 "id": 1,
@@ -915,7 +816,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": format!("Invalid param ledger version for proof(params[2]): should be <= known latest version {}", version),
+                    "message": format!("Invalid param ledger_version should be <= known latest version {}", version),
                     "data": null
                 },
                 "id": 1,
@@ -931,7 +832,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid param ledger version for proof(params[2]): should be unsigned int64",
+                    "message": "Invalid params for method 'get_account_state_with_proof'",
                     "data": null
                 },
                 "id": 1,
@@ -947,7 +848,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": format!("Invalid param version(params[1]): should be <= known latest version {}", version),
+                    "message": format!("Invalid param version should be <= known latest version {}", version),
                     "data": null
                 },
                 "id": 1,
@@ -963,7 +864,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": format!("Invalid param ledger version for proof(params[2]): should be <= known latest version {}", version),
+                    "message": format!("Invalid param ledger_version should be <= known latest version {}", version),
                     "data": null
                 },
                 "id": 1,
@@ -971,27 +872,6 @@ fn test_json_rpc_protocol_invalid_requests() {
                 "diem_chain_id": ChainId::test().id(),
                 "diem_ledger_timestampusec": timestamp,
                 "diem_ledger_version": version
-            }),
-        ),
-        (
-            "id not given",
-            json!({"jsonrpc": "2.0", "method": "get_metadata"}),
-            json!({
-                "id": null,
-                "jsonrpc": "2.0",
-                "diem_chain_id": ChainId::test().id(),
-                "diem_ledger_timestampusec": timestamp,
-                "diem_ledger_version": version,
-                "result": {
-                    "chain_id": ChainId::test().id(),
-                    "timestamp": timestamp,
-                    "version": version,
-                    "script_hash_allow_list": [],
-                    "module_publishing_allowed": true,
-                    "diem_version": 2,
-                    "accumulator_root_hash": "0000000000000000000000000000000000000000000000000000000000000000",
-                    "dual_attestation_limit": 1000000000,
-                }
             }),
         ),
     ];
@@ -1152,7 +1032,7 @@ fn test_get_account() {
         .unwrap();
     let account_balances: Vec<_> = account.balances.iter().map(|bal| bal.amount).collect();
     let expected_resource_balances: Vec<_> = expected_resource
-        .get_balance_resources(&[from_currency_code_string(XUS_NAME).unwrap()])
+        .get_balance_resources()
         .unwrap()
         .iter()
         .map(|(_, bal_resource)| bal_resource.coin())
@@ -1187,7 +1067,7 @@ fn test_get_account() {
         let account = response.unwrap().into_inner().unwrap_get_account().unwrap();
         let account_balances: Vec<_> = account.balances.iter().map(|bal| bal.amount).collect();
         let expected_resource_balances: Vec<_> = states[idx]
-            .get_balance_resources(&[from_currency_code_string(XUS_NAME).unwrap()])
+            .get_balance_resources()
             .unwrap()
             .iter()
             .map(|(_, bal_resource)| bal_resource.coin())
@@ -1246,7 +1126,11 @@ fn test_get_events_page_limit() {
     let (_, client, _runtime) = create_database_client_and_runtime();
 
     let ret = client
-        .get_events("13000000000000000000000000000000000000000a550c18", 0, 1001)
+        .get_events(
+            EventKey::from_hex("13000000000000000000000000000000000000000a550c18").unwrap(),
+            0,
+            1001,
+        )
         .unwrap_err();
 
     let error = ret.json_rpc_error().unwrap();
@@ -1271,11 +1155,11 @@ fn test_get_events() {
     let event_index = 0;
     let mock_db_events = mock_db.events;
     let (first_event_version, first_event) = mock_db_events[event_index].clone();
-    let event_key = hex::encode(first_event.key().as_bytes());
+    let event_key = first_event.key();
 
     let events = client
         .get_events(
-            &event_key,
+            *event_key,
             first_event.sequence_number(),
             first_event.sequence_number() + 10,
         )
@@ -1327,7 +1211,7 @@ fn test_get_transactions() {
                 .collect::<Vec<_>>();
 
             assert_eq!(expected_events.len(), view.events.len());
-            assert_eq!(vm_status_view_from_kept_vm_status(status), view.vm_status);
+            assert_eq!(VMStatusView::from(status), view.vm_status);
 
             for (i, event_view) in view.events.iter().enumerate() {
                 let expected_event = expected_events.get(i).expect("Expected event didn't find");
@@ -1407,10 +1291,7 @@ fn test_get_account_transaction() {
             assert_eq!(tx_view.events.len(), expected_events.len());
 
             // check VM status
-            assert_eq!(
-                tx_view.vm_status,
-                vm_status_view_from_kept_vm_status(expected_status)
-            );
+            assert_eq!(tx_view.vm_status, VMStatusView::from(expected_status));
 
             for (i, event_view) in tx_view.events.iter().enumerate() {
                 let expected_event = expected_events.get(i).expect("Expected event didn't find");
@@ -1627,85 +1508,6 @@ fn test_check_latest_ledger_info_timestamp() {
         now
     )
     .is_ok());
-}
-
-#[test]
-fn test_health_check() {
-    let (_mock_db, _runtime, url, _) = create_db_and_runtime();
-
-    let client = reqwest::blocking::Client::new();
-    let healthy_url = format!("{}/-/healthy", url);
-    let resp = client.get(&healthy_url).send().unwrap();
-    assert_eq!(resp.status(), 200);
-
-    let healthy_url = format!(
-        "{}/-/healthy?duration={}",
-        url,
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs()
-    );
-    let resp = client.get(&healthy_url).send().unwrap();
-    assert_eq!(resp.status(), 200);
-}
-
-#[test]
-fn test_check_latest_ledger_info_timestamp() {
-    let now = SystemTime::now();
-    let ledger_latest_timestamp_lack = 10;
-
-    let ledger_latest_timestamp = now
-        .sub(Duration::from_secs(ledger_latest_timestamp_lack))
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_micros() as u64;
-
-    assert!(check_latest_ledger_info_timestamp(
-        ledger_latest_timestamp_lack - 1,
-        ledger_latest_timestamp,
-        now
-    )
-    .is_err());
-    assert!(check_latest_ledger_info_timestamp(
-        ledger_latest_timestamp_lack + 1,
-        ledger_latest_timestamp,
-        now
-    )
-    .is_ok());
-}
-
-/// Creates and returns a MockDiemDB, JsonRpcAsyncClient and corresponding server Runtime tuple for
-/// testing. The given channel_buffer specifies the buffer size of the mempool client sender channel.
-fn create_database_client_and_runtime() -> (MockDiemDB, BlockingClient, Runtime) {
-    let (mock_db, runtime, url, _) = create_db_and_runtime();
-    let client = BlockingClient::new(url);
-
-    (mock_db, client, runtime)
-}
-
-fn create_db_and_runtime() -> (
-    MockDiemDB,
-    Runtime,
-    String,
-    Receiver<(
-        SignedTransaction,
-        oneshot::Sender<anyhow::Result<SubmissionStatus>>,
-    )>,
-) {
-    let mock_db = mock_db();
-
-    let host = "127.0.0.1";
-    let port = utils::get_available_port();
-    let address = format!("{}:{}", host, port);
-    let (mp_sender, mp_events) = channel(1);
-
-    let runtime = test_bootstrap(
-        address.parse().unwrap(),
-        Arc::new(mock_db.clone()),
-        mp_sender,
-    );
-    (mock_db, runtime, format!("http://{}", address), mp_events)
 }
 
 /// Returns the first account address stored in the given mock database.

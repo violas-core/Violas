@@ -25,6 +25,9 @@ use std::{
 /// If `local_types` is true, we generate a file suitable for the Diem codebase itself
 /// rather than using serde-generated, standalone definitions.
 pub fn output(out: &mut dyn Write, abis: &[ScriptABI], local_types: bool) -> Result<()> {
+    if abis.is_empty() {
+        return Ok(());
+    }
     let mut emitter = RustEmitter {
         out: IndentedWriter::new(out, IndentConfig::Space(4)),
         local_types,
@@ -33,8 +36,15 @@ pub fn output(out: &mut dyn Write, abis: &[ScriptABI], local_types: bool) -> Res
     emitter.output_preamble()?;
     emitter.output_script_call_enum_with_imports(abis)?;
 
-    emitter.output_transaction_script_impl(&common::transaction_script_abis(abis))?;
-    emitter.output_script_function_impl(&common::script_function_abis(abis))?;
+    let tx_script_abis = common::transaction_script_abis(abis);
+    let script_function_abis = common::script_function_abis(abis);
+
+    if !tx_script_abis.is_empty() {
+        emitter.output_transaction_script_impl(&tx_script_abis)?;
+    }
+    if !script_function_abis.is_empty() {
+        emitter.output_script_function_impl(&script_function_abis)?;
+    }
 
     for abi in abis {
         emitter.output_script_encoder_function(abi)?;
@@ -44,11 +54,15 @@ pub fn output(out: &mut dyn Write, abis: &[ScriptABI], local_types: bool) -> Res
         emitter.output_script_decoder_function(abi)?;
     }
 
-    emitter.output_transaction_script_decoder_map(&common::transaction_script_abis(abis))?;
-    emitter.output_script_function_decoder_map(&common::script_function_abis(abis))?;
+    if !tx_script_abis.is_empty() {
+        emitter.output_transaction_script_decoder_map(&tx_script_abis)?;
+    }
+    if !script_function_abis.is_empty() {
+        emitter.output_script_function_decoder_map(&script_function_abis)?;
+    }
     emitter.output_decoding_helpers(abis)?;
 
-    for abi in &common::transaction_script_abis(abis) {
+    for abi in &tx_script_abis {
         emitter.output_code_constant(abi)?;
     }
     Ok(())
@@ -74,6 +88,7 @@ where
         self.out.indent();
         self.output_transaction_script_encode_method(transaction_script_abis)?;
         self.output_transaction_script_decode_method()?;
+        self.output_transaction_script_name_method(transaction_script_abis)?;
         self.out.unindent();
         writeln!(self.out, "\n}}")
     }
@@ -100,7 +115,7 @@ where
 
 // This file was generated. Do not modify!
 //
-// To update this code, run: `cargo run --release -p diem-framework` and copy the re-generated file to deseired locations.
+// To update this code, run: `cargo run --release -p diem-framework`.
 "#
             )?;
         }
@@ -205,7 +220,7 @@ impl ScriptFunctionCall {
                     "move_core_types::language_storage",
                     vec!["TypeTag", "ModuleId"],
                 ),
-                ("move_core_types::identifier", vec!["Identifier"]),
+                ("move_core_types", vec!["ident_str"]),
                 (
                     "diem_types::transaction",
                     vec![
@@ -345,6 +360,33 @@ pub fn decode(payload: &TransactionPayload) -> Option<ScriptFunctionCall> {{
                 "script.function.0"
             }
         )
+    }
+
+    fn output_transaction_script_name_method(
+        &mut self,
+        abis: &[TransactionScriptABI],
+    ) -> Result<()> {
+        writeln!(
+            self.out,
+            r#"
+/// Return the name of a Diem `Script` from a structured object `ScriptCall`.
+pub fn name(&self) -> &'static str {{"#
+        )?;
+        self.out.indent();
+        writeln!(self.out, "use ScriptCall::*;\nmatch self {{")?;
+        self.out.indent();
+        for abi in abis {
+            writeln!(
+                self.out,
+                "{} {{ .. }} => \"{}\",",
+                abi.name().to_camel_case(),
+                abi.name(),
+            )?;
+        }
+        self.out.unindent();
+        writeln!(self.out, "}}")?;
+        self.out.unindent();
+        writeln!(self.out, "}}\n")
     }
 
     fn output_comment(&mut self, indentation: usize, doc: &str) -> std::io::Result<()> {
@@ -680,7 +722,7 @@ fn decode_{}_argument(arg: TransactionArgument) -> Option<{}> {{
 
     fn quote_identifier(&self, ident: &str) -> String {
         if self.local_types {
-            format!("Identifier::new(\"{}\").unwrap()", ident)
+            format!("ident_str!(\"{}\").to_owned()", ident)
         } else {
             format!("Identifier(\"{}\".to_string())", ident)
         }

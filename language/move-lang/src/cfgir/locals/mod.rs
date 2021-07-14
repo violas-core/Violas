@@ -6,13 +6,13 @@ pub mod state;
 use super::absint::*;
 use crate::{
     errors::*,
-    expansion::ast::AbilitySet,
+    expansion::ast::{AbilitySet, ModuleIdent},
     hlir::{
         ast::*,
         translate::{display_var, DisplayVar},
     },
     naming::ast::{self as N, TParam},
-    parser::ast::{Ability_, ModuleIdent, StructName, Var},
+    parser::ast::{Ability_, StructName, Var},
     shared::{unique_map::UniqueMap, *},
 };
 use move_ir_types::location::*;
@@ -106,7 +106,7 @@ impl<'a> TransferFunctions for LocalsSafety<'a> {
 impl<'a> AbstractInterpreter for LocalsSafety<'a> {}
 
 pub fn verify(
-    errors: &mut Errors,
+    compilation_env: &mut CompilationEnv,
     struct_declared_abilities: &UniqueMap<ModuleIdent, UniqueMap<StructName, AbilitySet>>,
     signature: &FunctionSignature,
     _acquires: &BTreeMap<StructName, Loc>,
@@ -115,8 +115,8 @@ pub fn verify(
 ) -> BTreeMap<Label, LocalStates> {
     let initial_state = LocalStates::initial(&signature.parameters, locals);
     let mut locals_safety = LocalsSafety::new(struct_declared_abilities, locals, signature);
-    let (final_state, mut es) = locals_safety.analyze_function(cfg, initial_state);
-    errors.append(&mut es);
+    let (final_state, es) = locals_safety.analyze_function(cfg, initial_state);
+    compilation_env.add_errors(es);
     final_state
 }
 

@@ -50,11 +50,17 @@ impl Encryptor {
         }
     }
 
-    /// This generates an Encryptor for use in default / testing scenarios where (proper)
-    /// encryption is not necessary.
-    pub fn for_testing() -> Self {
+    /// This generates an empty encryptor for use in scenarios where encryption is not necessary.
+    /// Any encryption operations (e.g., encrypt / decrypt) will return errors.
+    pub fn empty() -> Self {
         let storage = Storage::InMemoryStorage(diem_secure_storage::InMemoryStorage::new());
-        let mut encryptor = Encryptor::new(storage);
+        Encryptor::new(storage)
+    }
+
+    /// This generates an encryptor for use in testing scenarios. The encryptor is
+    /// initialized with a test network encryption key.
+    pub fn for_testing() -> Self {
+        let mut encryptor = Self::empty();
         encryptor.initialize_for_testing().unwrap();
         encryptor
     }
@@ -208,7 +214,7 @@ impl Default for ValidatorKeys {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use diem_secure_storage::InMemoryStorage;
+    use diem_secure_storage::{InMemoryStorage, Namespaced};
     use rand::{rngs::OsRng, Rng, RngCore, SeedableRng};
 
     #[test]
@@ -271,15 +277,19 @@ mod tests {
     #[ignore]
     #[test]
     fn initializer() {
-        let storage = Storage::VaultStorage(diem_secure_storage::VaultStorage::new(
-            "http://127.0.0.1:8200".to_string(),
-            "root_token".to_string(),
-            Some("network_address_encryption_keys".to_string()),
-            None,
-            None,
-            true,
-            None,
-            None,
+        let storage = Storage::from(Namespaced::new(
+            "network_address_encryption_keys",
+            Box::new(Storage::VaultStorage(
+                diem_secure_storage::VaultStorage::new(
+                    "http://127.0.0.1:8200".to_string(),
+                    "root_token".to_string(),
+                    None,
+                    None,
+                    true,
+                    None,
+                    None,
+                ),
+            )),
         ));
         let mut encryptor = Encryptor::new(storage);
         encryptor.initialize().unwrap();

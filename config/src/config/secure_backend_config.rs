@@ -3,7 +3,7 @@
 
 use crate::config::Error;
 use diem_secure_storage::{
-    GitHubStorage, InMemoryStorage, NamespacedStorage, OnDiskStorage, Storage, VaultStorage,
+    GitHubStorage, InMemoryStorage, Namespaced, OnDiskStorage, Storage, VaultStorage,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -164,7 +164,7 @@ impl From<&SecureBackend> for Storage {
                     config.token.read_token().expect("Unable to read token"),
                 ));
                 if let Some(namespace) = &config.namespace {
-                    Storage::from(NamespacedStorage::new(storage, namespace.clone()))
+                    Storage::from(Namespaced::new(namespace, Box::new(storage)))
                 } else {
                     storage
                 }
@@ -173,24 +173,30 @@ impl From<&SecureBackend> for Storage {
             SecureBackend::OnDiskStorage(config) => {
                 let storage = Storage::from(OnDiskStorage::new(config.path()));
                 if let Some(namespace) = &config.namespace {
-                    Storage::from(NamespacedStorage::new(storage, namespace.clone()))
+                    Storage::from(Namespaced::new(namespace, Box::new(storage)))
                 } else {
                     storage
                 }
             }
-            SecureBackend::Vault(config) => Storage::from(VaultStorage::new(
-                config.server.clone(),
-                config.token.read_token().expect("Unable to read token"),
-                config.namespace.clone(),
-                config
-                    .ca_certificate
-                    .as_ref()
-                    .map(|_| config.ca_certificate().unwrap()),
-                config.renew_ttl_secs,
-                config.disable_cas.map_or_else(|| true, |disable| !disable),
-                config.connection_timeout_ms,
-                config.response_timeout_ms,
-            )),
+            SecureBackend::Vault(config) => {
+                let storage = Storage::from(VaultStorage::new(
+                    config.server.clone(),
+                    config.token.read_token().expect("Unable to read token"),
+                    config
+                        .ca_certificate
+                        .as_ref()
+                        .map(|_| config.ca_certificate().unwrap()),
+                    config.renew_ttl_secs,
+                    config.disable_cas.map_or_else(|| true, |disable| !disable),
+                    config.connection_timeout_ms,
+                    config.response_timeout_ms,
+                ));
+                if let Some(namespace) = &config.namespace {
+                    Storage::from(Namespaced::new(namespace, Box::new(storage)))
+                } else {
+                    storage
+                }
+            }
         }
     }
 }

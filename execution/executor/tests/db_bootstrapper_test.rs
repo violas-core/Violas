@@ -192,7 +192,7 @@ fn get_balance(account: &AccountAddress, db: &DbReaderWriter) -> u64 {
         .unwrap();
     let account_state = AccountState::try_from(&account_state_blob).unwrap();
     account_state
-        .get_balance_resources(&[from_currency_code_string(XUS_NAME).unwrap()])
+        .get_balance_resources()
         .unwrap()
         .get(&from_currency_code_string(XUS_NAME).unwrap())
         .unwrap()
@@ -376,10 +376,8 @@ fn test_new_genesis() {
 
     // Client bootable from waypoint.
     let trusted_state = TrustedState::from(waypoint);
-    let (li, epoch_change_proof, accumulator_consistency_proof) = db
-        .reader
-        .get_state_proof(trusted_state.latest_version())
-        .unwrap();
+    let (li, epoch_change_proof, accumulator_consistency_proof) =
+        db.reader.get_state_proof(trusted_state.version()).unwrap();
     assert_eq!(li.ledger_info().version(), 5);
     assert!(accumulator_consistency_proof.subtrees().is_empty());
     trusted_state

@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::{JsonRpcVersion, Method};
-use diem_types::{account_address::AccountAddress, transaction::SignedTransaction};
+use diem_types::{
+    account_address::AccountAddress, event::EventKey, transaction::SignedTransaction,
+};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::AtomicU64;
 
@@ -12,11 +14,11 @@ use std::sync::atomic::AtomicU64;
 pub enum MethodRequest {
     Submit((String,)),
     GetMetadata((Option<u64>,)),
-    GetAccount((AccountAddress,)),
+    GetAccount(AccountAddress, Option<u64>),
     GetTransactions(u64, u64, bool),
     GetAccountTransaction(AccountAddress, u64, bool),
     GetAccountTransactions(AccountAddress, u64, u64, bool),
-    GetEvents(String, u64, u64),
+    GetEvents(EventKey, u64, u64),
     GetCurrencies([(); 0]),
     GetNetworkStatus([(); 0]),
 
@@ -25,8 +27,8 @@ pub enum MethodRequest {
     //
     GetStateProof((u64,)),
     GetAccountStateWithProof(AccountAddress, Option<u64>, Option<u64>),
-    GetTransactionsWithProofs(u64, u64),
-    GetEventsWithProofs(String, u64, u64),
+    GetTransactionsWithProofs(u64, u64, bool),
+    GetEventsWithProofs(EventKey, u64, u64),
 }
 
 impl MethodRequest {
@@ -43,8 +45,12 @@ impl MethodRequest {
         Self::GetMetadata((None,))
     }
 
+    pub fn get_account_by_version(address: AccountAddress, version: u64) -> Self {
+        Self::GetAccount(address, Some(version))
+    }
+
     pub fn get_account(address: AccountAddress) -> Self {
-        Self::GetAccount((address,))
+        Self::GetAccount(address, None)
     }
 
     pub fn get_transactions(start_seq: u64, limit: u64, include_events: bool) -> Self {
@@ -68,8 +74,8 @@ impl MethodRequest {
         Self::GetAccountTransactions(address, start_seq, limit, include_events)
     }
 
-    pub fn get_events(key: &str, start_seq: u64, limit: u64) -> Self {
-        Self::GetEvents(key.to_owned(), start_seq, limit)
+    pub fn get_events(key: EventKey, start_seq: u64, limit: u64) -> Self {
+        Self::GetEvents(key, start_seq, limit)
     }
 
     pub fn get_currencies() -> Self {
@@ -89,25 +95,29 @@ impl MethodRequest {
     }
     pub fn get_account_state_with_proof(
         address: AccountAddress,
-        from_version: Option<u64>,
-        to_version: Option<u64>,
+        version: Option<u64>,
+        ledger_version: Option<u64>,
     ) -> Self {
-        Self::GetAccountStateWithProof(address, from_version, to_version)
+        Self::GetAccountStateWithProof(address, version, ledger_version)
     }
 
-    pub fn get_transactions_with_proofs(start_version: u64, limit: u64) -> Self {
-        Self::GetTransactionsWithProofs(start_version, limit)
+    pub fn get_transactions_with_proofs(
+        start_version: u64,
+        limit: u64,
+        include_events: bool,
+    ) -> Self {
+        Self::GetTransactionsWithProofs(start_version, limit, include_events)
     }
 
-    pub fn get_events_with_proofs(key: &str, start_seq: u64, limit: u64) -> Self {
-        Self::GetEventsWithProofs(key.to_owned(), start_seq, limit)
+    pub fn get_events_with_proofs(key: EventKey, start_seq: u64, limit: u64) -> Self {
+        Self::GetEventsWithProofs(key, start_seq, limit)
     }
 
     pub fn method(&self) -> Method {
         match self {
             MethodRequest::Submit(_) => Method::Submit,
             MethodRequest::GetMetadata(_) => Method::GetMetadata,
-            MethodRequest::GetAccount(_) => Method::GetAccount,
+            MethodRequest::GetAccount(_, _) => Method::GetAccount,
             MethodRequest::GetTransactions(_, _, _) => Method::GetTransactions,
             MethodRequest::GetAccountTransaction(_, _, _) => Method::GetAccountTransaction,
             MethodRequest::GetAccountTransactions(_, _, _, _) => Method::GetAccountTransactions,
@@ -116,7 +126,7 @@ impl MethodRequest {
             MethodRequest::GetNetworkStatus(_) => Method::GetNetworkStatus,
             MethodRequest::GetStateProof(_) => Method::GetStateProof,
             MethodRequest::GetAccountStateWithProof(_, _, _) => Method::GetAccountStateWithProof,
-            MethodRequest::GetTransactionsWithProofs(_, _) => Method::GetTransactionsWithProofs,
+            MethodRequest::GetTransactionsWithProofs(_, _, _) => Method::GetTransactionsWithProofs,
             MethodRequest::GetEventsWithProofs(_, _, _) => Method::GetEventsWithProofs,
         }
     }

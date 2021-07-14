@@ -1,5 +1,5 @@
 # while using circle we'll use circle's base image.
-FROM archlinux:base-devel-20210328.0.18194@sha256:482737dbe9f241966d09bea84960fc99d61022e5b8ffb559d2ec77b49f6f00ea AS setup_ci_arch
+FROM archlinux:base-devel-20210523.0.23638@sha256:d7173f9b580ecf6133f436ad5dd0f870c5cf4cd09e4fc116bc9e682e52d423a0 AS setup_ci_arch
 
 WORKDIR /diem
 COPY rust-toolchain /diem/rust-toolchain
@@ -33,9 +33,17 @@ RUN [ -x "$(command -v shellcheck)" ] \
     && [ -x "$(command -v aws)" ] \
     && [ -x "$(command -v z3)" ] \
     && [ -x "$(command -v "$HOME/.dotnet/tools/boogie")" ] \
-    && [ -x "$(xargs rustup which cargo --toolchain < /diem/rust-toolchain )" ]
+    && [ -x "$(xargs rustup which cargo --toolchain < /diem/rust-toolchain )" ] \
+    && [ -x "$(command -v tidy)" ] \
+    && [ -x "$(command -v xsltproc)" ]
+# These should eventually be installed and tested, but since we don't automate on arch, low pri.
+# && [ -x "$(command -v javac)" ] \
+# && [ -x "$(command -v clang)" ] \
+# && [ -x "$(command -v python3)" ] \
+# && [ -x "$(command -v go)" ] \
+# && [ -x "$(command -v npm)" ]
 
 # should be a no-op
-RUN scripts/dev_setup.sh -b -p
+RUN scripts/dev_setup.sh -t -o -y -b -p
 
 FROM setup_ci_arch as build_environment_arch

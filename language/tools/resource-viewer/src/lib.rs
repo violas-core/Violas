@@ -11,20 +11,20 @@ use diem_types::{
     access_path::AccessPath, account_address::AccountAddress, account_state::AccountState,
     contract_event::ContractEvent,
 };
+use move_binary_format::{
+    errors::{Location, PartialVMError, PartialVMResult, VMResult},
+    file_format::{Ability, AbilitySet},
+};
 use move_core_types::{
     identifier::Identifier,
     language_storage::{ModuleId, StructTag, TypeTag},
     value::{MoveStruct, MoveValue},
 };
-use move_vm_runtime::data_cache::RemoteCache;
+use move_vm_runtime::data_cache::MoveStorage;
 use std::{
     collections::btree_map::BTreeMap,
     convert::TryInto,
     fmt::{Display, Formatter},
-};
-use vm::{
-    errors::{Location, PartialVMError, PartialVMResult, VMResult},
-    file_format::{Ability, AbilitySet},
 };
 
 mod fat_type;
@@ -34,7 +34,7 @@ mod resolver;
 #[derive(Debug)]
 pub struct AnnotatedAccountStateBlob(BTreeMap<StructTag, AnnotatedMoveStruct>);
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct AnnotatedMoveStruct {
     pub abilities: AbilitySet,
     pub type_: StructTag,
@@ -45,7 +45,7 @@ pub struct AnnotatedMoveStruct {
 /// for debugging/client purpose right now and just for a better visualization of on chain data. In
 /// the long run, we would like to transform this struct to a Json value so that we can have a cross
 /// platform interpretation of the on chain data.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum AnnotatedMoveValue {
     U8(u8),
     U64(u64),
@@ -57,24 +57,48 @@ pub enum AnnotatedMoveValue {
     Struct(AnnotatedMoveStruct),
 }
 
+impl AnnotatedMoveValue {
+    pub fn get_type(&self) -> TypeTag {
+        use AnnotatedMoveValue::*;
+        match self {
+            U8(_) => TypeTag::U8,
+            U64(_) => TypeTag::U64,
+            U128(_) => TypeTag::U128,
+            Bool(_) => TypeTag::Bool,
+            Address(_) => TypeTag::Address,
+            Vector(t, _) => t.clone(),
+            Bytes(_) => TypeTag::Vector(Box::new(TypeTag::U8)),
+            Struct(s) => TypeTag::Struct(s.type_.clone()),
+        }
+    }
+}
+
 pub struct MoveValueAnnotator<'a> {
     cache: Resolver<'a>,
-    _data_view: &'a dyn RemoteCache,
+    _data_view: &'a dyn MoveStorage,
 }
 
 impl<'a> MoveValueAnnotator<'a> {
-    pub fn new(view: &'a dyn RemoteCache) -> Self {
+    pub fn new(view: &'a dyn MoveStorage) -> Self {
         Self {
             cache: Resolver::new(view, true),
             _data_view: view,
         }
     }
 
-    pub fn new_no_stdlib(view: &'a dyn RemoteCache) -> Self {
+    pub fn new_no_stdlib(view: &'a dyn MoveStorage) -> Self {
         Self {
             cache: Resolver::new(view, false),
             _data_view: view,
         }
+    }
+
+    pub fn get_resource_bytes(&self, addr: &AccountAddress, tag: &StructTag) -> Option<Vec<u8>> {
+        self.cache
+            .state
+            .get_resource(addr, tag)
+            .map_err(|e: PartialVMError| e.finish(Location::Undefined).into_vm_status())
+            .ok()?
     }
 
     pub fn view_access_path(
@@ -286,16 +310,12 @@ impl StateView for NullStateView {
         Err(anyhow!("No data"))
     }
 
-    fn multi_get(&self, _access_paths: &[AccessPath]) -> Result<Vec<Option<Vec<u8>>>> {
-        Err(anyhow!("No data"))
-    }
-
     fn is_genesis(&self) -> bool {
         false
     }
 }
 
-impl RemoteCache for NullStateView {
+impl MoveStorage for NullStateView {
     fn get_module(&self, _module_id: &ModuleId) -> VMResult<Option<Vec<u8>>> {
         Ok(None)
     }

@@ -3,7 +3,7 @@
 
 // This file was generated. Do not modify!
 //
-// To update this code, run: `cargo run --release -p diem-framework` and copy the re-generated file to deseired locations.
+// To update this code, run: `cargo run --release -p diem-framework`.
 
 //! Conversion library between a structured representation of a Move script call (`ScriptCall`) and the
 //! standard BCS-compatible representation used in Diem transactions (`Script`).
@@ -17,7 +17,7 @@ use diem_types::{
     transaction::{Script, ScriptFunction, TransactionArgument, TransactionPayload},
 };
 use move_core_types::{
-    identifier::Identifier,
+    ident_str,
     language_storage::{ModuleId, TypeTag},
 };
 use std::collections::BTreeMap as Map;
@@ -1473,6 +1473,35 @@ pub enum ScriptFunctionCall {
     AddCurrencyToAccount { currency: TypeTag },
 
     /// # Summary
+    /// Add a DiemID domain to parent VASP account. The transaction can only be sent by
+    /// the Treasury Compliance account.
+    ///
+    /// # Technical Description
+    /// Adds a `DiemId::DiemIdDomain` to the `domains` field of the `DiemId::DiemIdDomains` resource published under
+    /// the account at `address`.
+    ///
+    /// # Parameters
+    /// | Name         | Type         | Description                                                                                     |
+    /// | ------       | ------       | -------------                                                                                   |
+    /// | `tc_account` | `signer`     | The signer of the sending account of this transaction. Must be the Treasury Compliance account. |
+    /// | `address`    | `address`    | The `address` of the parent VASP account that will have have `domain` added to its domains.     |
+    /// | `domain`     | `vector<u8>` | The domain to be added.                                                                         |
+    ///
+    /// # Common Abort Conditions
+    /// | Error Category             | Error Reason                             | Description                                                                                                                            |
+    /// | ----------------           | --------------                           | -------------                                                                                                                          |
+    /// | `Errors::REQUIRES_ROLE`    | `Roles::ETREASURY_COMPLIANCE`            | The sending account is not the Treasury Compliance account.                                                                            |
+    /// | `Errors::REQUIRES_ADDRESS` | `CoreAddresses::ETREASURY_COMPLIANCE`    | `tc_account` is not the Treasury Compliance account.                                                                                   |
+    /// | `Errors::NOT_PUBLISHED`    | `DiemId::EDIEM_ID_DOMAIN_MANAGER`        | The `DiemId::DiemIdDomainManager` resource is not yet published under the Treasury Compliance account.                                 |
+    /// | `Errors::NOT_PUBLISHED`    | `DiemId::EDIEM_ID_DOMAINS_NOT_PUBLISHED` | `address` does not have a `DiemId::DiemIdDomains` resource published under it.                                                         |
+    /// | `Errors::INVALID_ARGUMENT` | `DiemId::EDOMAIN_ALREADY_EXISTS`         | The `domain` already exists in the list of `DiemId::DiemIdDomain`s  in the `DiemId::DiemIdDomains` resource published under `address`. |
+    /// | `Errors::INVALID_ARGUMENT` | `DiemId::EINVALID_DIEM_ID_DOMAIN`        | The `domain` is greater in length than `DiemId::DOMAIN_LENGTH`.                                                                        |
+    AddDiemIdDomain {
+        address: AccountAddress,
+        domain: Bytes,
+    },
+
+    /// # Summary
     /// Stores the sending accounts ability to rotate its authentication key with a designated recovery
     /// account. Both the sending and recovery accounts need to belong to the same VASP and
     /// both be VASP accounts. After this transaction both the sending account and the
@@ -1841,6 +1870,27 @@ pub enum ScriptFunctionCall {
         human_name: Bytes,
         add_all_currencies: bool,
     },
+
+    /// # Summary
+    /// Publishes a `DiemId::DiemIdDomains` resource under a parent VASP account.
+    /// The sending account must be a parent VASP account.
+    ///
+    /// # Technical Description
+    /// Publishes a `DiemId::DiemIdDomains` resource under `account`.
+    /// The The `DiemId::DiemIdDomains` resource's `domains` field is a vector
+    /// of DiemIdDomain, and will be empty on at the end of processing this transaction.
+    ///
+    /// # Parameters
+    /// | Name      | Type     | Description                                           |
+    /// | ------    | ------   | -------------                                         |
+    /// | `account` | `signer` | The signer of the sending account of the transaction. |
+    ///
+    /// # Common Abort Conditions
+    /// | Error Category              | Error Reason              | Description                                                                    |
+    /// | ----------------            | --------------            | -------------                                                                  |
+    /// | `Errors::ALREADY_PUBLISHED` | `DiemId::EDIEM_ID_DOMAIN` | A `DiemId::DiemIdDomains` resource has already been published under `account`. |
+    /// | `Errors::REQUIRES_ROLE`     | `Roles::EPARENT_VASP`     | The sending `account` was not a parent VASP account.                           |
+    CreateDiemIdDomains {},
 
     /// # Summary
     /// Creates a Parent VASP account with the specified human name. Must be called by the Treasury Compliance account.
@@ -2289,6 +2339,35 @@ pub enum ScriptFunctionCall {
         consensus_pubkey: Bytes,
         validator_network_addresses: Bytes,
         fullnode_network_addresses: Bytes,
+    },
+
+    /// # Summary
+    /// Remove a DiemID domain from parent VASP account. The transaction can only be sent by
+    /// the Treasury Compliance account.
+    ///
+    /// # Technical Description
+    /// Removes a `DiemId::DiemIdDomain` from the `domains` field of the `DiemId::DiemIdDomains` resource published under
+    /// account with `address`.
+    ///
+    /// # Parameters
+    /// | Name         | Type         | Description                                                                                     |
+    /// | ------       | ------       | -------------                                                                                   |
+    /// | `tc_account` | `signer`     | The signer of the sending account of this transaction. Must be the Treasury Compliance account. |
+    /// | `address`    | `address`    | The `address` of parent VASP account that will update its domains.                              |
+    /// | `domain`     | `vector<u8>` | The domain name.                                                                                |
+    ///
+    /// # Common Abort Conditions
+    /// | Error Category             | Error Reason                             | Description                                                                                                                            |
+    /// | ----------------           | --------------                           | -------------                                                                                                                          |
+    /// | `Errors::REQUIRES_ROLE`    | `Roles::ETREASURY_COMPLIANCE`            | The sending account is not the Treasury Compliance account.                                                                            |
+    /// | `Errors::REQUIRES_ADDRESS` | `CoreAddresses::ETREASURY_COMPLIANCE`    | `tc_account` is not the Treasury Compliance account.                                                                                   |
+    /// | `Errors::NOT_PUBLISHED`    | `DiemId::EDIEM_ID_DOMAIN_MANAGER`        | The `DiemId::DiemIdDomainManager` resource is not yet published under the Treasury Compliance account.                                 |
+    /// | `Errors::NOT_PUBLISHED`    | `DiemId::EDIEM_ID_DOMAINS_NOT_PUBLISHED` | `address` does not have a `DiemId::DiemIdDomains` resource published under it.                                                         |
+    /// | `Errors::INVALID_ARGUMENT` | `DiemId::EINVALID_DIEM_ID_DOMAIN`        | The `domain` is greater in length than `DiemId::DOMAIN_LENGTH`.                                                                        |
+    /// | `Errors::INVALID_ARGUMENT` | `DiemId::EDOMAIN_NOT_FOUND`              | The `domain` does not exist in the list of `DiemId::DiemIdDomain`s  in the `DiemId::DiemIdDomains` resource published under `address`. |
+    RemoveDiemIdDomain {
+        address: AccountAddress,
+        domain: Bytes,
     },
 
     /// # Summary
@@ -3218,6 +3297,50 @@ impl ScriptCall {
             None => None,
         }
     }
+
+    /// Return the name of a Diem `Script` from a structured object `ScriptCall`.
+    pub fn name(&self) -> &'static str {
+        use ScriptCall::*;
+        match self {
+            AddCurrencyToAccount { .. } => "add_currency_to_account",
+            AddRecoveryRotationCapability { .. } => "add_recovery_rotation_capability",
+            AddValidatorAndReconfigure { .. } => "add_validator_and_reconfigure",
+            Burn { .. } => "burn",
+            BurnTxnFees { .. } => "burn_txn_fees",
+            CancelBurn { .. } => "cancel_burn",
+            CreateChildVaspAccount { .. } => "create_child_vasp_account",
+            CreateDesignatedDealer { .. } => "create_designated_dealer",
+            CreateParentVaspAccount { .. } => "create_parent_vasp_account",
+            CreateRecoveryAddress { .. } => "create_recovery_address",
+            CreateValidatorAccount { .. } => "create_validator_account",
+            CreateValidatorOperatorAccount { .. } => "create_validator_operator_account",
+            FreezeAccount { .. } => "freeze_account",
+            PeerToPeerWithMetadata { .. } => "peer_to_peer_with_metadata",
+            Preburn { .. } => "preburn",
+            PublishSharedEd25519PublicKey { .. } => "publish_shared_ed25519_public_key",
+            RegisterValidatorConfig { .. } => "register_validator_config",
+            RemoveValidatorAndReconfigure { .. } => "remove_validator_and_reconfigure",
+            RotateAuthenticationKey { .. } => "rotate_authentication_key",
+            RotateAuthenticationKeyWithNonce { .. } => "rotate_authentication_key_with_nonce",
+            RotateAuthenticationKeyWithNonceAdmin { .. } => {
+                "rotate_authentication_key_with_nonce_admin"
+            }
+            RotateAuthenticationKeyWithRecoveryAddress { .. } => {
+                "rotate_authentication_key_with_recovery_address"
+            }
+            RotateDualAttestationInfo { .. } => "rotate_dual_attestation_info",
+            RotateSharedEd25519PublicKey { .. } => "rotate_shared_ed25519_public_key",
+            SetValidatorConfigAndReconfigure { .. } => "set_validator_config_and_reconfigure",
+            SetValidatorOperator { .. } => "set_validator_operator",
+            SetValidatorOperatorWithNonceAdmin { .. } => "set_validator_operator_with_nonce_admin",
+            TieredMint { .. } => "tiered_mint",
+            UnfreezeAccount { .. } => "unfreeze_account",
+            UpdateDiemVersion { .. } => "update_diem_version",
+            UpdateDualAttestationLimit { .. } => "update_dual_attestation_limit",
+            UpdateExchangeRate { .. } => "update_exchange_rate",
+            UpdateMintingAbility { .. } => "update_minting_ability",
+        }
+    }
 }
 
 impl ScriptFunctionCall {
@@ -3227,6 +3350,9 @@ impl ScriptFunctionCall {
         match self {
             AddCurrencyToAccount { currency } => {
                 encode_add_currency_to_account_script_function(currency)
+            }
+            AddDiemIdDomain { address, domain } => {
+                encode_add_diem_id_domain_script_function(address, domain)
             }
             AddRecoveryRotationCapability { recovery_address } => {
                 encode_add_recovery_rotation_capability_script_function(recovery_address)
@@ -3285,6 +3411,7 @@ impl ScriptFunctionCall {
                 human_name,
                 add_all_currencies,
             ),
+            CreateDiemIdDomains {} => encode_create_diem_id_domains_script_function(),
             CreateParentVaspAccount {
                 coin_type,
                 sliding_nonce,
@@ -3358,6 +3485,9 @@ impl ScriptFunctionCall {
                 validator_network_addresses,
                 fullnode_network_addresses,
             ),
+            RemoveDiemIdDomain { address, domain } => {
+                encode_remove_diem_id_domain_script_function(address, domain)
+            }
             RemoveValidatorAndReconfigure {
                 sliding_nonce,
                 validator_name,
@@ -3549,11 +3679,53 @@ pub fn encode_add_currency_to_account_script_function(currency: TypeTag) -> Tran
     TransactionPayload::ScriptFunction(ScriptFunction::new(
         ModuleId::new(
             AccountAddress::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
-            Identifier::new("AccountAdministrationScripts").unwrap(),
+            ident_str!("AccountAdministrationScripts").to_owned(),
         ),
-        Identifier::new("add_currency_to_account").unwrap(),
+        ident_str!("add_currency_to_account").to_owned(),
         vec![currency],
         vec![],
+    ))
+}
+
+/// # Summary
+/// Add a DiemID domain to parent VASP account. The transaction can only be sent by
+/// the Treasury Compliance account.
+///
+/// # Technical Description
+/// Adds a `DiemId::DiemIdDomain` to the `domains` field of the `DiemId::DiemIdDomains` resource published under
+/// the account at `address`.
+///
+/// # Parameters
+/// | Name         | Type         | Description                                                                                     |
+/// | ------       | ------       | -------------                                                                                   |
+/// | `tc_account` | `signer`     | The signer of the sending account of this transaction. Must be the Treasury Compliance account. |
+/// | `address`    | `address`    | The `address` of the parent VASP account that will have have `domain` added to its domains.     |
+/// | `domain`     | `vector<u8>` | The domain to be added.                                                                         |
+///
+/// # Common Abort Conditions
+/// | Error Category             | Error Reason                             | Description                                                                                                                            |
+/// | ----------------           | --------------                           | -------------                                                                                                                          |
+/// | `Errors::REQUIRES_ROLE`    | `Roles::ETREASURY_COMPLIANCE`            | The sending account is not the Treasury Compliance account.                                                                            |
+/// | `Errors::REQUIRES_ADDRESS` | `CoreAddresses::ETREASURY_COMPLIANCE`    | `tc_account` is not the Treasury Compliance account.                                                                                   |
+/// | `Errors::NOT_PUBLISHED`    | `DiemId::EDIEM_ID_DOMAIN_MANAGER`        | The `DiemId::DiemIdDomainManager` resource is not yet published under the Treasury Compliance account.                                 |
+/// | `Errors::NOT_PUBLISHED`    | `DiemId::EDIEM_ID_DOMAINS_NOT_PUBLISHED` | `address` does not have a `DiemId::DiemIdDomains` resource published under it.                                                         |
+/// | `Errors::INVALID_ARGUMENT` | `DiemId::EDOMAIN_ALREADY_EXISTS`         | The `domain` already exists in the list of `DiemId::DiemIdDomain`s  in the `DiemId::DiemIdDomains` resource published under `address`. |
+/// | `Errors::INVALID_ARGUMENT` | `DiemId::EINVALID_DIEM_ID_DOMAIN`        | The `domain` is greater in length than `DiemId::DOMAIN_LENGTH`.                                                                        |
+pub fn encode_add_diem_id_domain_script_function(
+    address: AccountAddress,
+    domain: Vec<u8>,
+) -> TransactionPayload {
+    TransactionPayload::ScriptFunction(ScriptFunction::new(
+        ModuleId::new(
+            AccountAddress::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
+            ident_str!("TreasuryComplianceScripts").to_owned(),
+        ),
+        ident_str!("add_diem_id_domain").to_owned(),
+        vec![],
+        vec![
+            bcs::to_bytes(&address).unwrap(),
+            bcs::to_bytes(&domain).unwrap(),
+        ],
     ))
 }
 
@@ -3603,9 +3775,9 @@ pub fn encode_add_recovery_rotation_capability_script_function(
     TransactionPayload::ScriptFunction(ScriptFunction::new(
         ModuleId::new(
             AccountAddress::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
-            Identifier::new("AccountAdministrationScripts").unwrap(),
+            ident_str!("AccountAdministrationScripts").to_owned(),
         ),
-        Identifier::new("add_recovery_rotation_capability").unwrap(),
+        ident_str!("add_recovery_rotation_capability").to_owned(),
         vec![],
         vec![bcs::to_bytes(&recovery_address).unwrap()],
     ))
@@ -3665,9 +3837,9 @@ pub fn encode_add_validator_and_reconfigure_script_function(
     TransactionPayload::ScriptFunction(ScriptFunction::new(
         ModuleId::new(
             AccountAddress::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
-            Identifier::new("ValidatorAdministrationScripts").unwrap(),
+            ident_str!("ValidatorAdministrationScripts").to_owned(),
         ),
-        Identifier::new("add_validator_and_reconfigure").unwrap(),
+        ident_str!("add_validator_and_reconfigure").to_owned(),
         vec![],
         vec![
             bcs::to_bytes(&sliding_nonce).unwrap(),
@@ -3716,9 +3888,9 @@ pub fn encode_burn_txn_fees_script_function(coin_type: TypeTag) -> TransactionPa
     TransactionPayload::ScriptFunction(ScriptFunction::new(
         ModuleId::new(
             AccountAddress::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
-            Identifier::new("TreasuryComplianceScripts").unwrap(),
+            ident_str!("TreasuryComplianceScripts").to_owned(),
         ),
-        Identifier::new("burn_txn_fees").unwrap(),
+        ident_str!("burn_txn_fees").to_owned(),
         vec![coin_type],
         vec![],
     ))
@@ -3786,9 +3958,9 @@ pub fn encode_burn_with_amount_script_function(
     TransactionPayload::ScriptFunction(ScriptFunction::new(
         ModuleId::new(
             AccountAddress::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
-            Identifier::new("TreasuryComplianceScripts").unwrap(),
+            ident_str!("TreasuryComplianceScripts").to_owned(),
         ),
-        Identifier::new("burn_with_amount").unwrap(),
+        ident_str!("burn_with_amount").to_owned(),
         vec![token],
         vec![
             bcs::to_bytes(&sliding_nonce).unwrap(),
@@ -3854,9 +4026,9 @@ pub fn encode_cancel_burn_with_amount_script_function(
     TransactionPayload::ScriptFunction(ScriptFunction::new(
         ModuleId::new(
             AccountAddress::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
-            Identifier::new("TreasuryComplianceScripts").unwrap(),
+            ident_str!("TreasuryComplianceScripts").to_owned(),
         ),
-        Identifier::new("cancel_burn_with_amount").unwrap(),
+        ident_str!("cancel_burn_with_amount").to_owned(),
         vec![token],
         vec![
             bcs::to_bytes(&preburn_address).unwrap(),
@@ -3933,9 +4105,9 @@ pub fn encode_create_child_vasp_account_script_function(
     TransactionPayload::ScriptFunction(ScriptFunction::new(
         ModuleId::new(
             AccountAddress::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
-            Identifier::new("AccountCreationScripts").unwrap(),
+            ident_str!("AccountCreationScripts").to_owned(),
         ),
-        Identifier::new("create_child_vasp_account").unwrap(),
+        ident_str!("create_child_vasp_account").to_owned(),
         vec![coin_type],
         vec![
             bcs::to_bytes(&child_address).unwrap(),
@@ -4007,9 +4179,9 @@ pub fn encode_create_designated_dealer_script_function(
     TransactionPayload::ScriptFunction(ScriptFunction::new(
         ModuleId::new(
             AccountAddress::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
-            Identifier::new("AccountCreationScripts").unwrap(),
+            ident_str!("AccountCreationScripts").to_owned(),
         ),
-        Identifier::new("create_designated_dealer").unwrap(),
+        ident_str!("create_designated_dealer").to_owned(),
         vec![currency],
         vec![
             bcs::to_bytes(&sliding_nonce).unwrap(),
@@ -4018,6 +4190,37 @@ pub fn encode_create_designated_dealer_script_function(
             bcs::to_bytes(&human_name).unwrap(),
             bcs::to_bytes(&add_all_currencies).unwrap(),
         ],
+    ))
+}
+
+/// # Summary
+/// Publishes a `DiemId::DiemIdDomains` resource under a parent VASP account.
+/// The sending account must be a parent VASP account.
+///
+/// # Technical Description
+/// Publishes a `DiemId::DiemIdDomains` resource under `account`.
+/// The The `DiemId::DiemIdDomains` resource's `domains` field is a vector
+/// of DiemIdDomain, and will be empty on at the end of processing this transaction.
+///
+/// # Parameters
+/// | Name      | Type     | Description                                           |
+/// | ------    | ------   | -------------                                         |
+/// | `account` | `signer` | The signer of the sending account of the transaction. |
+///
+/// # Common Abort Conditions
+/// | Error Category              | Error Reason              | Description                                                                    |
+/// | ----------------            | --------------            | -------------                                                                  |
+/// | `Errors::ALREADY_PUBLISHED` | `DiemId::EDIEM_ID_DOMAIN` | A `DiemId::DiemIdDomains` resource has already been published under `account`. |
+/// | `Errors::REQUIRES_ROLE`     | `Roles::EPARENT_VASP`     | The sending `account` was not a parent VASP account.                           |
+pub fn encode_create_diem_id_domains_script_function() -> TransactionPayload {
+    TransactionPayload::ScriptFunction(ScriptFunction::new(
+        ModuleId::new(
+            AccountAddress::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
+            ident_str!("AccountAdministrationScripts").to_owned(),
+        ),
+        ident_str!("create_diem_id_domains").to_owned(),
+        vec![],
+        vec![],
     ))
 }
 
@@ -4080,9 +4283,9 @@ pub fn encode_create_parent_vasp_account_script_function(
     TransactionPayload::ScriptFunction(ScriptFunction::new(
         ModuleId::new(
             AccountAddress::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
-            Identifier::new("AccountCreationScripts").unwrap(),
+            ident_str!("AccountCreationScripts").to_owned(),
         ),
-        Identifier::new("create_parent_vasp_account").unwrap(),
+        ident_str!("create_parent_vasp_account").to_owned(),
         vec![coin_type],
         vec![
             bcs::to_bytes(&sliding_nonce).unwrap(),
@@ -4128,9 +4331,9 @@ pub fn encode_create_recovery_address_script_function() -> TransactionPayload {
     TransactionPayload::ScriptFunction(ScriptFunction::new(
         ModuleId::new(
             AccountAddress::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
-            Identifier::new("AccountAdministrationScripts").unwrap(),
+            ident_str!("AccountAdministrationScripts").to_owned(),
         ),
-        Identifier::new("create_recovery_address").unwrap(),
+        ident_str!("create_recovery_address").to_owned(),
         vec![],
         vec![],
     ))
@@ -4194,9 +4397,9 @@ pub fn encode_create_validator_account_script_function(
     TransactionPayload::ScriptFunction(ScriptFunction::new(
         ModuleId::new(
             AccountAddress::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
-            Identifier::new("AccountCreationScripts").unwrap(),
+            ident_str!("AccountCreationScripts").to_owned(),
         ),
-        Identifier::new("create_validator_account").unwrap(),
+        ident_str!("create_validator_account").to_owned(),
         vec![],
         vec![
             bcs::to_bytes(&sliding_nonce).unwrap(),
@@ -4262,9 +4465,9 @@ pub fn encode_create_validator_operator_account_script_function(
     TransactionPayload::ScriptFunction(ScriptFunction::new(
         ModuleId::new(
             AccountAddress::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
-            Identifier::new("AccountCreationScripts").unwrap(),
+            ident_str!("AccountCreationScripts").to_owned(),
         ),
-        Identifier::new("create_validator_operator_account").unwrap(),
+        ident_str!("create_validator_operator_account").to_owned(),
         vec![],
         vec![
             bcs::to_bytes(&sliding_nonce).unwrap(),
@@ -4325,9 +4528,9 @@ pub fn encode_freeze_account_script_function(
     TransactionPayload::ScriptFunction(ScriptFunction::new(
         ModuleId::new(
             AccountAddress::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
-            Identifier::new("TreasuryComplianceScripts").unwrap(),
+            ident_str!("TreasuryComplianceScripts").to_owned(),
         ),
-        Identifier::new("freeze_account").unwrap(),
+        ident_str!("freeze_account").to_owned(),
         vec![],
         vec![
             bcs::to_bytes(&sliding_nonce).unwrap(),
@@ -4364,9 +4567,9 @@ pub fn encode_initialize_diem_consensus_config_script_function(
     TransactionPayload::ScriptFunction(ScriptFunction::new(
         ModuleId::new(
             AccountAddress::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
-            Identifier::new("SystemAdministrationScripts").unwrap(),
+            ident_str!("SystemAdministrationScripts").to_owned(),
         ),
-        Identifier::new("initialize_diem_consensus_config").unwrap(),
+        ident_str!("initialize_diem_consensus_config").to_owned(),
         vec![],
         vec![bcs::to_bytes(&sliding_nonce).unwrap()],
     ))
@@ -4436,9 +4639,9 @@ pub fn encode_peer_to_peer_with_metadata_script_function(
     TransactionPayload::ScriptFunction(ScriptFunction::new(
         ModuleId::new(
             AccountAddress::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
-            Identifier::new("PaymentScripts").unwrap(),
+            ident_str!("PaymentScripts").to_owned(),
         ),
-        Identifier::new("peer_to_peer_with_metadata").unwrap(),
+        ident_str!("peer_to_peer_with_metadata").to_owned(),
         vec![currency],
         vec![
             bcs::to_bytes(&payee).unwrap(),
@@ -4496,9 +4699,9 @@ pub fn encode_preburn_script_function(token: TypeTag, amount: u64) -> Transactio
     TransactionPayload::ScriptFunction(ScriptFunction::new(
         ModuleId::new(
             AccountAddress::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
-            Identifier::new("TreasuryComplianceScripts").unwrap(),
+            ident_str!("TreasuryComplianceScripts").to_owned(),
         ),
-        Identifier::new("preburn").unwrap(),
+        ident_str!("preburn").to_owned(),
         vec![token],
         vec![bcs::to_bytes(&amount).unwrap()],
     ))
@@ -4537,9 +4740,9 @@ pub fn encode_publish_shared_ed25519_public_key_script_function(
     TransactionPayload::ScriptFunction(ScriptFunction::new(
         ModuleId::new(
             AccountAddress::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
-            Identifier::new("AccountAdministrationScripts").unwrap(),
+            ident_str!("AccountAdministrationScripts").to_owned(),
         ),
-        Identifier::new("publish_shared_ed25519_public_key").unwrap(),
+        ident_str!("publish_shared_ed25519_public_key").to_owned(),
         vec![],
         vec![bcs::to_bytes(&public_key).unwrap()],
     ))
@@ -4590,15 +4793,57 @@ pub fn encode_register_validator_config_script_function(
     TransactionPayload::ScriptFunction(ScriptFunction::new(
         ModuleId::new(
             AccountAddress::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
-            Identifier::new("ValidatorAdministrationScripts").unwrap(),
+            ident_str!("ValidatorAdministrationScripts").to_owned(),
         ),
-        Identifier::new("register_validator_config").unwrap(),
+        ident_str!("register_validator_config").to_owned(),
         vec![],
         vec![
             bcs::to_bytes(&validator_account).unwrap(),
             bcs::to_bytes(&consensus_pubkey).unwrap(),
             bcs::to_bytes(&validator_network_addresses).unwrap(),
             bcs::to_bytes(&fullnode_network_addresses).unwrap(),
+        ],
+    ))
+}
+
+/// # Summary
+/// Remove a DiemID domain from parent VASP account. The transaction can only be sent by
+/// the Treasury Compliance account.
+///
+/// # Technical Description
+/// Removes a `DiemId::DiemIdDomain` from the `domains` field of the `DiemId::DiemIdDomains` resource published under
+/// account with `address`.
+///
+/// # Parameters
+/// | Name         | Type         | Description                                                                                     |
+/// | ------       | ------       | -------------                                                                                   |
+/// | `tc_account` | `signer`     | The signer of the sending account of this transaction. Must be the Treasury Compliance account. |
+/// | `address`    | `address`    | The `address` of parent VASP account that will update its domains.                              |
+/// | `domain`     | `vector<u8>` | The domain name.                                                                                |
+///
+/// # Common Abort Conditions
+/// | Error Category             | Error Reason                             | Description                                                                                                                            |
+/// | ----------------           | --------------                           | -------------                                                                                                                          |
+/// | `Errors::REQUIRES_ROLE`    | `Roles::ETREASURY_COMPLIANCE`            | The sending account is not the Treasury Compliance account.                                                                            |
+/// | `Errors::REQUIRES_ADDRESS` | `CoreAddresses::ETREASURY_COMPLIANCE`    | `tc_account` is not the Treasury Compliance account.                                                                                   |
+/// | `Errors::NOT_PUBLISHED`    | `DiemId::EDIEM_ID_DOMAIN_MANAGER`        | The `DiemId::DiemIdDomainManager` resource is not yet published under the Treasury Compliance account.                                 |
+/// | `Errors::NOT_PUBLISHED`    | `DiemId::EDIEM_ID_DOMAINS_NOT_PUBLISHED` | `address` does not have a `DiemId::DiemIdDomains` resource published under it.                                                         |
+/// | `Errors::INVALID_ARGUMENT` | `DiemId::EINVALID_DIEM_ID_DOMAIN`        | The `domain` is greater in length than `DiemId::DOMAIN_LENGTH`.                                                                        |
+/// | `Errors::INVALID_ARGUMENT` | `DiemId::EDOMAIN_NOT_FOUND`              | The `domain` does not exist in the list of `DiemId::DiemIdDomain`s  in the `DiemId::DiemIdDomains` resource published under `address`. |
+pub fn encode_remove_diem_id_domain_script_function(
+    address: AccountAddress,
+    domain: Vec<u8>,
+) -> TransactionPayload {
+    TransactionPayload::ScriptFunction(ScriptFunction::new(
+        ModuleId::new(
+            AccountAddress::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
+            ident_str!("TreasuryComplianceScripts").to_owned(),
+        ),
+        ident_str!("remove_diem_id_domain").to_owned(),
+        vec![],
+        vec![
+            bcs::to_bytes(&address).unwrap(),
+            bcs::to_bytes(&domain).unwrap(),
         ],
     ))
 }
@@ -4653,9 +4898,9 @@ pub fn encode_remove_validator_and_reconfigure_script_function(
     TransactionPayload::ScriptFunction(ScriptFunction::new(
         ModuleId::new(
             AccountAddress::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
-            Identifier::new("ValidatorAdministrationScripts").unwrap(),
+            ident_str!("ValidatorAdministrationScripts").to_owned(),
         ),
-        Identifier::new("remove_validator_and_reconfigure").unwrap(),
+        ident_str!("remove_validator_and_reconfigure").to_owned(),
         vec![],
         vec![
             bcs::to_bytes(&sliding_nonce).unwrap(),
@@ -4694,9 +4939,9 @@ pub fn encode_rotate_authentication_key_script_function(new_key: Vec<u8>) -> Tra
     TransactionPayload::ScriptFunction(ScriptFunction::new(
         ModuleId::new(
             AccountAddress::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
-            Identifier::new("AccountAdministrationScripts").unwrap(),
+            ident_str!("AccountAdministrationScripts").to_owned(),
         ),
-        Identifier::new("rotate_authentication_key").unwrap(),
+        ident_str!("rotate_authentication_key").to_owned(),
         vec![],
         vec![bcs::to_bytes(&new_key).unwrap()],
     ))
@@ -4741,9 +4986,9 @@ pub fn encode_rotate_authentication_key_with_nonce_script_function(
     TransactionPayload::ScriptFunction(ScriptFunction::new(
         ModuleId::new(
             AccountAddress::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
-            Identifier::new("AccountAdministrationScripts").unwrap(),
+            ident_str!("AccountAdministrationScripts").to_owned(),
         ),
-        Identifier::new("rotate_authentication_key_with_nonce").unwrap(),
+        ident_str!("rotate_authentication_key_with_nonce").to_owned(),
         vec![],
         vec![
             bcs::to_bytes(&sliding_nonce).unwrap(),
@@ -4791,9 +5036,9 @@ pub fn encode_rotate_authentication_key_with_nonce_admin_script_function(
     TransactionPayload::ScriptFunction(ScriptFunction::new(
         ModuleId::new(
             AccountAddress::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
-            Identifier::new("AccountAdministrationScripts").unwrap(),
+            ident_str!("AccountAdministrationScripts").to_owned(),
         ),
-        Identifier::new("rotate_authentication_key_with_nonce_admin").unwrap(),
+        ident_str!("rotate_authentication_key_with_nonce_admin").to_owned(),
         vec![],
         vec![
             bcs::to_bytes(&sliding_nonce).unwrap(),
@@ -4843,9 +5088,9 @@ pub fn encode_rotate_authentication_key_with_recovery_address_script_function(
     TransactionPayload::ScriptFunction(ScriptFunction::new(
         ModuleId::new(
             AccountAddress::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
-            Identifier::new("AccountAdministrationScripts").unwrap(),
+            ident_str!("AccountAdministrationScripts").to_owned(),
         ),
-        Identifier::new("rotate_authentication_key_with_recovery_address").unwrap(),
+        ident_str!("rotate_authentication_key_with_recovery_address").to_owned(),
         vec![],
         vec![
             bcs::to_bytes(&recovery_address).unwrap(),
@@ -4898,9 +5143,9 @@ pub fn encode_rotate_dual_attestation_info_script_function(
     TransactionPayload::ScriptFunction(ScriptFunction::new(
         ModuleId::new(
             AccountAddress::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
-            Identifier::new("AccountAdministrationScripts").unwrap(),
+            ident_str!("AccountAdministrationScripts").to_owned(),
         ),
-        Identifier::new("rotate_dual_attestation_info").unwrap(),
+        ident_str!("rotate_dual_attestation_info").to_owned(),
         vec![],
         vec![
             bcs::to_bytes(&new_url).unwrap(),
@@ -4941,9 +5186,9 @@ pub fn encode_rotate_shared_ed25519_public_key_script_function(
     TransactionPayload::ScriptFunction(ScriptFunction::new(
         ModuleId::new(
             AccountAddress::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
-            Identifier::new("AccountAdministrationScripts").unwrap(),
+            ident_str!("AccountAdministrationScripts").to_owned(),
         ),
-        Identifier::new("rotate_shared_ed25519_public_key").unwrap(),
+        ident_str!("rotate_shared_ed25519_public_key").to_owned(),
         vec![],
         vec![bcs::to_bytes(&public_key).unwrap()],
     ))
@@ -5000,9 +5245,9 @@ pub fn encode_set_gas_constants_script_function(
     TransactionPayload::ScriptFunction(ScriptFunction::new(
         ModuleId::new(
             AccountAddress::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
-            Identifier::new("SystemAdministrationScripts").unwrap(),
+            ident_str!("SystemAdministrationScripts").to_owned(),
         ),
-        Identifier::new("set_gas_constants").unwrap(),
+        ident_str!("set_gas_constants").to_owned(),
         vec![],
         vec![
             bcs::to_bytes(&sliding_nonce).unwrap(),
@@ -5067,9 +5312,9 @@ pub fn encode_set_validator_config_and_reconfigure_script_function(
     TransactionPayload::ScriptFunction(ScriptFunction::new(
         ModuleId::new(
             AccountAddress::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
-            Identifier::new("ValidatorAdministrationScripts").unwrap(),
+            ident_str!("ValidatorAdministrationScripts").to_owned(),
         ),
-        Identifier::new("set_validator_config_and_reconfigure").unwrap(),
+        ident_str!("set_validator_config_and_reconfigure").to_owned(),
         vec![],
         vec![
             bcs::to_bytes(&validator_account).unwrap(),
@@ -5125,9 +5370,9 @@ pub fn encode_set_validator_operator_script_function(
     TransactionPayload::ScriptFunction(ScriptFunction::new(
         ModuleId::new(
             AccountAddress::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
-            Identifier::new("ValidatorAdministrationScripts").unwrap(),
+            ident_str!("ValidatorAdministrationScripts").to_owned(),
         ),
-        Identifier::new("set_validator_operator").unwrap(),
+        ident_str!("set_validator_operator").to_owned(),
         vec![],
         vec![
             bcs::to_bytes(&operator_name).unwrap(),
@@ -5189,9 +5434,9 @@ pub fn encode_set_validator_operator_with_nonce_admin_script_function(
     TransactionPayload::ScriptFunction(ScriptFunction::new(
         ModuleId::new(
             AccountAddress::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
-            Identifier::new("ValidatorAdministrationScripts").unwrap(),
+            ident_str!("ValidatorAdministrationScripts").to_owned(),
         ),
-        Identifier::new("set_validator_operator_with_nonce_admin").unwrap(),
+        ident_str!("set_validator_operator_with_nonce_admin").to_owned(),
         vec![],
         vec![
             bcs::to_bytes(&sliding_nonce).unwrap(),
@@ -5263,9 +5508,9 @@ pub fn encode_tiered_mint_script_function(
     TransactionPayload::ScriptFunction(ScriptFunction::new(
         ModuleId::new(
             AccountAddress::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
-            Identifier::new("TreasuryComplianceScripts").unwrap(),
+            ident_str!("TreasuryComplianceScripts").to_owned(),
         ),
-        Identifier::new("tiered_mint").unwrap(),
+        ident_str!("tiered_mint").to_owned(),
         vec![coin_type],
         vec![
             bcs::to_bytes(&sliding_nonce).unwrap(),
@@ -5316,9 +5561,9 @@ pub fn encode_unfreeze_account_script_function(
     TransactionPayload::ScriptFunction(ScriptFunction::new(
         ModuleId::new(
             AccountAddress::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
-            Identifier::new("TreasuryComplianceScripts").unwrap(),
+            ident_str!("TreasuryComplianceScripts").to_owned(),
         ),
-        Identifier::new("unfreeze_account").unwrap(),
+        ident_str!("unfreeze_account").to_owned(),
         vec![],
         vec![
             bcs::to_bytes(&sliding_nonce).unwrap(),
@@ -5357,9 +5602,9 @@ pub fn encode_update_diem_consensus_config_script_function(
     TransactionPayload::ScriptFunction(ScriptFunction::new(
         ModuleId::new(
             AccountAddress::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
-            Identifier::new("SystemAdministrationScripts").unwrap(),
+            ident_str!("SystemAdministrationScripts").to_owned(),
         ),
-        Identifier::new("update_diem_consensus_config").unwrap(),
+        ident_str!("update_diem_consensus_config").to_owned(),
         vec![],
         vec![
             bcs::to_bytes(&sliding_nonce).unwrap(),
@@ -5401,9 +5646,9 @@ pub fn encode_update_diem_version_script_function(
     TransactionPayload::ScriptFunction(ScriptFunction::new(
         ModuleId::new(
             AccountAddress::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
-            Identifier::new("SystemAdministrationScripts").unwrap(),
+            ident_str!("SystemAdministrationScripts").to_owned(),
         ),
-        Identifier::new("update_diem_version").unwrap(),
+        ident_str!("update_diem_version").to_owned(),
         vec![],
         vec![
             bcs::to_bytes(&sliding_nonce).unwrap(),
@@ -5447,9 +5692,9 @@ pub fn encode_update_dual_attestation_limit_script_function(
     TransactionPayload::ScriptFunction(ScriptFunction::new(
         ModuleId::new(
             AccountAddress::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
-            Identifier::new("TreasuryComplianceScripts").unwrap(),
+            ident_str!("TreasuryComplianceScripts").to_owned(),
         ),
-        Identifier::new("update_dual_attestation_limit").unwrap(),
+        ident_str!("update_dual_attestation_limit").to_owned(),
         vec![],
         vec![
             bcs::to_bytes(&sliding_nonce).unwrap(),
@@ -5502,9 +5747,9 @@ pub fn encode_update_exchange_rate_script_function(
     TransactionPayload::ScriptFunction(ScriptFunction::new(
         ModuleId::new(
             AccountAddress::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
-            Identifier::new("TreasuryComplianceScripts").unwrap(),
+            ident_str!("TreasuryComplianceScripts").to_owned(),
         ),
-        Identifier::new("update_exchange_rate").unwrap(),
+        ident_str!("update_exchange_rate").to_owned(),
         vec![currency],
         vec![
             bcs::to_bytes(&sliding_nonce).unwrap(),
@@ -5548,9 +5793,9 @@ pub fn encode_update_minting_ability_script_function(
     TransactionPayload::ScriptFunction(ScriptFunction::new(
         ModuleId::new(
             AccountAddress::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
-            Identifier::new("TreasuryComplianceScripts").unwrap(),
+            ident_str!("TreasuryComplianceScripts").to_owned(),
         ),
-        Identifier::new("update_minting_ability").unwrap(),
+        ident_str!("update_minting_ability").to_owned(),
         vec![currency],
         vec![bcs::to_bytes(&allow_minting).unwrap()],
     ))
@@ -7246,6 +7491,19 @@ fn decode_add_currency_to_account_script_function(
     }
 }
 
+fn decode_add_diem_id_domain_script_function(
+    payload: &TransactionPayload,
+) -> Option<ScriptFunctionCall> {
+    if let TransactionPayload::ScriptFunction(script) = payload {
+        Some(ScriptFunctionCall::AddDiemIdDomain {
+            address: bcs::from_bytes(script.args().get(0)?).ok()?,
+            domain: bcs::from_bytes(script.args().get(1)?).ok()?,
+        })
+    } else {
+        None
+    }
+}
+
 fn decode_add_recovery_rotation_capability_script_function(
     payload: &TransactionPayload,
 ) -> Option<ScriptFunctionCall> {
@@ -7341,6 +7599,16 @@ fn decode_create_designated_dealer_script_function(
             human_name: bcs::from_bytes(script.args().get(3)?).ok()?,
             add_all_currencies: bcs::from_bytes(script.args().get(4)?).ok()?,
         })
+    } else {
+        None
+    }
+}
+
+fn decode_create_diem_id_domains_script_function(
+    payload: &TransactionPayload,
+) -> Option<ScriptFunctionCall> {
+    if let TransactionPayload::ScriptFunction(_script) = payload {
+        Some(ScriptFunctionCall::CreateDiemIdDomains {})
     } else {
         None
     }
@@ -7476,6 +7744,19 @@ fn decode_register_validator_config_script_function(
             consensus_pubkey: bcs::from_bytes(script.args().get(1)?).ok()?,
             validator_network_addresses: bcs::from_bytes(script.args().get(2)?).ok()?,
             fullnode_network_addresses: bcs::from_bytes(script.args().get(3)?).ok()?,
+        })
+    } else {
+        None
+    }
+}
+
+fn decode_remove_diem_id_domain_script_function(
+    payload: &TransactionPayload,
+) -> Option<ScriptFunctionCall> {
+    if let TransactionPayload::ScriptFunction(script) = payload {
+        Some(ScriptFunctionCall::RemoveDiemIdDomain {
+            address: bcs::from_bytes(script.args().get(0)?).ok()?,
+            domain: bcs::from_bytes(script.args().get(1)?).ok()?,
         })
     } else {
         None
@@ -8144,6 +8425,10 @@ static SCRIPT_FUNCTION_DECODER_MAP: once_cell::sync::Lazy<ScriptFunctionDecoderM
             Box::new(decode_add_currency_to_account_script_function),
         );
         map.insert(
+            "TreasuryComplianceScriptsadd_diem_id_domain".to_string(),
+            Box::new(decode_add_diem_id_domain_script_function),
+        );
+        map.insert(
             "AccountAdministrationScriptsadd_recovery_rotation_capability".to_string(),
             Box::new(decode_add_recovery_rotation_capability_script_function),
         );
@@ -8170,6 +8455,10 @@ static SCRIPT_FUNCTION_DECODER_MAP: once_cell::sync::Lazy<ScriptFunctionDecoderM
         map.insert(
             "AccountCreationScriptscreate_designated_dealer".to_string(),
             Box::new(decode_create_designated_dealer_script_function),
+        );
+        map.insert(
+            "AccountAdministrationScriptscreate_diem_id_domains".to_string(),
+            Box::new(decode_create_diem_id_domains_script_function),
         );
         map.insert(
             "AccountCreationScriptscreate_parent_vasp_account".to_string(),
@@ -8210,6 +8499,10 @@ static SCRIPT_FUNCTION_DECODER_MAP: once_cell::sync::Lazy<ScriptFunctionDecoderM
         map.insert(
             "ValidatorAdministrationScriptsregister_validator_config".to_string(),
             Box::new(decode_register_validator_config_script_function),
+        );
+        map.insert(
+            "TreasuryComplianceScriptsremove_diem_id_domain".to_string(),
+            Box::new(decode_remove_diem_id_domain_script_function),
         );
         map.insert(
             "ValidatorAdministrationScriptsremove_validator_and_reconfigure".to_string(),

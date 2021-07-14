@@ -5,7 +5,7 @@
 
 use move_lang::{
     command_line::{self as cli},
-    shared::*,
+    shared::Flags,
 };
 use structopt::*;
 
@@ -27,15 +27,6 @@ pub struct Options {
     )]
     pub dependencies: Vec<String>,
 
-    /// The sender address for modules and scripts
-    #[structopt(
-        name = "ADDRESS",
-        short = cli::SENDER_SHORT,
-        long = cli::SENDER,
-        parse(try_from_str = cli::parse_address)
-    )]
-    pub sender: Option<Address>,
-
     /// The output directory for saved artifacts, namely any 'move' interface files generated from
     /// 'mv' files
     #[structopt(
@@ -45,31 +36,18 @@ pub struct Options {
     )]
     pub out_dir: Option<String>,
 
-    /// If set, do not allow modules defined in source_files to shadow modules of the same id that
-    /// exist in dependencies. Checking will fail in this case.
-    #[structopt(
-        name = "SOURCES_DO_NOT_SHADOW_DEPS",
-        short = cli::NO_SHADOW_SHORT,
-        long = cli::NO_SHADOW,
-    )]
-    pub no_shadow: bool,
+    #[structopt(flatten)]
+    pub flags: Flags,
 }
 
 pub fn main() -> anyhow::Result<()> {
     let Options {
         source_files,
         dependencies,
-        sender,
         out_dir,
-        no_shadow,
+        flags,
     } = Options::from_args();
 
-    let _files = move_lang::move_check_and_report(
-        &source_files,
-        &dependencies,
-        sender,
-        out_dir,
-        !no_shadow,
-    )?;
+    let _files = move_lang::move_check_and_report(&source_files, &dependencies, out_dir, flags)?;
     Ok(())
 }

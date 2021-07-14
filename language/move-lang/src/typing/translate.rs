@@ -6,12 +6,9 @@ use super::{
     expand, globals, infinite_instantiations, recursive_structs,
 };
 use crate::{
-    errors::Errors,
-    expansion::ast::Fields,
+    expansion::ast::{Fields, ModuleIdent, Value_},
     naming::ast::{self as N, Type, TypeName_, Type_},
-    parser::ast::{
-        Ability_, BinOp_, ConstantName, Field, FunctionName, ModuleIdent, StructName, UnaryOp_, Var,
-    },
+    parser::ast::{Ability_, BinOp_, ConstantName, Field, FunctionName, StructName, UnaryOp_, Var},
     shared::{unique_map::UniqueMap, *},
     typing::ast as T,
     FullyCompiledProgram,
@@ -24,12 +21,13 @@ use std::collections::{BTreeMap, VecDeque};
 //**************************************************************************************************
 
 pub fn program(
+    compilation_env: &mut CompilationEnv,
     pre_compiled_lib: Option<&FullyCompiledProgram>,
     prog: N::Program,
-    errors: Errors,
-) -> (T::Program, Errors) {
-    let mut context = Context::new(pre_compiled_lib, &prog, errors);
+) -> T::Program {
+    let mut context = Context::new(compilation_env, pre_compiled_lib, &prog);
     let N::Program {
+        addresses,
         modules: nmodules,
         scripts: nscripts,
     } = prog;
@@ -37,10 +35,13 @@ pub fn program(
     let scripts = scripts(&mut context, nscripts);
 
     assert!(context.constraints.is_empty());
-    let mut errors = context.get_errors();
-    recursive_structs::modules(&mut errors, &modules);
-    infinite_instantiations::modules(&mut errors, &modules);
-    (T::Program { modules, scripts }, errors)
+    recursive_structs::modules(context.env, &modules);
+    infinite_instantiations::modules(context.env, &modules);
+    T::Program {
+        addresses,
+        modules,
+        scripts,
+    }
 }
 
 fn modules(
@@ -58,26 +59,28 @@ fn module(
     assert!(context.current_script_constants.is_none());
     context.current_module = Some(ident);
     let N::ModuleDefinition {
+        attributes,
         is_source_module,
         dependency_order,
         friends,
         mut structs,
-        functions: n_functions,
+        functions: nfunctions,
         constants: nconstants,
     } = mdef;
     structs
         .iter_mut()
         .for_each(|(_, _, s)| struct_def(context, s));
     let constants = nconstants.map(|name, c| constant(context, name, c));
-    let functions = n_functions.map(|name, f| function(context, name, f, false));
+    let functions = nfunctions.map(|name, f| function(context, name, f, false));
     assert!(context.constraints.is_empty());
     T::ModuleDefinition {
+        attributes,
         is_source_module,
         dependency_order,
         friends,
         structs,
-        functions,
         constants,
+        functions,
     }
 }
 
@@ -95,6 +98,7 @@ fn script(context: &mut Context, nscript: N::Script) -> T::Script {
     assert!(context.current_script_constants.is_none());
     context.current_module = None;
     let N::Script {
+        attributes,
         loc,
         constants: nconstants,
         function_name,
@@ -105,10 +109,11 @@ fn script(context: &mut Context, nscript: N::Script) -> T::Script {
     let function = function(context, function_name.clone(), nfunction, true);
     context.current_script_constants = None;
     T::Script {
+        attributes,
         loc,
+        constants,
         function_name,
         function,
-        constants,
     }
 }
 
@@ -144,7 +149,7 @@ fn check_primitive_script_arg(
                  non-signer types",
                 core::error_format(&signer, &Subst::empty()),
             );
-            context.error(vec![(mloc, msg), (loc, tmsg)]);
+            context.env.add_error(vec![(mloc, msg), (loc, tmsg)]);
             return;
         }
     } else {
@@ -166,6 +171,7 @@ fn function(
 ) -> T::Function {
     let loc = name.loc();
     let N::Function {
+        attributes,
         visibility,
         mut signature,
         body: n_body,
@@ -201,6 +207,7 @@ fn function(
     let body = function_body(context, &acquires, n_body);
     context.current_function = None;
     T::Function {
+        attributes,
         visibility,
         signature,
         acquires,
@@ -220,7 +227,7 @@ fn function_signature(context: &mut Context, sig: &N::FunctionSignature) {
             param_ty.clone(),
         );
         if let Err((param, prev_loc)) = declared.add(param.clone(), ()) {
-            context.error(vec![
+            context.env.add_error(vec![
                 (
                     param.loc(),
                     format!("Duplicate parameter with name '{}'", param),
@@ -273,6 +280,7 @@ fn constant(context: &mut Context, _name: ConstantName, nconstant: N::Constant) 
     context.reset_for_module_item();
 
     let N::Constant {
+        attributes,
         loc,
         signature,
         value: nvalue,
@@ -305,6 +313,7 @@ fn constant(context: &mut Context, _name: ConstantName, nconstant: N::Constant) 
     check_valid_constant::exp(context, &value);
 
     T::Constant {
+        attributes,
         loc,
         signature,
         value,
@@ -368,7 +377,9 @@ mod check_valid_constant {
             core::error_format(ty, &Subst::empty()),
             format_comma(tys),
         );
-        context.error(vec![(sloc, fmsg().into()), (loc, tmsg)]);
+        context
+            .env
+            .add_error(vec![(sloc, fmsg().into()), (loc, tmsg)]);
     }
 
     pub fn exp(context: &mut Context, e: &T::Exp) {
@@ -383,7 +394,7 @@ mod check_valid_constant {
             //*****************************************
             // Error cases handled elsewhere
             //*****************************************
-            E::Use(_) | E::InferredNum(_) | E::Continue | E::Break | E::UnresolvedError => return,
+            E::Use(_) | E::Continue | E::Break | E::UnresolvedError => return,
 
             //*****************************************
             // Valid cases
@@ -469,7 +480,7 @@ mod check_valid_constant {
             }
             E::Constant(_, _) => "Other constants are",
         };
-        context.error(vec![(
+        context.env.add_error(vec![(
             *loc,
             format!("{} not supported in constants", error_case),
         )])
@@ -513,7 +524,7 @@ mod check_valid_constant {
                 "'let' declarations"
             }
         };
-        context.error(vec![(
+        context.env.add_error(vec![(
             *loc,
             format!("{} are not supported in constants", error_case),
         )])
@@ -613,7 +624,7 @@ fn typing_error<T: Into<String>, F: FnOnce() -> T>(
             ),
         ],
     };
-    context.error(error);
+    context.env.add_error(error);
 }
 
 fn subtype_no_report(
@@ -812,10 +823,10 @@ fn exp(context: &mut Context, ne: Box<N::Exp>) -> Box<T::Exp> {
 fn exp_(context: &mut Context, initial_ne: N::Exp) -> T::Exp {
     use N::Exp_ as NE;
     use T::UnannotatedExp_ as TE;
-    struct Stack<'a> {
+    struct Stack<'a, 'env> {
         frames: Vec<Box<dyn FnOnce(&mut Self)>>,
         operands: Vec<T::Exp>,
-        context: &'a mut Context,
+        context: &'a mut Context<'env>,
     }
     macro_rules! inner {
         ($e:expr) => {{
@@ -959,8 +970,11 @@ fn exp_inner(context: &mut Context, sp!(eloc, ne_): N::Exp) -> T::Exp {
     use T::UnannotatedExp_ as TE;
     let (ty, e_) = match ne_ {
         NE::Unit { trailing } => (sp(eloc, Type_::Unit), TE::Unit { trailing }),
-        NE::Value(sp!(vloc, v)) => (v.type_(vloc), TE::Value(sp(vloc, v))),
-        NE::InferredNum(v) => (core::make_num_tvar(context, eloc), TE::InferredNum(v)),
+        NE::Value(sp!(vloc, Value_::InferredNum(v))) => (
+            core::make_num_tvar(context, eloc),
+            TE::Value(sp(vloc, Value_::InferredNum(v))),
+        ),
+        NE::Value(sp!(vloc, v)) => (v.type_(vloc).unwrap(), TE::Value(sp(vloc, v))),
 
         NE::Constant(m, c) => {
             let ty = core::make_constant_type(context, eloc, &m, &c);
@@ -1081,7 +1095,7 @@ fn exp_inner(context: &mut Context, sp!(eloc, ne_): N::Exp) -> T::Exp {
         }
         NE::Break => {
             if !context.in_loop() {
-                context.error(vec![(
+                context.env.add_error(vec![(
                     eloc,
                     "Invalid usage of 'break'. 'break' can only be used inside a loop body",
                 )]);
@@ -1099,7 +1113,7 @@ fn exp_inner(context: &mut Context, sp!(eloc, ne_): N::Exp) -> T::Exp {
         }
         NE::Continue => {
             if !context.in_loop() {
-                context.error(vec![(
+                context.env.add_error(vec![(
                     eloc,
                     "Invalid usage of 'continue'. 'continue' can only be used inside a loop body",
                 )]);
@@ -1188,7 +1202,7 @@ fn exp_inner(context: &mut Context, sp!(eloc, ne_): N::Exp) -> T::Exp {
                      the module in which they are declared",
                     &m, &n,
                 );
-                context.error(vec![(eloc, msg)])
+                context.env.add_error(vec![(eloc, msg)])
             }
             (bt, TE::Pack(m, n, targs, tfields))
         }
@@ -1251,7 +1265,7 @@ fn exp_inner(context: &mut Context, sp!(eloc, ne_): N::Exp) -> T::Exp {
             (sp(eloc, Type_::Unit), TE::Spec(u, used_local_types))
         }
         NE::UnresolvedError => {
-            assert!(context.has_errors());
+            assert!(context.env.has_errors());
             (context.error_type(eloc), TE::UnresolvedError)
         }
 
@@ -1457,7 +1471,7 @@ fn lvalue(
                         ]
                     }
                 };
-                context.error(error)
+                context.env.add_error(error)
             }
             TL::Var(var, Box::new(var_ty))
         }
@@ -1505,7 +1519,7 @@ fn lvalue(
                      deconstructed in the module in which they are declared",
                     verb, &m, &n,
                 );
-                context.error(vec![(loc, msg)])
+                context.env.add_error(vec![(loc, msg)])
             }
             match ref_mut {
                 None => TL::Unpack(m, n, targs, tfields),
@@ -1556,7 +1570,7 @@ fn resolve_field(context: &mut Context, loc: Loc, ty: Type, field: &Field) -> Ty
     match core::unfold_type(&context.subst, ty) {
         sp!(_, UnresolvedError) => context.error_type(loc),
         sp!(tloc, Anything) => {
-            context.error(vec![
+            context.env.add_error(vec![
                 (loc, msg()),
                 (tloc, "Could not infer the type. Try annotating here".into()),
             ]);
@@ -1569,12 +1583,12 @@ fn resolve_field(context: &mut Context, loc: Loc, ty: Type, field: &Field) -> Ty
                      the struct's module",
                     field, &m, &n
                 );
-                context.error(vec![(loc, msg)])
+                context.env.add_error(vec![(loc, msg)])
             }
             core::make_field_type(context, loc, &m, &n, targs, field)
         }
         t => {
-            context.error(vec![
+            context.env.add_error(vec![
                 (loc, msg()),
                 (
                     t.loc,
@@ -1607,13 +1621,15 @@ fn add_field_types<T>(
                  constructed/deconstructed, and their fields cannot be dirctly accessed",
                 verb, m, n
             );
-            context.error(vec![(loc, msg), (nloc, "Declared 'native' here".into())]);
+            context
+                .env
+                .add_error(vec![(loc, msg), (nloc, "Declared 'native' here".into())]);
             return fields.map(|f, (idx, x)| (idx, (context.error_type(f.loc()), x)));
         }
     };
     for (_, f_, _) in &fields_ty {
         if fields.get_(&f_).is_none() {
-            context.error(vec![(
+            context.env.add_error(vec![(
                 loc,
                 format!("Missing {} for field '{}' in '{}::{}'", verb, f_, m, n),
             )])
@@ -1622,7 +1638,7 @@ fn add_field_types<T>(
     fields.map(|f, (idx, x)| {
         let fty = match fields_ty.remove(&f) {
             None => {
-                context.error(vec![(
+                context.env.add_error(vec![(
                     loc,
                     format!("Unbound field '{}' in '{}::{}'", &f, m, n),
                 )]);
@@ -1717,7 +1733,7 @@ fn exp_dotted_to_borrow(
             };
             // lhs is immutable and current borrow is mutable
             if !lhs_mut && mut_ {
-                context.error(vec![
+                context.env.add_error(vec![
                     (loc, "Invalid mutable borrow from an immutable reference"),
                     (tyloc, "Immutable because of this position"),
                 ])
@@ -1960,7 +1976,7 @@ fn make_arg_types<S: std::fmt::Display, F: Fn() -> S>(
             arity,
             given_len
         );
-        context.error(vec![
+        context.env.add_error(vec![
             (loc, cmsg),
             (argloc, format!("Found {} argument(s) here", given_len)),
         ])

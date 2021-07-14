@@ -7,11 +7,10 @@ use crate::{
         ast::{self as G, BasicBlock, BasicBlocks, BlockInfo},
         cfg::BlockCFG,
     },
-    errors::Errors,
-    expansion::ast::{AbilitySet, Value, Value_},
+    expansion::ast::{AbilitySet, ModuleIdent, Value, Value_},
     hlir::ast::{self as H, Label},
-    parser::ast::{ConstantName, FunctionName, ModuleIdent, StructName, Var},
-    shared::unique_map::UniqueMap,
+    parser::ast::{ConstantName, FunctionName, StructName, Var},
+    shared::{unique_map::UniqueMap, AddressBytes, CompilationEnv, Name},
     FullyCompiledProgram,
 };
 use cfgir::ast::LoopInfo;
@@ -26,8 +25,9 @@ use std::{
 // Context
 //**************************************************************************************************
 
-struct Context {
-    errors: Errors,
+struct Context<'env> {
+    env: &'env mut CompilationEnv,
+    addresses: &'env UniqueMap<Name, AddressBytes>,
     struct_declared_abilities: UniqueMap<ModuleIdent, UniqueMap<StructName, AbilitySet>>,
     start: Option<Label>,
     loop_begin: Option<Label>,
@@ -41,13 +41,14 @@ struct Context {
     block_info: Vec<(Label, BlockInfo)>,
 }
 
-impl Context {
+impl<'env> Context<'env> {
     pub fn new(
+        env: &'env mut CompilationEnv,
         pre_compiled_lib: Option<&FullyCompiledProgram>,
-        prog: &H::Program,
-        errors: Errors,
+        addresses: &'env UniqueMap<Name, AddressBytes>,
+        modules: &UniqueMap<ModuleIdent, H::ModuleDefinition>,
     ) -> Self {
-        let all_modules = prog.modules.key_cloned_iter().chain(
+        let all_modules = modules.key_cloned_iter().chain(
             pre_compiled_lib
                 .iter()
                 .map(|pre_compiled| {
@@ -55,7 +56,7 @@ impl Context {
                         .hlir
                         .modules
                         .key_cloned_iter()
-                        .filter(|(mident, _m)| !prog.modules.contains_key(mident))
+                        .filter(|(mident, _m)| !modules.contains_key(mident))
                 })
                 .flatten(),
         );
@@ -65,7 +66,8 @@ impl Context {
         )
         .unwrap();
         Context {
-            errors,
+            env,
+            addresses,
             struct_declared_abilities,
             next_label: None,
             loop_begin: None,
@@ -77,15 +79,6 @@ impl Context {
             block_info: vec![],
             loop_bounds: BTreeMap::new(),
         }
-    }
-
-    pub fn error(&mut self, e: Vec<(Loc, impl Into<String>)>) {
-        self.errors
-            .push(e.into_iter().map(|(loc, msg)| (loc, msg.into())).collect())
-    }
-
-    pub fn get_errors(self) -> Errors {
-        self.errors
     }
 
     fn new_label(&mut self) -> Label {
@@ -160,19 +153,26 @@ impl Context {
 //**************************************************************************************************
 
 pub fn program(
+    compilation_env: &mut CompilationEnv,
     pre_compiled_lib: Option<&FullyCompiledProgram>,
-    errors: Errors,
     prog: H::Program,
-) -> (G::Program, Errors) {
-    let mut context = Context::new(pre_compiled_lib, &prog, errors);
+) -> G::Program {
     let H::Program {
+        addresses,
         modules: hmodules,
         scripts: hscripts,
     } = prog;
+
+    let mut context = Context::new(compilation_env, pre_compiled_lib, &addresses, &hmodules);
+
     let modules = modules(&mut context, hmodules);
     let scripts = scripts(&mut context, hscripts);
 
-    (G::Program { modules, scripts }, context.get_errors())
+    G::Program {
+        addresses,
+        modules,
+        scripts,
+    }
 }
 
 fn modules(
@@ -191,6 +191,7 @@ fn module(
     mdef: H::ModuleDefinition,
 ) -> (ModuleIdent, G::ModuleDefinition) {
     let H::ModuleDefinition {
+        attributes,
         is_source_module,
         dependency_order,
         friends,
@@ -204,6 +205,7 @@ fn module(
     (
         module_ident,
         G::ModuleDefinition {
+            attributes,
             is_source_module,
             dependency_order,
             friends,
@@ -226,6 +228,7 @@ fn scripts(
 
 fn script(context: &mut Context, hscript: H::Script) -> G::Script {
     let H::Script {
+        attributes,
         loc,
         constants: hconstants,
         function_name,
@@ -234,6 +237,7 @@ fn script(context: &mut Context, hscript: H::Script) -> G::Script {
     let constants = hconstants.map(|name, c| constant(context, name, c));
     let function = function(context, function_name.clone(), hfunction);
     G::Script {
+        attributes,
         loc,
         constants,
         function_name,
@@ -247,15 +251,17 @@ fn script(context: &mut Context, hscript: H::Script) -> G::Script {
 
 fn constant(context: &mut Context, _name: ConstantName, c: H::Constant) -> G::Constant {
     let H::Constant {
+        attributes,
         loc,
         signature,
         value: (locals, block),
     } = c;
 
     let final_value = constant_(context, loc, signature.clone(), locals, block);
-    let value = final_value.and_then(move_value_from_exp);
+    let value = final_value.and_then(|v| move_value_from_exp(context, v));
 
     G::Constant {
+        attributes,
         loc,
         signature,
         value,
@@ -282,7 +288,7 @@ fn constant_(
     assert!(infinite_loop_starts.is_empty(), "{}", ICE_MSG);
     assert!(errors.is_empty(), "{}", ICE_MSG);
 
-    let mut fake_errors = vec![];
+    let num_previous_errors = context.env.count_errors();
     let fake_signature = H::FunctionSignature {
         type_parameters: vec![],
         parameters: vec![],
@@ -291,7 +297,7 @@ fn constant_(
     let fake_acquires = BTreeMap::new();
     let fake_infinite_loop_starts = BTreeSet::new();
     cfgir::refine_inference_and_verify(
-        &mut fake_errors,
+        context.env,
         &context.struct_declared_abilities,
         &fake_signature,
         &fake_acquires,
@@ -299,11 +305,15 @@ fn constant_(
         &mut cfg,
         &fake_infinite_loop_starts,
     );
-    assert!(fake_errors.is_empty(), "{}", ICE_MSG);
+    assert!(
+        num_previous_errors == context.env.count_errors(),
+        "{}",
+        ICE_MSG
+    );
     cfgir::optimize(&fake_signature, &locals, &mut cfg);
 
     if blocks.len() != 1 {
-        context.error(vec![(full_loc, CANNOT_FOLD)]);
+        context.env.add_error(vec![(full_loc, CANNOT_FOLD)]);
         return None;
     }
     let mut optimized_block = blocks.remove(&start).unwrap();
@@ -312,7 +322,7 @@ fn constant_(
         let e = match cmd_ {
             C::IgnoreAndPop { exp, .. } => exp,
             _ => {
-                context.error(vec![(*cloc, CANNOT_FOLD)]);
+                context.env.add_error(vec![(*cloc, CANNOT_FOLD)]);
                 continue;
             }
         };
@@ -331,29 +341,36 @@ fn check_constant_value(context: &mut Context, e: &H::Exp) {
     use H::UnannotatedExp_ as E;
     match &e.exp.value {
         E::Value(_) => (),
-        _ => context.error(vec![(e.exp.loc, CANNOT_FOLD)]),
+        _ => context.env.add_error(vec![(e.exp.loc, CANNOT_FOLD)]),
     }
 }
 
-fn move_value_from_exp(e: H::Exp) -> Option<MoveValue> {
+fn move_value_from_exp(context: &mut Context, e: H::Exp) -> Option<MoveValue> {
     use H::UnannotatedExp_ as E;
     match e.exp.value {
-        E::Value(v) => Some(move_value_from_value(v)),
+        E::Value(v) => move_value_from_value(context, v),
         _ => None,
     }
 }
 
-fn move_value_from_value(sp!(_, v_): Value) -> MoveValue {
+fn move_value_from_value(context: &mut Context, sp!(loc, v_): Value) -> Option<MoveValue> {
     use MoveValue as MV;
     use Value_ as V;
-    match v_ {
-        V::Address(a) => MV::Address(MoveAddress::new(a.to_u8())),
+    Some(match v_ {
+        V::InferredNum(_) => panic!("ICE inferred num should have been expanded"),
+        V::Address(a) => match a.into_addr_bytes(&context.addresses, loc, "address value") {
+            Ok(bytes) => MV::Address(MoveAddress::new(bytes.into_bytes())),
+            Err(err) => {
+                context.env.add_error(err);
+                return None;
+            }
+        },
         V::U8(u) => MV::U8(u),
         V::U64(u) => MV::U64(u),
         V::U128(u) => MV::U128(u),
         V::Bool(b) => MV::Bool(b),
         V::Bytearray(v) => MV::Vector(v.into_iter().map(MV::U8).collect()),
-    }
+    })
 }
 
 //**************************************************************************************************
@@ -361,11 +378,13 @@ fn move_value_from_value(sp!(_, v_): Value) -> MoveValue {
 //**************************************************************************************************
 
 fn function(context: &mut Context, _name: FunctionName, f: H::Function) -> G::Function {
+    let attributes = f.attributes;
     let visibility = f.visibility;
     let signature = f.signature;
     let acquires = f.acquires;
     let body = function_body(context, &signature, &acquires, f.body);
     G::Function {
+        attributes,
         visibility,
         signature,
         acquires,
@@ -398,11 +417,11 @@ fn function_body(
             let (mut cfg, infinite_loop_starts, errors) =
                 BlockCFG::new(start, &mut blocks, &block_info);
             for e in errors {
-                context.error(e);
+                context.env.add_error(e);
             }
 
             cfgir::refine_inference_and_verify(
-                &mut context.errors,
+                context.env,
                 &context.struct_declared_abilities,
                 signature,
                 acquires,
@@ -410,7 +429,7 @@ fn function_body(
                 &mut cfg,
                 &infinite_loop_starts,
             );
-            if context.errors.is_empty() {
+            if !context.env.has_errors() {
                 cfgir::optimize(signature, &locals, &mut cfg);
             }
 

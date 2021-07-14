@@ -2,13 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{
-    expansion::ast::{Fields, SpecId, Value},
+    expansion::ast::{Attribute, Fields, Friend, ModuleIdent, SpecId, Value},
     naming::ast::{FunctionSignature, StructDefinition, Type, TypeName_, Type_},
-    parser::ast::{
-        BinOp, ConstantName, Field, FunctionName, FunctionVisibility, ModuleIdent, StructName,
-        UnaryOp, Var,
-    },
-    shared::{ast_debug::*, unique_map::UniqueMap},
+    parser::ast::{BinOp, ConstantName, Field, FunctionName, StructName, UnaryOp, Var, Visibility},
+    shared::{ast_debug::*, unique_map::UniqueMap, AddressBytes, Name},
 };
 use move_ir_types::location::*;
 use std::{
@@ -22,6 +19,8 @@ use std::{
 
 #[derive(Debug, Clone)]
 pub struct Program {
+    // Map of known named address values. Not all addresses will be present
+    pub addresses: UniqueMap<Name, AddressBytes>,
     pub modules: UniqueMap<ModuleIdent, ModuleDefinition>,
     pub scripts: BTreeMap<String, Script>,
 }
@@ -32,6 +31,7 @@ pub struct Program {
 
 #[derive(Debug, Clone)]
 pub struct Script {
+    pub attributes: Vec<Attribute>,
     pub loc: Loc,
     pub constants: UniqueMap<ConstantName, Constant>,
     pub function_name: FunctionName,
@@ -44,10 +44,11 @@ pub struct Script {
 
 #[derive(Debug, Clone)]
 pub struct ModuleDefinition {
+    pub attributes: Vec<Attribute>,
     pub is_source_module: bool,
     /// `dependency_order` is the topological order/rank in the dependency graph.
     pub dependency_order: usize,
-    pub friends: UniqueMap<ModuleIdent, Loc>,
+    pub friends: UniqueMap<ModuleIdent, Friend>,
     pub structs: UniqueMap<StructName, StructDefinition>,
     pub constants: UniqueMap<ConstantName, Constant>,
     pub functions: UniqueMap<FunctionName, Function>,
@@ -66,7 +67,8 @@ pub type FunctionBody = Spanned<FunctionBody_>;
 
 #[derive(PartialEq, Debug, Clone)]
 pub struct Function {
-    pub visibility: FunctionVisibility,
+    pub attributes: Vec<Attribute>,
+    pub visibility: Visibility,
     pub signature: FunctionSignature,
     pub acquires: BTreeMap<StructName, Loc>,
     pub body: FunctionBody,
@@ -78,6 +80,7 @@ pub struct Function {
 
 #[derive(PartialEq, Debug, Clone)]
 pub struct Constant {
+    pub attributes: Vec<Attribute>,
     pub loc: Loc,
     pub signature: Type,
     pub value: Exp,
@@ -131,7 +134,6 @@ pub type BuiltinFunction = Spanned<BuiltinFunction_>;
 pub enum UnannotatedExp_ {
     Unit { trailing: bool },
     Value(Value),
-    InferredNum(u128),
     Move { from_user: bool, var: Var },
     Copy { from_user: bool, var: Var },
     Use(Var),
@@ -244,7 +246,15 @@ impl fmt::Display for BuiltinFunction_ {
 
 impl AstDebug for Program {
     fn ast_debug(&self, w: &mut AstWriter) {
-        let Program { modules, scripts } = self;
+        let Program {
+            addresses,
+            modules,
+            scripts,
+        } = self;
+        for (_, addr, bytes) in addresses {
+            w.writeln(&format!("address {} = {};", addr, bytes));
+        }
+
         for (m, mdef) in modules.key_cloned_iter() {
             w.write(&format!("module {}", m));
             w.block(|w| mdef.ast_debug(w));
@@ -262,11 +272,13 @@ impl AstDebug for Program {
 impl AstDebug for Script {
     fn ast_debug(&self, w: &mut AstWriter) {
         let Script {
+            attributes,
             loc: _loc,
             constants,
             function_name,
             function,
         } = self;
+        attributes.ast_debug(w);
         for cdef in constants.key_cloned_iter() {
             cdef.ast_debug(w);
             w.new_line();
@@ -278,6 +290,7 @@ impl AstDebug for Script {
 impl AstDebug for ModuleDefinition {
     fn ast_debug(&self, w: &mut AstWriter) {
         let ModuleDefinition {
+            attributes,
             is_source_module,
             dependency_order,
             friends,
@@ -285,6 +298,7 @@ impl AstDebug for ModuleDefinition {
             constants,
             functions,
         } = self;
+        attributes.ast_debug(w);
         if *is_source_module {
             w.writeln("library module")
         } else {
@@ -315,12 +329,14 @@ impl AstDebug for (FunctionName, &Function) {
         let (
             name,
             Function {
+                attributes,
                 visibility,
                 signature,
                 acquires,
                 body,
             },
         ) = self;
+        attributes.ast_debug(w);
         visibility.ast_debug(w);
         if let FunctionBody_::Native = &body.value {
             w.write("native ");
@@ -344,11 +360,13 @@ impl AstDebug for (ConstantName, &Constant) {
         let (
             name,
             Constant {
+                attributes,
                 loc: _loc,
                 signature,
                 value,
             },
         ) = self;
+        attributes.ast_debug(w);
         w.write(&format!("const {}:", name));
         signature.ast_debug(w);
         w.write(" = ");
@@ -394,7 +412,6 @@ impl AstDebug for UnannotatedExp_ {
                 trailing: _trailing,
             } => w.write("/*()*/"),
             E::Value(v) => v.ast_debug(w),
-            E::InferredNum(u) => w.write(&format!("{}", u)),
             E::Move {
                 from_user: false,
                 var: v,

@@ -3,71 +3,51 @@
 
 #![forbid(unsafe_code)]
 
-use crate::cli::{Options, INLINE_PRELUDE};
+use crate::cli::Options;
 use abigen::Abigen;
 use anyhow::anyhow;
-use boogie_backend::{boogie_wrapper::BoogieWrapper, bytecode_translator::BoogieTranslator};
-use boogie_backend_v2::prelude_template_helpers::StratificationHelper;
+use boogie_backend::{
+    add_prelude, boogie_wrapper::BoogieWrapper, bytecode_translator::BoogieTranslator,
+};
 use bytecode::{
-    data_invariant_instrumentation::DataInvariantInstrumentationProcessor,
-    debug_instrumentation::DebugInstrumenter,
     function_target_pipeline::{FunctionTargetPipeline, FunctionTargetsHolder},
-    global_invariant_instrumentation::GlobalInvariantInstrumentationProcessor,
-    global_invariant_instrumentation_v2::GlobalInvariantInstrumentationProcessorV2,
+    pipeline_factory,
     read_write_set_analysis::{self, ReadWriteSetProcessor},
-    spec_instrumentation::SpecInstrumentationProcessor,
 };
 use codespan_reporting::term::termcolor::{ColorChoice, StandardStream, WriteColor};
 use docgen::Docgen;
 use errmapgen::ErrmapGen;
-use handlebars::Handlebars;
-use itertools::Itertools;
 #[allow(unused_imports)]
 use log::{debug, info, warn};
-use move_lang::find_move_filenames;
-use move_model::{code_writer::CodeWriter, emit, emitln, model::GlobalEnv, run_model_builder};
-use once_cell::sync::Lazy;
-use regex::Regex;
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    fs,
-    fs::File,
-    io::Read,
-    path::{Path, PathBuf},
-    time::Instant,
-};
+use move_model::{code_writer::CodeWriter, model::GlobalEnv, run_model_builder};
+use std::{fs, path::PathBuf, time::Instant};
 
 pub mod cli;
-mod pipelines;
 
 // =================================================================================================
-// Entry Point
+// Prover API
 
-/// Content of the default prelude.
-const DEFAULT_PRELUDE: &[u8] = include_bytes!("prelude.bpl");
+pub fn run_move_prover_errors_to_stderr(options: Options) -> anyhow::Result<()> {
+    let mut error_writer = StandardStream::stderr(ColorChoice::Auto);
+    run_move_prover(&mut error_writer, options)
+}
 
 pub fn run_move_prover<W: WriteColor>(
     error_writer: &mut W,
     options: Options,
 ) -> anyhow::Result<()> {
     let now = Instant::now();
-    let target_sources = find_move_filenames(&options.move_sources, true)?;
-    let all_sources = collect_all_sources(
-        &target_sources,
-        &find_move_filenames(&options.move_deps, true)?,
-        options.inv_v2,
+
+    // Run the model builder.
+    let env = run_model_builder(&options.move_sources, &options.move_deps)?;
+    let build_duration = now.elapsed();
+    check_errors(
+        &env,
+        &options,
+        error_writer,
+        "exiting with model building errors",
     )?;
-    let other_sources = remove_sources(&target_sources, all_sources);
-    let address = Some(options.account_address.as_ref());
-    debug!("parsing and checking sources");
-    let mut env: GlobalEnv = run_model_builder(target_sources, other_sources, address)?;
-    if env.has_errors() {
-        env.report_errors(error_writer);
-        return Err(anyhow!("exiting with checking errors"));
-    }
-    if options.prover.report_warnings && env.has_warnings() {
-        env.report_warnings(error_writer);
-    }
+    env.report_diag(error_writer, options.prover.report_severity);
 
     // Add the prover options as an extension to the environment, so they can be accessed
     // from there.
@@ -90,104 +70,147 @@ pub fn run_move_prover<W: WriteColor>(
         return Ok(run_read_write_set(&env, &options, now));
     }
 
-    let targets = create_and_process_bytecode(&options, &env);
-    if env.has_errors() {
-        env.report_errors(error_writer);
-        return Err(anyhow!("exiting with transformation errors"));
-    }
+    // Check correct backend versions.
+    options.backend.check_tool_versions()?;
 
+    // Create and process bytecode
+    let now = Instant::now();
+    let targets = create_and_process_bytecode(&options, &env);
+    let trafo_duration = now.elapsed();
+    check_errors(
+        &env,
+        &options,
+        error_writer,
+        "exiting with bytecode transformation errors",
+    )?;
+
+    // Generate boogie code
+    let now = Instant::now();
+    let code_writer = generate_boogie(&env, &options, &targets)?;
+    let gen_duration = now.elapsed();
+    check_errors(
+        &env,
+        &options,
+        error_writer,
+        "exiting with boogie generation errors",
+    )?;
+
+    // Verify boogie code.
+    let now = Instant::now();
+    verify_boogie(&env, &options, &targets, code_writer)?;
+    let verify_duration = now.elapsed();
+
+    // Report durations.
+    info!(
+        "{:.3}s build, {:.3}s trafo, {:.3}s gen, {:.3}s verify",
+        build_duration.as_secs_f64(),
+        trafo_duration.as_secs_f64(),
+        gen_duration.as_secs_f64(),
+        verify_duration.as_secs_f64()
+    );
+    check_errors(
+        &env,
+        &options,
+        error_writer,
+        "exiting with boogie verification errors",
+    )
+}
+
+pub fn check_errors<W: WriteColor>(
+    env: &GlobalEnv,
+    options: &Options,
+    error_writer: &mut W,
+    msg: &'static str,
+) -> anyhow::Result<()> {
+    env.report_diag(error_writer, options.prover.report_severity);
     if env.has_errors() {
-        env.report_errors(error_writer);
-        return Err(anyhow!("exiting with modifies checking errors"));
-    }
-    // Analyze and find out the set of modules/functions to be translated and/or verified.
-    if env.has_errors() {
-        env.report_errors(error_writer);
-        return Err(anyhow!("exiting with analysis errors"));
-    }
-    let writer = CodeWriter::new(env.internal_loc());
-    if options.vnext {
-        boogie_backend_v2::add_prelude(&options.backend, &writer)?;
-        let mut translator = boogie_backend_v2::bytecode_translator::BoogieTranslator::new(
-            &env,
-            &options.backend,
-            &targets,
-            &writer,
-        );
-        translator.translate();
+        Err(anyhow!(msg))
     } else {
-        add_prelude(&options, &writer)?;
-        let mut translator = BoogieTranslator::new(&env, &options.backend, &targets, &writer);
-        translator.translate();
+        Ok(())
     }
-    if env.has_errors() {
-        env.report_errors(error_writer);
-        return Err(anyhow!("exiting with boogie generation errors"));
-    }
+}
+
+pub fn generate_boogie(
+    env: &GlobalEnv,
+    options: &Options,
+    targets: &FunctionTargetsHolder,
+) -> anyhow::Result<CodeWriter> {
+    let writer = CodeWriter::new(env.internal_loc());
+    add_prelude(env, &options.backend, &writer)?;
+    let mut translator = BoogieTranslator::new(&env, &options.backend, &targets, &writer);
+    translator.translate();
+    Ok(writer)
+}
+
+pub fn verify_boogie(
+    env: &GlobalEnv,
+    options: &Options,
+    targets: &FunctionTargetsHolder,
+    writer: CodeWriter,
+) -> anyhow::Result<()> {
     let output_existed = std::path::Path::new(&options.output_path).exists();
     debug!("writing boogie to `{}`", &options.output_path);
     writer.process_result(|result| fs::write(&options.output_path, result))?;
-    let translator_elapsed = now.elapsed();
-    if !options.prover.generate_only {
-        let boogie_file_id =
-            writer.process_result(|result| env.add_source(&options.output_path, result, false));
-        if options.vnext {
-            let boogie = boogie_backend_v2::boogie_wrapper::BoogieWrapper {
-                env: &env,
-                targets: &targets,
-                writer: &writer,
-                options: &options.backend,
-                boogie_file_id,
-            };
-            boogie.call_boogie_and_verify_output(
-                options.backend.bench_repeat,
-                &options.output_path,
-            )?;
-        } else {
-            let boogie = BoogieWrapper {
-                env: &env,
-                targets: &targets,
-                writer: &writer,
-                options: &options.backend,
-                boogie_file_id,
-            };
-            boogie.call_boogie_and_verify_output(
-                options.backend.bench_repeat,
-                &options.output_path,
-            )?;
-        }
-        let boogie_elapsed = now.elapsed();
-        if options.backend.bench_repeat <= 1 {
-            info!(
-                "{:.3}s translator, {:.3}s solver",
-                translator_elapsed.as_secs_f64(),
-                (boogie_elapsed - translator_elapsed).as_secs_f64()
-            );
-        } else {
-            info!(
-                "{:.3}s translator, {:.3}s solver (average over {} solver runs)",
-                translator_elapsed.as_secs_f64(),
-                (boogie_elapsed - translator_elapsed).as_secs_f64()
-                    / (options.backend.bench_repeat as f64),
-                options.backend.bench_repeat
-            );
-        }
-        if env.has_errors() {
-            env.report_errors(error_writer);
-            return Err(anyhow!("exiting with boogie verification errors"));
-        }
-    }
+    let boogie = BoogieWrapper {
+        env: &env,
+        targets: &targets,
+        writer: &writer,
+        options: &options.backend,
+    };
+    boogie.call_boogie_and_verify_output(&options.output_path)?;
     if !output_existed && !options.backend.keep_artifacts {
         std::fs::remove_file(&options.output_path).unwrap_or_default();
     }
-
     Ok(())
 }
 
-pub fn run_move_prover_errors_to_stderr(options: Options) -> anyhow::Result<()> {
-    let mut error_writer = StandardStream::stderr(ColorChoice::Auto);
-    run_move_prover(&mut error_writer, options)
+/// Create bytecode and process it.
+pub fn create_and_process_bytecode(options: &Options, env: &GlobalEnv) -> FunctionTargetsHolder {
+    let mut targets = FunctionTargetsHolder::default();
+
+    // Add function targets for all functions in the environment.
+    for module_env in env.get_modules() {
+        if options.prover.dump_bytecode {
+            let output_file = options
+                .move_sources
+                .get(0)
+                .cloned()
+                .unwrap_or_else(|| "bytecode".to_string())
+                .replace(".move", ".mv.disas");
+            fs::write(&output_file, &module_env.disassemble())
+                .expect("dumping disassembled module");
+        }
+        for func_env in module_env.get_functions() {
+            targets.add_target(&func_env)
+        }
+    }
+
+    // Create processing pipeline and run it.
+    let pipeline = if options.experimental_pipeline {
+        pipeline_factory::experimental_pipeline()
+    } else {
+        pipeline_factory::default_pipeline_with_options(&options.prover)
+    };
+
+    if options.prover.dump_bytecode {
+        let dump_file = options
+            .move_sources
+            .get(0)
+            .cloned()
+            .unwrap_or_else(|| "bytecode".to_string())
+            .replace(".move", "");
+        pipeline.run_with_dump(env, &mut targets, &dump_file, options.prover.dump_cfg)
+    } else {
+        pipeline.run(env, &mut targets);
+    }
+    targets
 }
+
+// Tools using the Move prover top-level driver
+// ============================================
+
+// TODO: make those tools independent. Need to first address the todo to
+// move the model builder into the move-model crate.
 
 fn run_docgen<W: WriteColor>(
     env: &GlobalEnv,
@@ -210,7 +233,7 @@ fn run_docgen<W: WriteColor>(
         (generating_elapsed - checking_elapsed).as_secs_f64()
     );
     if env.has_errors() {
-        env.report_errors(error_writer);
+        env.report_diag(error_writer, options.prover.report_severity);
         Err(anyhow!("exiting with documentation generation errors"))
     } else {
         Ok(())
@@ -263,226 +286,10 @@ fn run_read_write_set(env: &GlobalEnv, options: &Options, now: Instant) {
 
     let start = now.elapsed();
     info!("generating read/write set");
-    pipeline.run(env, &mut targets, None, /* dump_cfg */ false);
+    pipeline.run(env, &mut targets);
     read_write_set_analysis::get_read_write_set(env, &targets);
     println!("generated for {:?}", options.move_sources);
 
     let end = now.elapsed();
     info!("{:.3}s analyzing", (end - start).as_secs_f64());
-}
-
-/// Adds the prelude to the generated output.
-fn add_prelude(options: &Options, writer: &CodeWriter) -> anyhow::Result<()> {
-    // TOODO: move this to boogie-backend
-    emit!(writer, "\n// ** prelude from {}\n\n", &options.prelude_path);
-    let content = if options.prelude_path == INLINE_PRELUDE {
-        debug!("using inline prelude");
-        String::from_utf8_lossy(DEFAULT_PRELUDE).to_string()
-    } else {
-        debug!("using prelude at {}", &options.prelude_path);
-        fs::read_to_string(&options.prelude_path)?
-    };
-    let mut handlebars = Handlebars::new();
-    handlebars.set_strict_mode(true);
-    handlebars.register_helper(
-        "stratified",
-        Box::new(StratificationHelper::new(
-            options.backend.stratification_depth,
-        )),
-    );
-    let expanded_content = handlebars.render_template(&content, &options)?;
-    emitln!(writer, &expanded_content);
-    Ok(())
-}
-
-/// Create bytecode and process it.
-fn create_and_process_bytecode(options: &Options, env: &GlobalEnv) -> FunctionTargetsHolder {
-    let mut targets = FunctionTargetsHolder::default();
-
-    // Add function targets for all functions in the environment.
-    for module_env in env.get_modules() {
-        for func_env in module_env.get_functions() {
-            targets.add_target(&func_env)
-        }
-    }
-
-    // Create processing pipeline and run it.
-    let pipeline = create_bytecode_processing_pipeline(options);
-    let dump_file = if options.prover.dump_bytecode {
-        Some(
-            options
-                .move_sources
-                .get(0)
-                .cloned()
-                .unwrap_or_else(|| "bytecode".to_string())
-                .replace(".move", ""),
-        )
-    } else {
-        None
-    };
-    pipeline.run(env, &mut targets, dump_file, options.prover.dump_cfg);
-
-    targets
-}
-
-/// Function to create the transformation pipeline.
-fn create_bytecode_processing_pipeline(options: &Options) -> FunctionTargetPipeline {
-    let mut res = FunctionTargetPipeline::default();
-    // Add processors in order they are executed.
-
-    res.add_processor(DebugInstrumenter::new());
-    pipelines::pipelines(options)
-        .into_iter()
-        .for_each(|processor| res.add_processor(processor));
-    res.add_processor(SpecInstrumentationProcessor::new());
-    res.add_processor(DataInvariantInstrumentationProcessor::new());
-    if options.inv_v2 {
-        // *** convert to v2 version ***
-        res.add_processor(GlobalInvariantInstrumentationProcessorV2::new());
-    } else {
-        res.add_processor(GlobalInvariantInstrumentationProcessor::new());
-    }
-    res
-}
-
-/// Remove the target Move files from the list of files.
-fn remove_sources(sources: &[String], all_files: Vec<String>) -> Vec<String> {
-    let canonical_sources = sources
-        .iter()
-        .map(|s| canonicalize(s))
-        .collect::<BTreeSet<_>>();
-    all_files
-        .into_iter()
-        .filter(|d| !canonical_sources.contains(&canonicalize(d)))
-        .collect_vec()
-}
-
-/// Collect all the relevant Move sources among sources represented by `input deps`
-/// parameter. The resulting vector of sources includes target sources, dependencies
-/// of target sources, (recursive)friends of targets and dependencies, and
-/// dependencies of friends.
-fn collect_all_sources(
-    target_sources: &[String],
-    input_deps: &[String],
-    use_inv_v2: bool,
-) -> anyhow::Result<Vec<String>> {
-    let mut all_sources = target_sources.to_vec();
-    static DEP_REGEX: Lazy<Regex> =
-        Lazy::new(|| Regex::new(r"(?m)use\s*0x[0-9abcdefABCDEF]+::\s*(\w+)").unwrap());
-    static NEW_FRIEND_REGEX: Lazy<Regex> =
-        Lazy::new(|| Regex::new(r"(?m)friend\s*0x[0-9abcdefABCDEF]+::\s*(\w+)").unwrap());
-    static FRIEND_REGEX: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?m)pragma\s*friend\s*=\s*0x[0-9abcdefABCDEF]+::\s*(\w+)").unwrap()
-    });
-
-    let target_deps = calculate_deps(&all_sources, input_deps, &DEP_REGEX)?;
-    all_sources.extend(target_deps);
-
-    let friend_sources = calculate_deps(
-        &all_sources,
-        input_deps,
-        if use_inv_v2 {
-            &NEW_FRIEND_REGEX
-        } else {
-            &FRIEND_REGEX
-        },
-    )?;
-
-    all_sources.extend(friend_sources);
-
-    let friend_deps = calculate_deps(&all_sources, input_deps, &DEP_REGEX)?;
-    all_sources.extend(friend_deps);
-
-    Ok(all_sources)
-}
-
-/// Calculates transitive dependencies of the given Move sources. This function
-/// is also used to calculate transitive friends depending on the regex provided
-/// for extracting matches.
-fn calculate_deps(
-    sources: &[String],
-    input_deps: &[String],
-    regex: &Regex,
-) -> anyhow::Result<Vec<String>> {
-    let file_map = calculate_file_map(input_deps)?;
-    let mut deps = vec![];
-    let mut visited = BTreeSet::new();
-    for src in sources.iter() {
-        calculate_deps_recursively(Path::new(src), &file_map, &mut visited, &mut deps, regex)?;
-    }
-    // Remove input sources from deps. They can end here because our dep analysis is an
-    // over-approximation and for example cannot distinguish between references inside
-    // and outside comments.
-    let mut deps = remove_sources(sources, deps);
-    // Sort deps by simple file name. Sorting is important because different orders
-    // caused by platform dependent ways how `calculate_deps_recursively` may return values, can
-    // cause different behavior of the SMT solver (butterfly effect). By using the simple file
-    // name we abstract from places where the sources live in the file system. Since Move has
-    // no namespaces and file names can be expected to be unique matching module/script names,
-    // this should work in most cases.
-    deps.sort_by(|a, b| {
-        let fa = PathBuf::from(a);
-        let fb = PathBuf::from(b);
-        Ord::cmp(fa.file_name().unwrap(), fb.file_name().unwrap())
-    });
-    Ok(deps)
-}
-
-fn canonicalize(s: &str) -> String {
-    match fs::canonicalize(s) {
-        Ok(p) => p.to_string_lossy().to_string(),
-        Err(_) => s.to_string(),
-    }
-}
-
-/// Recursively calculate dependencies.
-fn calculate_deps_recursively(
-    path: &Path,
-    file_map: &BTreeMap<String, PathBuf>,
-    visited: &mut BTreeSet<String>,
-    deps: &mut Vec<String>,
-    regex: &Regex,
-) -> anyhow::Result<()> {
-    if !visited.insert(path.to_string_lossy().to_string()) {
-        return Ok(());
-    }
-    debug!("including `{}`", path.display());
-    for dep in extract_matches(path, regex)? {
-        if let Some(dep_path) = file_map.get(&dep) {
-            let dep_str = dep_path.to_string_lossy().to_string();
-            if !deps.contains(&dep_str) {
-                deps.push(dep_str);
-                calculate_deps_recursively(dep_path.as_path(), file_map, visited, deps, regex)?;
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Calculate a map of module names to files which define those modules.
-fn calculate_file_map(deps: &[String]) -> anyhow::Result<BTreeMap<String, PathBuf>> {
-    static REX: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?m)module\s+(\w+)\s*\{").unwrap());
-    let mut module_to_file = BTreeMap::new();
-    for dep in deps {
-        let dep_path = PathBuf::from(dep);
-        for module in extract_matches(dep_path.as_path(), &*REX)? {
-            module_to_file.insert(module, dep_path.clone());
-        }
-    }
-    Ok(module_to_file)
-}
-
-/// Extracts matches out of some text file. `rex` must be a regular expression with one anonymous
-/// group.
-fn extract_matches(path: &Path, rex: &Regex) -> anyhow::Result<Vec<String>> {
-    let mut content = String::new();
-    let mut file = File::open(path)?;
-    file.read_to_string(&mut content)?;
-    let mut at = 0;
-    let mut res = vec![];
-    while let Some(cap) = rex.captures(&content[at..]) {
-        res.push(cap.get(1).unwrap().as_str().to_string());
-        at += cap.get(0).unwrap().end();
-    }
-    Ok(res)
 }

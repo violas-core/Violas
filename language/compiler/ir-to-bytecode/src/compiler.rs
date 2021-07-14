@@ -7,6 +7,17 @@ use crate::{
 };
 use anyhow::{bail, format_err, Result};
 use bytecode_source_map::source_map::SourceMap;
+use move_binary_format::{
+    errors::Location as VMErrorLocation,
+    file_format::{
+        Ability, AbilitySet, Bytecode, CodeOffset, CodeUnit, CompiledModule, CompiledModuleMut,
+        CompiledScript, CompiledScriptMut, Constant, FieldDefinition, FunctionDefinition,
+        FunctionSignature, ModuleHandle, Signature, SignatureToken, StructDefinition,
+        StructDefinitionIndex, StructFieldInformation, StructHandleIndex, TableIndex,
+        TypeParameterIndex, TypeSignature, Visibility,
+    },
+    file_format_common::VERSION_MAX,
+};
 use move_core_types::{
     account_address::AccountAddress,
     value::{MoveTypeLayout, MoveValue},
@@ -22,17 +33,6 @@ use std::{
         hash_map::Entry::{Occupied, Vacant},
         BTreeSet, HashMap, VecDeque,
     },
-};
-use vm::{
-    errors::Location as VMErrorLocation,
-    file_format::{
-        Ability, AbilitySet, Bytecode, CodeOffset, CodeUnit, CompiledModule, CompiledModuleMut,
-        CompiledScript, CompiledScriptMut, Constant, FieldDefinition, FunctionDefinition,
-        FunctionSignature, ModuleHandle, Signature, SignatureToken, StructDefinition,
-        StructDefinitionIndex, StructFieldInformation, StructHandleIndex, TableIndex,
-        TypeParameterIndex, TypeSignature, Visibility,
-    },
-    file_format_common::VERSION_MAX,
 };
 
 macro_rules! record_src_loc {
@@ -681,7 +681,7 @@ fn compile_friends(
     for friend in friends {
         let ident = match (address_opt, friend) {
             (Some(address), ModuleIdent::Transaction(name)) => {
-                QualifiedModuleIdent { address, name }
+                QualifiedModuleIdent { name, address }
             }
             (None, ModuleIdent::Transaction(name)) => bail!(
                 "Invalid friend '{}'. No address specified for script so cannot resolve friend",
@@ -703,7 +703,7 @@ fn compile_imports(
     for import in imports {
         let ident = match (address_opt, import.ident) {
             (Some(address), ModuleIdent::Transaction(name)) => {
-                QualifiedModuleIdent { address, name }
+                QualifiedModuleIdent { name, address }
             }
             (None, ModuleIdent::Transaction(name)) => bail!(
                 "Invalid import '{}'. No address specified for script so cannot resolve import",
@@ -836,7 +836,7 @@ fn function_signature(
         .iter()
         .map(|(_, abs)| abilities(abs))
         .collect();
-    Ok(vm::file_format::FunctionSignature {
+    Ok(move_binary_format::file_format::FunctionSignature {
         return_,
         parameters,
         type_parameters,

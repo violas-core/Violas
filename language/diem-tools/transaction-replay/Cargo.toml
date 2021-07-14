@@ -12,13 +12,14 @@ edition = "2018"
 [dependencies]
 anyhow = "1.0.38"
 structopt = "0.3.21"
+hex = "0.4.3"
 diem-workspace-hack = { path = "../../../common/workspace-hack" }
 diem-types = { path = "../../../types" }
 diem-state-view = { path = "../../../storage/state-view" }
 diem-validator-interface = { path = "../diem-validator-interface" }
 diemdb = { path = "../../../storage/diemdb" }
 diem-vm = { path = "../../diem-vm" }
-vm = { path = "../../vm"}
+move-binary-format = { path = "../../move-binary-format"}
 move-cli = { path = "../../tools/move-cli" }
 move-vm-types = { path = "../../move-vm/types" }
 move-core-types = { path = "../../move-core/types" }

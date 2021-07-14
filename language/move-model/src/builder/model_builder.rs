@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use log::{debug, info, warn};
 use num::BigUint;
 
-use move_lang::parser::ast as PA;
+use move_lang::{expansion::ast as EA, parser::ast as PA, shared::AddressBytes};
 
 use crate::{
     ast::{ModuleName, Operation, QualifiedSymbol, Spec, Value},
@@ -22,6 +22,7 @@ use crate::{
     symbol::Symbol,
     ty::Type,
 };
+use codespan_reporting::diagnostic::Severity;
 
 /// A builder is used to enter a sequence of modules in acyclic dependency order into the model. The
 /// builder maintains the incremental state of this process, such that the various tables
@@ -31,6 +32,8 @@ use crate::{
 pub(crate) struct ModelBuilder<'env> {
     /// The global environment we are building.
     pub env: &'env mut GlobalEnv,
+    /// Set of known named addresses provided by the compiler
+    pub named_address_mapping: BTreeMap<String, AddressBytes>,
     /// A symbol table for specification functions. Because of overloading, and entry can
     /// contain multiple functions.
     pub spec_fun_table: BTreeMap<QualifiedSymbol, Vec<SpecFunEntry>>,
@@ -124,9 +127,13 @@ pub(crate) struct ConstEntry {
 
 impl<'env> ModelBuilder<'env> {
     /// Creates a builders.
-    pub fn new(env: &'env mut GlobalEnv) -> Self {
+    pub fn new(
+        env: &'env mut GlobalEnv,
+        named_address_mapping: BTreeMap<String, AddressBytes>,
+    ) -> Self {
         let mut translator = ModelBuilder {
             env,
+            named_address_mapping,
             spec_fun_table: BTreeMap::new(),
             spec_var_table: BTreeMap::new(),
             spec_schema_table: BTreeMap::new(),
@@ -279,6 +286,20 @@ impl<'env> ModelBuilder<'env> {
         assert!(self.const_table.insert(name, entry).is_none());
     }
 
+    pub fn resolve_address(&self, loc: &Loc, addr: &EA::Address) -> AddressBytes {
+        match addr {
+            EA::Address::Anonymous(bytes) => bytes.value,
+            EA::Address::Named(n) => self
+                .named_address_mapping
+                .get(&n.value)
+                .cloned()
+                .unwrap_or_else(|| {
+                    self.error(loc, &format!("Undeclared address `{}`", n));
+                    AddressBytes::DEFAULT_ERROR_BYTES
+                }),
+        }
+    }
+
     /// Looks up a type (struct), reporting an error if it is not found.
     pub fn lookup_type(&self, loc: &Loc, name: &QualifiedSymbol) -> Type {
         self.struct_table
@@ -303,7 +324,8 @@ impl<'env> ModelBuilder<'env> {
             // Warn about unused schema only if the module is a target and schema name
             // does not start with 'UNUSED'
             if module_env.is_target() && !schema_name.starts_with("UNUSED") {
-                self.env.warn(
+                self.env.diag(
+                    Severity::Note,
                     &entry.loc,
                     &format!("unused schema {}", name.display(self.env.symbol_pool())),
                 );
@@ -351,24 +373,22 @@ impl<'env> ModelBuilder<'env> {
     }
 
     /// Adds a spec function to used_spec_funs set.
-    pub fn add_used_spec_fun(&mut self, module_id: ModuleId, spec_fun_id: SpecFunId) {
-        let qid = module_id.qualified(spec_fun_id);
+    pub fn add_used_spec_fun(&mut self, qid: QualifiedId<SpecFunId>) {
         self.env.used_spec_funs.insert(qid);
         self.propagate_move_fun_usage(qid);
     }
 
-    /// Adds an edge from the caller to the callee to the Move fun call graph.
+    /// Adds an edge from the caller to the callee to the Move fun call graph. The callee is
+    /// is instantiated in dependency of the type parameters of the caller.
     pub fn add_edge_to_move_fun_call_graph(
         &mut self,
-        caller_mid: ModuleId,
-        caller_fid: SpecFunId,
-        callee_mid: ModuleId,
-        callee_fid: SpecFunId,
+        caller: QualifiedId<SpecFunId>,
+        callee: QualifiedId<SpecFunId>,
     ) {
         self.move_fun_call_graph
-            .entry(caller_mid.qualified(caller_fid))
-            .or_insert_with(BTreeSet::new)
-            .insert(callee_mid.qualified(callee_fid));
+            .entry(caller)
+            .or_default()
+            .insert(callee);
     }
 
     /// Runs DFS to propagate the usage of Move functions from callers
@@ -390,8 +410,8 @@ impl<'env> ModelBuilder<'env> {
 pub(crate) struct LocalVarEntry {
     pub loc: Loc,
     pub type_: Type,
-    // If this local is associated with an operation, this is set.
+    /// If this local is associated with an operation, this is set.
     pub operation: Option<Operation>,
-    // If this a temporary from Move code, this is it's index.
+    /// If this a temporary from Move code, this is it's index.
     pub temp_index: Option<usize>,
 }

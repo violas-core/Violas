@@ -12,19 +12,22 @@ use crate::{
     symbol::{Symbol, SymbolPool},
     ty::Type,
 };
+use move_binary_format::file_format::CodeOffset;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
     fmt::{Error, Formatter},
 };
-use vm::file_format::CodeOffset;
 
 use crate::{
-    model::{FunId, GlobalEnv, GlobalId, QualifiedId, SchemaId, TypeParameter},
+    exp_rewriter::ExpRewriterFunctions,
+    model::{EnvDisplay, FunId, GlobalEnv, GlobalId, QualifiedInstId, SchemaId, TypeParameter},
     ty::TypeDisplayContext,
 };
+use internment::LocalIntern;
 use itertools::Itertools;
 use once_cell::sync::Lazy;
+use std::{borrow::Borrow, fmt::Debug, hash::Hash, ops::Deref};
 
 // =================================================================================================
 /// # Declarations
@@ -45,8 +48,8 @@ pub struct SpecFunDecl {
     pub params: Vec<(Symbol, Type)>,
     pub context_params: Option<Vec<(Symbol, bool)>>,
     pub result_type: Type,
-    pub used_spec_vars: BTreeSet<QualifiedId<SpecVarId>>,
-    pub used_memory: BTreeSet<QualifiedId<StructId>>,
+    pub used_spec_vars: BTreeSet<QualifiedInstId<SpecVarId>>,
+    pub used_memory: BTreeSet<QualifiedInstId<StructId>>,
     pub uninterpreted: bool,
     pub is_move_fun: bool,
     pub is_native: bool,
@@ -58,8 +61,11 @@ pub struct SpecFunDecl {
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum ConditionKind {
+    LetPost(Symbol),
+    LetPre(Symbol),
     Assert,
     Assume,
+    Axiom,
     Decreases,
     AbortsIf,
     AbortsWith,
@@ -68,30 +74,15 @@ pub enum ConditionKind {
     Emits,
     Ensures,
     Requires,
-    RequiresModule,
     Invariant,
-    InvariantModule,
     InvariantUpdate,
-    VarUpdate(ModuleId, SpecVarId, Vec<Type>),
-    VarPack(ModuleId, SpecVarId, Vec<Type>),
-    VarUnpack(ModuleId, SpecVarId, Vec<Type>),
 }
 
 impl ConditionKind {
-    /// If this is an assignment to a spec var, return it.
-    pub fn get_spec_var_target(&self) -> Option<(ModuleId, SpecVarId, Vec<Type>)> {
-        use ConditionKind::*;
-        if let VarUpdate(mid, vid, tys) | VarPack(mid, vid, tys) | VarUnpack(mid, vid, tys) = self {
-            Some((*mid, *vid, tys.clone()))
-        } else {
-            None
-        }
-    }
-
     /// Returns true of this condition allows the `old(..)` expression.
     pub fn allows_old(&self) -> bool {
         use ConditionKind::*;
-        matches!(self, Emits | Ensures | InvariantUpdate | VarUpdate(..))
+        matches!(self, Emits | Ensures | InvariantUpdate | LetPost(..))
     }
 
     /// Returns true if this condition is allowed on a public function declaration.
@@ -100,13 +91,15 @@ impl ConditionKind {
         matches!(
             self,
             Requires
-                | RequiresModule
                 | AbortsIf
                 | AbortsWith
                 | SucceedsIf
                 | Emits
                 | Ensures
+                | Invariant
                 | Modifies
+                | LetPost(..)
+                | LetPre(..)
         )
     }
 
@@ -116,32 +109,34 @@ impl ConditionKind {
         matches!(
             self,
             Requires
-                | RequiresModule
                 | AbortsIf
                 | AbortsWith
                 | SucceedsIf
                 | Emits
                 | Ensures
+                | Invariant
                 | Modifies
+                | LetPost(..)
+                | LetPre(..)
         )
     }
 
     /// Returns true if this condition is allowed in a function body.
     pub fn allowed_on_fun_impl(&self) -> bool {
         use ConditionKind::*;
-        matches!(self, Assert | Assume | Decreases)
+        matches!(self, Assert | Assume | Decreases | LetPost(..) | LetPre(..))
     }
 
     /// Returns true if this condition is allowed on a struct.
     pub fn allowed_on_struct(&self) -> bool {
         use ConditionKind::*;
-        matches!(self, Invariant | VarPack(..) | VarUnpack(..))
+        matches!(self, Invariant)
     }
 
     /// Returns true if this condition is allowed on a module.
     pub fn allowed_on_module(&self) -> bool {
         use ConditionKind::*;
-        matches!(self, Invariant | InvariantUpdate)
+        matches!(self, Invariant | InvariantUpdate | Axiom)
     }
 }
 
@@ -149,8 +144,11 @@ impl std::fmt::Display for ConditionKind {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         use ConditionKind::*;
         match self {
+            LetPost(sym) => write!(f, "let({:?})", sym),
+            LetPre(sym) => write!(f, "let old({:?})", sym),
             Assert => write!(f, "assert"),
             Assume => write!(f, "assume"),
+            Axiom => write!(f, "axiom"),
             Decreases => write!(f, "decreases"),
             AbortsIf => write!(f, "aborts_if"),
             AbortsWith => write!(f, "aborts_with"),
@@ -159,21 +157,25 @@ impl std::fmt::Display for ConditionKind {
             Emits => write!(f, "emits"),
             Ensures => write!(f, "ensures"),
             Requires => write!(f, "requires"),
-            RequiresModule => write!(f, "requires module"),
             Invariant => write!(f, "invariant"),
-            InvariantModule => write!(f, "invariant module"),
             InvariantUpdate => write!(f, "invariant update"),
-            VarUpdate(..) => write!(f, "invariant update assign"),
-            VarPack(..) => write!(f, "invariant pack assign"),
-            VarUnpack(..) => write!(f, "invariant unpack assign"),
         }
     }
 }
 
-#[derive(Debug, PartialEq, Clone, Copy, Eq)]
+#[derive(Debug, PartialEq, Clone, Copy, Eq, Hash)]
 pub enum QuantKind {
     Forall,
     Exists,
+    Choose,
+    ChooseMin,
+}
+
+impl QuantKind {
+    /// Returns true of this is a choice like Some or Min.
+    pub fn is_choice(self) -> bool {
+        matches!(self, QuantKind::Choose | QuantKind::ChooseMin)
+    }
 }
 
 impl std::fmt::Display for QuantKind {
@@ -182,6 +184,8 @@ impl std::fmt::Display for QuantKind {
         match self {
             Forall => write!(f, "forall"),
             Exists => write!(f, "exists"),
+            Choose => write!(f, "choose"),
+            ChooseMin => write!(f, "choose min"),
         }
     }
 }
@@ -287,8 +291,8 @@ pub struct GlobalInvariant {
     pub id: GlobalId,
     pub loc: Loc,
     pub kind: ConditionKind,
-    pub mem_usage: BTreeSet<QualifiedId<StructId>>,
-    pub spec_var_usage: BTreeSet<QualifiedId<SpecVarId>>,
+    pub mem_usage: BTreeSet<QualifiedInstId<StructId>>,
+    pub spec_var_usage: BTreeSet<QualifiedInstId<SpecVarId>>,
     pub declaring_module: ModuleId,
     pub properties: PropertyBag,
     pub cond: Exp,
@@ -300,7 +304,7 @@ pub struct GlobalInvariant {
 /// A type alias for temporaries. Those are locals used in bytecode.
 pub type TempIndex = usize;
 
-/// The type of expressions.
+/// The type of expression data.
 ///
 /// Expression layout follows the following design principles:
 ///
@@ -310,8 +314,8 @@ pub type TempIndex = usize;
 /// - Each expression has a unique node id assigned. This id allows to build attribute tables
 ///   for additional information, like expression type and source location. The id is globally
 ///   unique.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Exp {
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ExpData {
     /// Represents an invalid expression. This is used as a stub for algorithms which
     /// generate expressions but can fail with multiple errors, like a translator from
     /// some other source into expressions. Consumers of expressions should assume this
@@ -330,28 +334,91 @@ pub enum Exp {
     /// (including operators, constants, ...) as well as user functions.
     Call(NodeId, Operation, Vec<Exp>),
     /// Represents an invocation of a function value, as a lambda.
-    Invoke(NodeId, Box<Exp>, Vec<Exp>),
+    Invoke(NodeId, Exp, Vec<Exp>),
     /// Represents a lambda.
-    Lambda(NodeId, Vec<LocalVarDecl>, Box<Exp>),
+    Lambda(NodeId, Vec<LocalVarDecl>, Exp),
     /// Represents a quantified formula over multiple variables and ranges.
     Quant(
         NodeId,
         QuantKind,
+        /// Ranges
         Vec<(LocalVarDecl, Exp)>,
+        /// Triggers
         Vec<Vec<Exp>>,
-        Option<Box<Exp>>,
-        Box<Exp>,
+        /// Optional `where` clause
+        Option<Exp>,
+        // Body
+        Exp,
     ),
     /// Represents a block which contains a set of variable bindings and an expression
     /// for which those are defined.
-    Block(NodeId, Vec<LocalVarDecl>, Box<Exp>),
+    Block(NodeId, Vec<LocalVarDecl>, Exp),
     /// Represents a conditional.
-    IfElse(NodeId, Box<Exp>, Box<Exp>, Box<Exp>),
+    IfElse(NodeId, Exp, Exp, Exp),
 }
 
-impl Exp {
+/// An internalized expression. We do use a wrapper around the underlying internement implementation
+/// variant to ensure a unique API (LocalIntern and ArcIntern e.g. differ in the presence of
+/// the Copy trait, and by wrapping we effectively remove the Copy from LocalIntern).
+#[derive(PartialEq, Eq, Hash, Clone)]
+pub struct Exp {
+    data: LocalIntern<ExpData>,
+}
+
+impl AsRef<ExpData> for Exp {
+    fn as_ref(&self) -> &ExpData {
+        self.data.as_ref()
+    }
+}
+
+impl Borrow<ExpData> for Exp {
+    fn borrow(&self) -> &ExpData {
+        self.as_ref()
+    }
+}
+
+impl Deref for Exp {
+    type Target = ExpData;
+    fn deref(&self) -> &Self::Target {
+        self.as_ref()
+    }
+}
+
+impl Debug for Exp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self.data)
+    }
+}
+
+impl From<ExpData> for Exp {
+    fn from(data: ExpData) -> Self {
+        Exp {
+            data: LocalIntern::new(data),
+        }
+    }
+}
+
+impl From<Exp> for ExpData {
+    /// Takes an expression and returns expression data.
+    fn from(exp: Exp) -> ExpData {
+        exp.as_ref().to_owned()
+    }
+}
+
+impl ExpData {
+    /// Version of `into` which does not require type annotations.
+    pub fn into_exp(self) -> Exp {
+        self.into()
+    }
+
+    pub fn ptr_eq(e1: &Exp, e2: &Exp) -> bool {
+        // For the internement based implementations, we can just test equality. Other
+        // representations may need different measures.
+        e1 == e2
+    }
+
     pub fn node_id(&self) -> NodeId {
-        use Exp::*;
+        use ExpData::*;
         match self {
             Invalid(node_id)
             | Value(node_id, ..)
@@ -369,7 +436,7 @@ impl Exp {
 
     pub fn call_args(&self) -> &[Exp] {
         match self {
-            Exp::Call(_, _, args) => args,
+            ExpData::Call(_, _, args) => args,
             _ => panic!("function must be called on Exp::Call(...)"),
         }
     }
@@ -382,12 +449,12 @@ impl Exp {
         ids
     }
 
-    /// Returns the locals used in this expression.
-    pub fn locals(&self) -> BTreeSet<Symbol> {
-        let mut locals = BTreeSet::new();
+    /// Returns the free local variables, inclusive their types, used in this expression.
+    pub fn free_vars(&self, env: &GlobalEnv) -> BTreeMap<Symbol, Type> {
+        let mut vars = BTreeMap::new();
         let mut shadowed = vec![]; // Should be multiset but don't have this
-        let mut visitor = |up: bool, e: &Exp| {
-            use Exp::*;
+        let mut visitor = |up: bool, e: &ExpData| {
+            use ExpData::*;
             let decls = match e {
                 Lambda(_, decls, _) | Block(_, decls, _) => {
                     decls.iter().map(|d| d.name).collect_vec()
@@ -405,23 +472,56 @@ impl Exp {
                         shadowed.remove(pos);
                     }
                 }
-                if let LocalVar(_, sym) = e {
+                if let LocalVar(id, sym) = e {
                     if !shadowed.contains(sym) {
-                        locals.insert(*sym);
+                        vars.insert(*sym, env.get_node_type(*id));
                     }
                 }
             }
         };
         self.visit_pre_post(&mut visitor);
-        locals
+        vars
+    }
+
+    /// Returns the used memory of this expression.
+    pub fn used_memory(
+        &self,
+        env: &GlobalEnv,
+    ) -> BTreeSet<(QualifiedInstId<StructId>, Option<MemoryLabel>)> {
+        let mut result = BTreeSet::new();
+        let mut visitor = |e: &ExpData| {
+            use ExpData::*;
+            use Operation::*;
+            match e {
+                Call(id, Exists(label), _) | Call(id, Global(label), _) => {
+                    let inst = &env.get_node_instantiation(*id);
+                    let (mid, sid, sinst) = inst[0].require_struct();
+                    result.insert((mid.qualified_inst(sid, sinst.to_owned()), label.to_owned()));
+                }
+                Call(id, Function(mid, fid, labels), _) => {
+                    let inst = &env.get_node_instantiation(*id);
+                    let module = env.get_module(*mid);
+                    let fun = module.get_spec_fun(*fid);
+                    for (i, mem) in fun.used_memory.iter().enumerate() {
+                        result.insert((
+                            mem.to_owned().instantiate(inst),
+                            labels.as_ref().map(|l| l[i]),
+                        ));
+                    }
+                }
+                _ => {}
+            }
+        };
+        self.visit(&mut visitor);
+        result
     }
 
     /// Returns the temporaries used in this expression.
-    pub fn temporaries(&self) -> BTreeSet<TempIndex> {
-        let mut temps = BTreeSet::new();
-        let mut visitor = |e: &Exp| {
-            if let Exp::Temporary(_, idx) = e {
-                temps.insert(*idx);
+    pub fn temporaries(&self, env: &GlobalEnv) -> BTreeMap<TempIndex, Type> {
+        let mut temps = BTreeMap::new();
+        let mut visitor = |e: &ExpData| {
+            if let ExpData::Temporary(id, idx) = e {
+                temps.insert(*idx, env.get_node_type(*id));
             }
         };
         self.visit(&mut visitor);
@@ -431,7 +531,7 @@ impl Exp {
     /// Visits expression, calling visitor on each sub-expression, depth first.
     pub fn visit<F>(&self, visitor: &mut F)
     where
-        F: FnMut(&Exp),
+        F: FnMut(&ExpData),
     {
         self.visit_pre_post(&mut |up, e| {
             if up {
@@ -440,15 +540,30 @@ impl Exp {
         });
     }
 
+    pub fn any<P>(&self, predicate: &mut P) -> bool
+    where
+        P: FnMut(&ExpData) -> bool,
+    {
+        let mut found = false;
+        self.visit(&mut |e| {
+            if !found {
+                // This still continues to visit after a match is found, may want to
+                // optimize if it becomes an issue.
+                found = predicate(e)
+            }
+        });
+        found
+    }
+
     /// Visits expression, calling visitor on each sub-expression. `visitor(false, ..)` will
     /// be called before descending into expression, and `visitor(true, ..)` after. Notice
     /// we use one function instead of two so a lambda can be passed which encapsulates mutable
     /// references.
     pub fn visit_pre_post<F>(&self, visitor: &mut F)
     where
-        F: FnMut(bool, &Exp),
+        F: FnMut(bool, &ExpData),
     {
-        use Exp::*;
+        use ExpData::*;
         visitor(false, self);
         match self {
             Call(_, _, args) => {
@@ -495,88 +610,78 @@ impl Exp {
         visitor(true, self);
     }
 
-    /// Rewrites this expression based on the rewriter function. In
-    /// `let (is_rewritten, exp) = rewriter(exp)`, the function should return true if
-    /// the expression was rewritten, false and the original expression if not. In case the
-    /// expression is rewritten, the expression tree will not further be traversed and the
-    /// rewritten expression immediately returned. Otherwise, the function will recurse and
-    /// rewrite sub-expressions.
-    pub fn rewrite<F>(self, rewriter: &mut F) -> Exp
+    /// Rewrites this expression and sub-expression based on the rewriter function. The
+    /// function returns `Ok(e)` if the expression is rewritten, and passes back ownership
+    /// using `Err(e)` if the expression stays unchanged. This function stops traversing
+    ///on `Ok(e)` and descents into sub-expressions on `Err(e)`.
+    pub fn rewrite<F>(exp: Exp, exp_rewriter: &mut F) -> Exp
     where
-        F: FnMut(Exp) -> (bool, Exp),
+        F: FnMut(Exp) -> Result<Exp, Exp>,
     {
-        use Exp::*;
-        let (is_rewritten, exp) = rewriter(self);
-        if is_rewritten {
-            return exp;
+        ExpRewriter {
+            exp_rewriter,
+            node_rewriter: &mut |_| None,
         }
+        .rewrite_exp(exp)
+    }
 
-        let rewrite_vec = |rewriter: &mut F, exps: Vec<Exp>| -> Vec<Exp> {
-            exps.into_iter().map(|e| e.rewrite(rewriter)).collect()
-        };
-        let rewrite_box =
-            |rewriter: &mut F, exp: Box<Exp>| -> Box<Exp> { Box::new(exp.rewrite(rewriter)) };
-        let rewrite_decl = |rewriter: &mut F, d: LocalVarDecl| LocalVarDecl {
-            id: d.id,
-            name: d.name,
-            binding: d.binding.map(|e| e.rewrite(rewriter)),
-        };
-        let rewrite_decls = |rewriter: &mut F, decls: Vec<LocalVarDecl>| -> Vec<LocalVarDecl> {
-            decls
-                .into_iter()
-                .map(|d| rewrite_decl(rewriter, d))
-                .collect()
-        };
-        let rewrite_quant_decls =
-            |rewriter: &mut F, decls: Vec<(LocalVarDecl, Exp)>| -> Vec<(LocalVarDecl, Exp)> {
-                decls
-                    .into_iter()
-                    .map(|(d, r)| (rewrite_decl(rewriter, d), r.rewrite(rewriter)))
-                    .collect()
-            };
+    /// Rewrites the node ids in the expression. This is used to rewrite types of
+    /// expressions.
+    pub fn rewrite_node_id<F>(exp: Exp, node_rewriter: &mut F) -> Exp
+    where
+        F: FnMut(NodeId) -> Option<NodeId>,
+    {
+        ExpRewriter {
+            exp_rewriter: &mut |e| Err(e),
+            node_rewriter,
+        }
+        .rewrite_exp(exp)
+    }
 
-        match exp {
-            Call(id, oper, args) => Call(id, oper, rewrite_vec(rewriter, args)),
-            Invoke(id, target, args) => Invoke(
-                id,
-                rewrite_box(rewriter, target),
-                rewrite_vec(rewriter, args),
-            ),
-            Lambda(id, decls, body) => Lambda(
-                id,
-                rewrite_decls(rewriter, decls),
-                rewrite_box(rewriter, body),
-            ),
-            Quant(id, kind, decls, triggers, condition, body) => Quant(
-                id,
-                kind,
-                rewrite_quant_decls(rewriter, decls),
-                triggers
-                    .into_iter()
-                    .map(|t| t.into_iter().map(|e| e.rewrite(rewriter)).collect())
-                    .collect(),
-                condition.map(|e| rewrite_box(rewriter, e)),
-                rewrite_box(rewriter, body),
-            ),
-            Block(id, decls, body) => Block(
-                id,
-                rewrite_decls(rewriter, decls),
-                rewrite_box(rewriter, body),
-            ),
-            IfElse(id, c, t, e) => IfElse(
-                id,
-                rewrite_box(rewriter, c),
-                rewrite_box(rewriter, t),
-                rewrite_box(rewriter, e),
-            ),
-            _ => exp,
+    /// Rewrites the expression and for unchanged sub-expressions, the node ids in the expression
+    pub fn rewrite_exp_and_node_id<F, G>(
+        exp: Exp,
+        exp_rewriter: &mut F,
+        node_rewriter: &mut G,
+    ) -> Exp
+    where
+        F: FnMut(Exp) -> Result<Exp, Exp>,
+        G: FnMut(NodeId) -> Option<NodeId>,
+    {
+        ExpRewriter {
+            exp_rewriter,
+            node_rewriter,
+        }
+        .rewrite_exp(exp)
+    }
+
+    /// A function which can be used for `Exp::rewrite_node_id` to instantiate types in
+    /// an expression based on a type parameter instantiation.
+    pub fn instantiate_node(env: &GlobalEnv, id: NodeId, targs: &[Type]) -> Option<NodeId> {
+        if targs.is_empty() {
+            // shortcut
+            return None;
+        }
+        let node_ty = env.get_node_type(id);
+        let new_node_ty = node_ty.instantiate(targs);
+        let node_inst = env.get_node_instantiation_opt(id);
+        let new_node_inst = node_inst.clone().map(|i| Type::instantiate_vec(i, targs));
+        if node_ty != new_node_ty || node_inst != new_node_inst {
+            let loc = env.get_node_loc(id);
+            let new_id = env.new_node(loc, new_node_ty);
+            if let Some(inst) = new_node_inst {
+                env.set_node_instantiation(new_id, inst);
+            }
+            Some(new_id)
+        } else {
+            None
         }
     }
 
     /// Returns the set of module ids used by this expression.
     pub fn module_usage(&self, usage: &mut BTreeSet<ModuleId>) {
         self.visit(&mut |e| match e {
-            Exp::Call(_, oper, _) => {
+            ExpData::Call(_, oper, _) => {
                 use Operation::*;
                 match oper {
                     Function(mid, ..) | Pack(mid, ..) | Select(mid, ..) | UpdateField(mid, ..) => {
@@ -585,7 +690,7 @@ impl Exp {
                     _ => {}
                 }
             }
-            Exp::SpecVar(_, mid, ..) => {
+            ExpData::SpecVar(_, mid, ..) => {
                 usage.insert(*mid);
             }
             _ => {}
@@ -593,7 +698,25 @@ impl Exp {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+struct ExpRewriter<'a> {
+    exp_rewriter: &'a mut dyn FnMut(Exp) -> Result<Exp, Exp>,
+    node_rewriter: &'a mut dyn FnMut(NodeId) -> Option<NodeId>,
+}
+
+impl<'a> ExpRewriterFunctions for ExpRewriter<'a> {
+    fn rewrite_exp(&mut self, exp: Exp) -> Exp {
+        match (*self.exp_rewriter)(exp) {
+            Ok(new_exp) => new_exp,
+            Err(old_exp) => self.rewrite_exp_descent(old_exp),
+        }
+    }
+
+    fn rewrite_node_id(&mut self, id: NodeId) -> Option<NodeId> {
+        (*self.node_rewriter)(id)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Operation {
     Function(ModuleId, SpecFunId, Option<Vec<MemoryLabel>>),
     Pack(ModuleId, StructId),
@@ -640,10 +763,15 @@ pub enum Operation {
     CanModify,
     Old,
     Trace,
-    Empty,
-    Single,
-    Update,
-    Concat,
+    EmptyVec,
+    SingleVec,
+    UpdateVec,
+    ConcatVec,
+    IndexOfVec,
+    ContainsVec,
+    InRangeRange,
+    InRangeVec,
+    RangeVec,
     MaxU8,
     MaxU64,
     MaxU128,
@@ -666,14 +794,14 @@ pub enum Operation {
 /// A label used for referring to a specific memory in Global, Exists, and SpecVar expressions.
 pub type MemoryLabel = GlobalId;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct LocalVarDecl {
     pub id: NodeId,
     pub name: Symbol,
     pub binding: Option<Exp>,
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone, Hash)]
 pub enum Value {
     Address(BigUint),
     Number(BigInt),
@@ -697,8 +825,8 @@ impl fmt::Display for Value {
 /// # Purity of Expressions
 
 impl Operation {
-    /// Determines whether this operation is pure (does not depend on global state)
-    pub fn is_pure<F>(&self, check_pure: &F) -> bool
+    /// Determines whether this operation depends on global memory
+    pub fn uses_memory<F>(&self, check_pure: &F) -> bool
     where
         F: Fn(ModuleId, SpecFunId) -> bool,
     {
@@ -711,21 +839,55 @@ impl Operation {
     }
 }
 
-impl Exp {
-    /// Determines whether this expression is pure (does not depend on global state)
-    pub fn is_pure<F>(&self, check_pure: &F) -> bool
+impl ExpData {
+    /// Determines whether this expression depends on global memory
+    pub fn uses_memory<F>(&self, check_pure: &F) -> bool
     where
         F: Fn(ModuleId, SpecFunId) -> bool,
     {
-        use Exp::*;
-        let mut is_pure = true;
-        self.visit(&mut |exp: &Exp| match exp {
+        use ExpData::*;
+        let mut no_use = true;
+        self.visit(&mut |exp: &ExpData| match exp {
             Call(_, oper, _) => {
-                is_pure = is_pure && oper.is_pure(check_pure);
+                no_use = no_use && oper.uses_memory(check_pure);
             }
-            SpecVar(..) => is_pure = false,
+            SpecVar(..) => no_use = false,
             _ => {}
         });
+        no_use
+    }
+}
+
+impl ExpData {
+    /// Checks whether the expression is pure, i.e. does not depend on memory or mutable
+    /// variables.
+    pub fn is_pure(&self, env: &GlobalEnv) -> bool {
+        let mut is_pure = true;
+        let mut visitor = |e: &ExpData| {
+            use ExpData::*;
+            use Operation::*;
+            match e {
+                Temporary(id, _) => {
+                    if env.get_node_type(*id).is_mutable_reference() {
+                        is_pure = false;
+                    }
+                }
+                Call(_, oper, _) => match oper {
+                    Exists(..) | Global(..) => is_pure = false,
+                    Function(mid, fid, _) => {
+                        let module = env.get_module(*mid);
+                        let fun = module.get_spec_fun(*fid);
+                        if !fun.used_memory.is_empty() || !fun.used_spec_vars.is_empty() {
+                            is_pure = false;
+                        }
+                    }
+                    _ => {}
+                },
+                SpecVar(..) => is_pure = false,
+                _ => {}
+            }
+        };
+        self.visit(&mut visitor);
         is_pure
     }
 }
@@ -740,6 +902,13 @@ pub struct ModuleName(BigUint, Symbol);
 impl ModuleName {
     pub fn new(addr: BigUint, name: Symbol) -> ModuleName {
         ModuleName(addr, name)
+    }
+
+    pub fn from_address_bytes_and_name(
+        addr: move_lang::shared::AddressBytes,
+        name: Symbol,
+    ) -> ModuleName {
+        ModuleName(BigUint::from_bytes_be(&addr.into_bytes()), name)
     }
 
     pub fn from_str(mut addr: &str, name: Symbol) -> ModuleName {
@@ -874,7 +1043,7 @@ impl<'a> fmt::Display for QualifiedSymbolDisplay<'a> {
     }
 }
 
-impl Exp {
+impl ExpData {
     /// Creates a display of an expression which can be used in formatting.
     pub fn display<'a>(&'a self, env: &'a GlobalEnv) -> ExpDisplay<'a> {
         ExpDisplay { env, exp: self }
@@ -884,12 +1053,12 @@ impl Exp {
 /// Helper type for expression display.
 pub struct ExpDisplay<'a> {
     env: &'a GlobalEnv,
-    exp: &'a Exp,
+    exp: &'a ExpData,
 }
 
 impl<'a> fmt::Display for ExpDisplay<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
-        use Exp::*;
+        use ExpData::*;
         match self.exp {
             Invalid(_) => write!(f, "*invalid*"),
             Value(_, v) => write!(f, "{}", v),
@@ -1110,5 +1279,50 @@ impl<'a> OperationDisplay<'a> {
 impl fmt::Display for MemoryLabel {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
         write!(f, "@{}", self.as_usize())
+    }
+}
+
+impl<'a> fmt::Display for EnvDisplay<'a, Condition> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match &self.val.kind {
+            ConditionKind::LetPre(name) => write!(
+                f,
+                "let {} = {};",
+                name.display(self.env.symbol_pool()),
+                self.val.exp.display(self.env)
+            )?,
+            ConditionKind::LetPost(name) => write!(
+                f,
+                "let post {} = {};",
+                name.display(self.env.symbol_pool()),
+                self.val.exp.display(self.env)
+            )?,
+            ConditionKind::Emits => {
+                let exps = self.val.all_exps().collect_vec();
+                write!(
+                    f,
+                    "emit {} to {}",
+                    exps[0].display(self.env),
+                    exps[1].display(self.env)
+                )?;
+                if exps.len() > 2 {
+                    write!(f, "if {}", exps[2].display(self.env))?;
+                }
+                write!(f, ";")?
+            }
+            _ => write!(f, "{} {};", self.val.kind, self.val.exp.display(self.env))?,
+        }
+        Ok(())
+    }
+}
+
+impl<'a> fmt::Display for EnvDisplay<'a, Spec> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        writeln!(f, "spec {{")?;
+        for cond in &self.val.conditions {
+            writeln!(f, "  {}", self.env.display(cond))?
+        }
+        writeln!(f, "}}")?;
+        Ok(())
     }
 }

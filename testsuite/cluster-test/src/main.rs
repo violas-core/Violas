@@ -21,15 +21,16 @@ use cluster_test::{
     cluster_swarm::{cluster_swarm_kube::ClusterSwarmKube, ClusterSwarm},
     experiments::{get_experiment, Context, Experiment},
     github::GitHub,
-    health::{DebugPortLogWorker, HealthCheckRunner, LogTail, PrintFailures, TraceTail},
+    health::{DebugPortLogWorker, HealthCheckRunner, LogTail, PrintFailures},
     instance::Instance,
     prometheus::Prometheus,
     report::SuiteReport,
     slack::SlackClient,
     suite::ExperimentSuite,
-    tx_emitter::{AccountData, EmitJobRequest, EmitThreadParams, TxEmitter},
+    tx_emitter::{EmitJobRequest, EmitThreadParams, TxEmitter},
 };
 use diem_config::config::DEFAULT_JSON_RPC_PORT;
+use diem_sdk::types::LocalAccount;
 use futures::{
     future::{join_all, FutureExt},
     select,
@@ -132,7 +133,7 @@ pub async fn main() {
         return;
     } else if args.health_check && args.swarm {
         let util = BasicSwarmUtil::setup(&args);
-        let logs = DebugPortLogWorker::spawn_new(&util.cluster).0;
+        let logs = DebugPortLogWorker::spawn_new(&util.cluster);
         let mut health_check_runner = HealthCheckRunner::new_all(util.cluster);
         let duration = Duration::from_secs(args.duration);
         exit_on_error(run_health_check(&logs, &mut health_check_runner, duration).await);
@@ -266,7 +267,6 @@ struct BasicSwarmUtil {
 
 struct ClusterTestRunner {
     logs: LogTail,
-    trace_tail: TraceTail,
     cluster_builder: ClusterBuilder,
     cluster_builder_params: ClusterBuilderParams,
     cluster: Cluster,
@@ -372,7 +372,7 @@ impl BasicSwarmUtil {
 
     pub async fn diag(&self, vasp: bool) -> Result<()> {
         let emitter = TxEmitter::new(&self.cluster, vasp);
-        let mut faucet_account: Option<AccountData> = None;
+        let mut faucet_account: Option<LocalAccount> = None;
         let instances: Vec<_> = self.cluster.validator_and_fullnode_instances().collect();
         for instance in &instances {
             let client = instance.json_rpc_client();
@@ -387,13 +387,13 @@ impl BasicSwarmUtil {
                     format_err!("Failed to get faucet account sequence number: {}", e)
                 })?
             };
-            println!("seq={}", account.sequence_number);
+            println!("seq={}", account.sequence_number());
             if let Some(faucet_account) = &faucet_account {
-                if account.sequence_number != faucet_account.sequence_number {
+                if account.sequence_number() != faucet_account.sequence_number() {
                     bail!(
                         "Loaded sequence number {}, which is different from seen before {}",
-                        account.sequence_number,
-                        faucet_account.sequence_number
+                        account.sequence_number(),
+                        faucet_account.sequence_number()
                     );
                 }
             } else {
@@ -402,7 +402,7 @@ impl BasicSwarmUtil {
         }
         let mut faucet_account =
             faucet_account.expect("There is no faucet account set (not expected)");
-        let faucet_account_address = faucet_account.address;
+        let faucet_account_address = faucet_account.address();
         for instance in &instances {
             print!("Submitting txn through {}...", instance);
             let deadline = emitter
@@ -414,10 +414,10 @@ impl BasicSwarmUtil {
                 )
                 .await
                 .map_err(|e| format_err!("Failed to submit txn through {}: {}", instance, e))?;
-            println!("seq={}", faucet_account.sequence_number);
+            println!("seq={}", faucet_account.sequence_number());
             println!(
                 "Waiting all full nodes to get to seq {}",
-                faucet_account.sequence_number
+                faucet_account.sequence_number()
             );
             loop {
                 let futures = instances.iter().map(|instance| {
@@ -430,7 +430,7 @@ impl BasicSwarmUtil {
                         format_err!("Failed to query sequence number from {}: {}", instance, e)
                     })?;
                     let ip = instance.ip();
-                    let color = if seq != faucet_account.sequence_number {
+                    let color = if seq != faucet_account.sequence_number() {
                         all_good = false;
                         color::Fg(color::Red).to_string()
                     } else {
@@ -493,7 +493,7 @@ impl ClusterTestRunner {
             .await
             .map_err(|e| format_err!("Failed to setup cluster: {}", e))?;
         let log_tail_started = Instant::now();
-        let (logs, trace_tail) = DebugPortLogWorker::spawn_new(&cluster);
+        let logs = DebugPortLogWorker::spawn_new(&cluster);
         let log_tail_startup_time = Instant::now() - log_tail_started;
         info!(
             "Log tail thread started in {} ms",
@@ -528,7 +528,6 @@ impl ClusterTestRunner {
             };
         Ok(Self {
             logs,
-            trace_tail,
             cluster_builder,
             cluster_builder_params,
             cluster,
@@ -706,7 +705,6 @@ impl ClusterTestRunner {
         let affected_validators = experiment.affected_validators();
         let mut context = Context::new(
             &mut self.tx_emitter,
-            &mut self.trace_tail,
             &self.prometheus,
             &mut self.cluster_builder,
             &self.cluster_builder_params,

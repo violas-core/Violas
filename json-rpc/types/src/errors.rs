@@ -9,6 +9,8 @@ use diem_types::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::Method;
+
 /// list of server internal errors
 pub static INTERNAL_ERRORS: &[i16; 7] = &[
     ServerCode::DefaultServerError as i16,
@@ -92,6 +94,12 @@ impl From<anyhow::Error> for JsonRpcError {
     }
 }
 
+impl From<bcs::Error> for JsonRpcError {
+    fn from(err: bcs::Error) -> Self {
+        JsonRpcError::internal_error(err.to_string())
+    }
+}
+
 impl JsonRpcError {
     pub fn serialize(self) -> Value {
         serde_json::to_value(self).unwrap_or(Value::Null)
@@ -125,11 +133,11 @@ impl JsonRpcError {
         }
     }
 
-    pub fn invalid_params(data: Option<ErrorData>) -> Self {
+    pub fn invalid_params(method: Method) -> Self {
         Self {
             code: InvalidRequestCode::InvalidParams as i16,
-            message: "Invalid params".to_string(),
-            data,
+            message: format!("Invalid params for method '{}'", method.as_str()),
+            data: None,
         }
     }
 
@@ -141,13 +149,18 @@ impl JsonRpcError {
         }
     }
 
-    pub fn invalid_param(index: usize, name: &str, type_info: &str) -> Self {
+    pub fn invalid_param(msg: &str) -> Self {
         Self {
             code: InvalidRequestCode::InvalidParams as i16,
-            message: format!(
-                "Invalid param {}(params[{}]): should be {}",
-                name, index, type_info
-            ),
+            message: format!("Invalid param {}", msg),
+            data: None,
+        }
+    }
+
+    pub fn invalid_params_from_method(method: Method) -> Self {
+        Self {
+            code: InvalidRequestCode::InvalidParams as i16,
+            message: format!("Invalid params for method '{}'", method.as_str()),
             data: None,
         }
     }

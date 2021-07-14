@@ -3,15 +3,12 @@
 
 use crate::{
     errors::*,
-    expansion::ast::AbilitySet,
+    expansion::ast::{AbilitySet, ModuleIdent},
     naming::ast::{
         self as N, BuiltinTypeName_, FunctionSignature, StructDefinition, TParam, TParamID, TVar,
         Type, TypeName, TypeName_, Type_,
     },
-    parser::ast::{
-        Ability_, ConstantName, Field, FunctionName, FunctionVisibility, ModuleIdent, StructName,
-        Var,
-    },
+    parser::ast::{Ability_, ConstantName, Field, FunctionName, StructName, Var, Visibility},
     shared::{unique_map::UniqueMap, *},
     FullyCompiledProgram,
 };
@@ -46,7 +43,7 @@ pub type TParamSubst = HashMap<TParamID, Type>;
 
 pub struct FunctionInfo {
     pub defined_loc: Loc,
-    pub visibility: FunctionVisibility,
+    pub visibility: Visibility,
     pub signature: FunctionSignature,
     pub acquires: BTreeMap<StructName, Loc>,
 }
@@ -71,8 +68,9 @@ enum LoopInfo_ {
     BreakType(Box<Type>),
 }
 
-pub struct Context {
+pub struct Context<'env> {
     pub modules: UniqueMap<ModuleIdent, ModuleInfo>,
+    pub env: &'env mut CompilationEnv,
 
     pub current_module: Option<ModuleIdent>,
     pub current_function: Option<FunctionName>,
@@ -84,15 +82,13 @@ pub struct Context {
     pub constraints: Constraints,
 
     loop_info: LoopInfo,
-
-    errors: Errors,
 }
 
-impl Context {
+impl<'env> Context<'env> {
     pub fn new(
+        env: &'env mut CompilationEnv,
         pre_compiled_lib: Option<&FullyCompiledProgram>,
         prog: &N::Program,
-        errors: Errors,
     ) -> Self {
         let all_modules = prog.modules.key_cloned_iter().chain(
             pre_compiled_lib
@@ -119,7 +115,7 @@ impl Context {
                 signature: cdef.signature.clone(),
             });
             let minfo = ModuleInfo {
-                friends: mdef.friends.clone(),
+                friends: mdef.friends.ref_map(|_, friend| friend.loc),
                 structs,
                 functions,
                 constants,
@@ -134,10 +130,10 @@ impl Context {
             current_script_constants: None,
             return_type: None,
             constraints: vec![],
-            errors,
             locals: UniqueMap::new(),
             loop_info: LoopInfo(LoopInfo_::NotInLoop),
             modules,
+            env,
         }
     }
 
@@ -159,19 +155,6 @@ impl Context {
             defined_loc: cname.loc(),
             signature: cdef.signature.clone(),
         }));
-    }
-
-    pub fn error(&mut self, e: Vec<(Loc, impl Into<String>)>) {
-        self.errors
-            .push(e.into_iter().map(|(loc, msg)| (loc, msg.into())).collect())
-    }
-
-    pub fn get_errors(self) -> Errors {
-        self.errors
-    }
-
-    pub fn has_errors(&self) -> bool {
-        !self.errors.is_empty()
     }
 
     pub fn error_type(&mut self, loc: Loc) -> Type {
@@ -262,7 +245,7 @@ impl Context {
     pub fn get_local(&mut self, loc: Loc, verb: &str, var: &Var) -> Type {
         match self.get_local_(var) {
             None => {
-                self.error(vec![(
+                self.env.add_error(vec![(
                     loc,
                     format!("Invalid {}. Unbound local '{}'", verb, var),
                 )]);
@@ -320,10 +303,8 @@ impl Context {
             (Some(current_m), Some(current_f)) => {
                 let current_finfo = self.function_info(current_m, current_f);
                 match &current_finfo.visibility {
-                    FunctionVisibility::Public(_)
-                    | FunctionVisibility::Friend(_)
-                    | FunctionVisibility::Internal => false,
-                    FunctionVisibility::Script(_) => true,
+                    Visibility::Public(_) | Visibility::Friend(_) | Visibility::Internal => false,
+                    Visibility::Script(_) => true,
                 }
             }
         }
@@ -711,7 +692,7 @@ pub fn make_field_type(
     let fields_map = match &sdef.fields {
         N::StructFields::Native(nloc) => {
             let nloc = *nloc;
-            context.error(vec![
+            context.env.add_error(vec![
                 (
                     loc,
                     format!("Unbound field '{}' for native struct '{}::{}'", field, m, n),
@@ -724,7 +705,7 @@ pub fn make_field_type(
     };
     match fields_map.get(field).cloned() {
         None => {
-            context.error(vec![(
+            context.env.add_error(vec![(
                 loc,
                 format!("Unbound field '{}' in '{}::{}'", field, m, n),
             )]);
@@ -763,7 +744,9 @@ pub fn make_constant_type(
         };
         let internal_msg = "Constants are internal to their module, and cannot can be accessed \
                             outside of their module";
-        context.error(vec![(loc, msg), (defined_loc, internal_msg.into())]);
+        context
+            .env
+            .add_error(vec![(loc, msg), (defined_loc, internal_msg.into())]);
     }
 
     signature
@@ -831,45 +814,44 @@ pub fn make_function_type(
     };
     let defined_loc = finfo.defined_loc;
     match finfo.visibility {
-        FunctionVisibility::Internal if in_current_module => (),
-        FunctionVisibility::Internal => {
+        Visibility::Internal if in_current_module => (),
+        Visibility::Internal => {
             let internal_msg = format!(
                 "This function is internal to its module. Only '{}', '{}', and '{}' functions can \
                  be called outside of their module",
-                FunctionVisibility::PUBLIC,
-                FunctionVisibility::SCRIPT,
-                FunctionVisibility::FRIEND
+                Visibility::PUBLIC,
+                Visibility::SCRIPT,
+                Visibility::FRIEND
             );
-            context.error(vec![
+            context.env.add_error(vec![
                 (loc, format!("Invalid call to '{}::{}'", m, f)),
                 (defined_loc, internal_msg),
             ])
         }
-        FunctionVisibility::Script(_) if context.is_in_script_context() => (),
-        FunctionVisibility::Script(vis_loc) => {
+        Visibility::Script(_) if context.is_in_script_context() => (),
+        Visibility::Script(vis_loc) => {
             let internal_msg = format!(
                 "This function can only be called from a script context, i.e. a 'script' function \
                  or a '{}' function",
-                FunctionVisibility::SCRIPT
+                Visibility::SCRIPT
             );
-            context.error(vec![
+            context.env.add_error(vec![
                 (loc, format!("Invalid call to '{}::{}'", m, f)),
                 (vis_loc, internal_msg),
             ])
         }
-        FunctionVisibility::Friend(_)
-            if in_current_module || context.current_module_is_a_friend_of(m) => {}
-        FunctionVisibility::Friend(vis_loc) => {
+        Visibility::Friend(_) if in_current_module || context.current_module_is_a_friend_of(m) => {}
+        Visibility::Friend(vis_loc) => {
             let internal_msg = format!(
                 "This function can only be called from a 'friend' of module '{}'",
                 m
             );
-            context.error(vec![
+            context.env.add_error(vec![
                 (loc, format!("Invalid call to '{}::{}'", m, f)),
                 (vis_loc, internal_msg),
             ])
         }
-        FunctionVisibility::Public(_) => (),
+        Visibility::Public(_) => (),
     };
     (defined_loc, ty_args, params, acquires, return_ty)
 }
@@ -966,7 +948,7 @@ fn solve_ability_constraint(
                 format!("'{}' constraint declared here", constraint),
             ));
         }
-        context.error(error)
+        context.env.add_error(error)
     }
 }
 
@@ -1064,7 +1046,7 @@ fn solve_implicitly_copyable_constraint(
     let tloc = ty.loc;
     if !is_implicitly_copyable(&context.subst, &ty) {
         let ty_str = error_format(&ty, &context.subst);
-        context.error(vec![
+        context.env.add_error(vec![
             (loc, format!("{} {}", msg, fix)),
             (
                 tloc,
@@ -1119,7 +1101,7 @@ fn solve_builtin_type_constraint(
                 (loc, format!("Invalid argument to '{}'", op)),
                 (tloc, tmsg()),
             ];
-            context.error(error)
+            context.env.add_error(error)
         }
     }
 }
@@ -1133,7 +1115,7 @@ fn solve_base_type_constraint(context: &mut Context, loc: Loc, msg: String, ty: 
         Unit | Ref(_, _) | Apply(_, sp!(_, Multiple(_)), _) => {
             let tystr = error_format(ty, &context.subst);
             let tmsg = format!("Expected a single non-reference type, but found: {}", tystr);
-            context.error(vec![(loc, msg), (tyloc, tmsg)])
+            context.env.add_error(vec![(loc, msg), (tyloc, tmsg)])
         }
         UnresolvedError | Anything | Param(_) | Apply(_, _, _) => (),
     }
@@ -1151,7 +1133,7 @@ fn solve_single_type_constraint(context: &mut Context, loc: Loc, msg: String, ty
                 "Expected a single type, but found expression list type: {}",
                 tystr
             );
-            context.error(vec![(loc, msg), (tyloc, tmsg)])
+            context.env.add_error(vec![(loc, msg), (tyloc, tmsg)])
         }
         UnresolvedError | Anything | Ref(_, _) | Param(_) | Apply(_, _, _) => (),
     }
@@ -1334,7 +1316,7 @@ fn check_type_argument_arity<F: FnOnce() -> String>(
     let args_len = ty_args.len();
     let arity = tparam_constraints.len();
     if args_len != arity {
-        context.error(vec![(
+        context.env.add_error(vec![(
             loc,
             format!(
                 "Invalid instantiation of '{}'. Expected {} type argument(s) but got {}",

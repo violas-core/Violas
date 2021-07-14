@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{
-    Capability, CryptoStorage, Error, GetResponse, Identity, KVStorage, Policy, PublicKeyResponse,
+    namespaced::NAMESPACE_SEPARATOR, CryptoStorage, Error, GetResponse, KVStorage,
+    PublicKeyResponse,
 };
 use chrono::DateTime;
 use diem_crypto::{
@@ -11,7 +12,7 @@ use diem_crypto::{
 };
 use diem_infallible::RwLock;
 use diem_time_service::{TimeService, TimeServiceTrait};
-use diem_vault_client::{self as vault, Client};
+use diem_vault_client::Client;
 use serde::{de::DeserializeOwned, Serialize};
 use std::{
     collections::HashMap,
@@ -21,7 +22,7 @@ use std::{
 #[cfg(any(test, feature = "testing"))]
 use diem_vault_client::ReadResponse;
 
-const DIEM_DEFAULT: &str = "diem_default";
+const TRANSIT_NAMESPACE_SEPARATOR: &str = "__";
 
 /// VaultStorage utilizes Vault for maintaining encrypted, authenticated data for Diem. This
 /// version currently matches the behavior of OnDiskStorage and InMemoryStorage. In the future,
@@ -33,7 +34,6 @@ const DIEM_DEFAULT: &str = "diem_default";
 pub struct VaultStorage {
     client: Client,
     time_service: TimeService,
-    namespace: Option<String>,
     renew_ttl_secs: Option<u32>,
     next_renewal: AtomicU64,
     use_cas: bool,
@@ -44,7 +44,6 @@ impl VaultStorage {
     pub fn new(
         host: String,
         token: String,
-        namespace: Option<String>,
         certificate: Option<String>,
         renew_ttl_secs: Option<u32>,
         use_cas: bool,
@@ -60,7 +59,6 @@ impl VaultStorage {
                 response_timeout_ms,
             ),
             time_service: TimeService::real(),
-            namespace,
             renew_ttl_secs,
             next_renewal: AtomicU64::new(0),
             use_cas,
@@ -115,25 +113,6 @@ impl VaultStorage {
     }
 
     #[cfg(any(test, feature = "testing"))]
-    fn reset_policies(&self) -> Result<(), Error> {
-        let policies = match self.client().list_policies() {
-            Ok(policies) => policies,
-            Err(diem_vault_client::Error::NotFound(_, _)) => return Ok(()),
-            Err(e) => return Err(e.into()),
-        };
-
-        for policy in policies {
-            // Never touch the default or root policy
-            if policy == "default" || policy == "root" {
-                continue;
-            }
-
-            self.client().delete_policy(&policy)?;
-        }
-        Ok(())
-    }
-
-    #[cfg(any(test, feature = "testing"))]
     pub fn revoke_token_self(&self) -> Result<(), Error> {
         Ok(self.client.revoke_token_self()?)
     }
@@ -146,61 +125,6 @@ impl VaultStorage {
         Ok(self.client().read_ed25519_key(name)?)
     }
 
-    /// Creates a token but uses the namespace for policies
-    pub fn create_token(&self, mut policies: Vec<&str>) -> Result<String, Error> {
-        policies.push(DIEM_DEFAULT);
-        let result = if let Some(ns) = &self.namespace {
-            let policies: Vec<_> = policies.iter().map(|p| format!("{}/{}", ns, p)).collect();
-            self.client()
-                .create_token(policies.iter().map(|p| &**p).collect())?
-        } else {
-            self.client().create_token(policies)?
-        };
-        Ok(result)
-    }
-
-    /// Create a new policy in Vault, see the explanation for Policy for how the data is
-    /// structured. Vault does not distingush a create and update. An update must first read the
-    /// existing policy, amend the contents,  and then be applied via this API.
-    pub fn set_policy(
-        &self,
-        policy_name: &str,
-        engine: &VaultEngine,
-        key: &str,
-        capabilities: &[Capability],
-    ) -> Result<(), Error> {
-        let policy_name = self.name(policy_name, engine);
-
-        let mut vault_policy = self.client().read_policy(&policy_name).unwrap_or_default();
-        let mut core_capabilities = Vec::new();
-        for capability in capabilities {
-            match capability {
-                Capability::Export => {
-                    let export_capability = vec![vault::Capability::Read];
-                    let export_policy = format!("transit/export/signing-key/{}", key);
-                    vault_policy.add_policy(&export_policy, export_capability);
-                }
-                Capability::Read => core_capabilities.push(vault::Capability::Read),
-                Capability::Rotate => {
-                    let rotate_capability = vec![vault::Capability::Update];
-                    let rotate_policy = format!("transit/keys/{}/rotate", key);
-                    vault_policy.add_policy(&rotate_policy, rotate_capability);
-                }
-                Capability::Sign => {
-                    let sign_capability = vec![vault::Capability::Update];
-                    let sign_policy = format!("transit/sign/{}", key);
-                    vault_policy.add_policy(&sign_policy, sign_capability);
-                }
-                Capability::Write => core_capabilities.push(vault::Capability::Update),
-            }
-        }
-
-        let path = format!("{}/{}", engine.to_policy_path(), self.name(key, engine));
-        vault_policy.add_policy(&path, core_capabilities);
-        self.client().set_policy(&policy_name, &vault_policy)?;
-        Ok(())
-    }
-
     fn key_version(&self, name: &str, version: &Ed25519PublicKey) -> Result<u32, Error> {
         let pubkeys = self.client().read_ed25519_key(name)?;
         let pubkey = pubkeys.iter().find(|pubkey| version == &pubkey.value);
@@ -209,38 +133,14 @@ impl VaultStorage {
             .version)
     }
 
-    pub fn set_policies(
-        &self,
-        name: &str,
-        engine: &VaultEngine,
-        policy: &Policy,
-    ) -> Result<(), Error> {
-        for perm in &policy.permissions {
-            match &perm.id {
-                Identity::User(id) => self.set_policy(id, engine, name, &perm.capabilities)?,
-                Identity::Anyone => {
-                    self.set_policy(DIEM_DEFAULT, engine, name, &perm.capabilities)?
-                }
-                Identity::NoOne => (),
-            };
-        }
-        Ok(())
-    }
-
     fn crypto_name(&self, name: &str) -> String {
-        self.name(name, &VaultEngine::Transit)
+        name.replace(NAMESPACE_SEPARATOR, TRANSIT_NAMESPACE_SEPARATOR)
     }
 
-    fn secret_name(&self, name: &str) -> String {
-        self.name(name, &VaultEngine::KVSecrets)
-    }
-
-    fn name(&self, name: &str, engine: &VaultEngine) -> String {
-        if let Some(namespace) = &self.namespace {
-            format!("{}{}{}", namespace, engine.ns_seperator(), name)
-        } else {
-            name.into()
-        }
+    fn unnamespaced<'a>(&self, name: &'a str) -> &'a str {
+        name.rsplit_once(NAMESPACE_SEPARATOR)
+            .map(|(_, key)| key)
+            .unwrap_or(name)
     }
 }
 
@@ -254,7 +154,8 @@ impl KVStorage for VaultStorage {
     }
 
     fn get<T: DeserializeOwned>(&self, key: &str) -> Result<GetResponse<T>, Error> {
-        let secret = self.secret_name(key);
+        let secret = key;
+        let key = self.unnamespaced(key);
         let resp = self.client().read_secret(&secret, key)?;
         let last_update = DateTime::parse_from_rfc3339(&resp.creation_time)?.timestamp() as u64;
         let value: T = serde_json::from_value(resp.value)?;
@@ -265,7 +166,8 @@ impl KVStorage for VaultStorage {
     }
 
     fn set<T: Serialize>(&mut self, key: &str, value: T) -> Result<(), Error> {
-        let secret = self.secret_name(key);
+        let secret = key;
+        let key = self.unnamespaced(key);
         let version = if self.use_cas {
             self.secret_versions.read().get(key).copied()
         } else {
@@ -285,7 +187,7 @@ impl KVStorage for VaultStorage {
         self.secret_versions.write().clear();
         self.reset_kv("")?;
         self.reset_crypto()?;
-        self.reset_policies()
+        Ok(())
     }
 }
 
@@ -405,23 +307,243 @@ impl CryptoStorage for VaultStorage {
     }
 }
 
-pub enum VaultEngine {
-    KVSecrets,
-    Transit,
-}
+#[cfg(test)]
+pub mod policy {
+    use super::*;
+    use crate::{Capability, Identity, Policy};
+    use diem_vault_client as vault;
 
-impl VaultEngine {
-    fn to_policy_path(&self) -> &str {
-        match self {
-            VaultEngine::KVSecrets => "secret/data",
-            VaultEngine::Transit => "transit/keys",
+    const DIEM_DEFAULT: &str = "diem_default";
+
+    /// VaultStorage utilizes Vault for maintaining encrypted, authenticated data for Diem. This
+    /// version currently matches the behavior of OnDiskStorage and InMemoryStorage. In the future,
+    /// Vault will be able to create keys, sign messages, and handle permissions across different
+    /// services. The specific vault service leveraged herein is called KV (Key Value) Secrets Engine -
+    /// Version 2 (https://www.vaultproject.io/api/secret/kv/kv-v2.html). So while Diem Secure Storage
+    /// calls pointers to data keys, Vault has actually a secret that contains multiple key value
+    /// pairs.
+    pub struct VaultPolicy {
+        vault: VaultStorage,
+        namespace: Option<String>,
+    }
+
+    impl VaultPolicy {
+        pub fn new(vault: VaultStorage, namespace: Option<String>) -> Self {
+            Self { vault, namespace }
+        }
+
+        // Made into an accessor so we can get auto-renewal
+        fn client(&self) -> &Client {
+            self.vault.client()
+        }
+
+        fn reset_policies(&self) -> Result<(), Error> {
+            let policies = match self.client().list_policies() {
+                Ok(policies) => policies,
+                Err(diem_vault_client::Error::NotFound(_, _)) => return Ok(()),
+                Err(e) => return Err(e.into()),
+            };
+
+            for policy in policies {
+                // Never touch the default or root policy
+                if policy == "default" || policy == "root" {
+                    continue;
+                }
+
+                self.client().delete_policy(&policy)?;
+            }
+            Ok(())
+        }
+
+        /// Creates a token but uses the namespace for policies
+        pub fn create_token(&self, mut policies: Vec<&str>) -> Result<String, Error> {
+            policies.push(DIEM_DEFAULT);
+            let result = if let Some(ns) = &self.namespace {
+                let policies: Vec<_> = policies.iter().map(|p| format!("{}/{}", ns, p)).collect();
+                self.client()
+                    .create_token(policies.iter().map(|p| &**p).collect())?
+            } else {
+                self.client().create_token(policies)?
+            };
+            Ok(result)
+        }
+
+        /// Create a new policy in Vault, see the explanation for Policy for how the data is
+        /// structured. Vault does not distingush a create and update. An update must first read the
+        /// existing policy, amend the contents,  and then be applied via this API.
+        pub fn set_policy(
+            &self,
+            policy_name: &str,
+            engine: &VaultEngine,
+            key: &str,
+            capabilities: &[Capability],
+        ) -> Result<(), Error> {
+            let policy_name = self.name(policy_name, engine);
+
+            let mut vault_policy = self.client().read_policy(&policy_name).unwrap_or_default();
+            let mut core_capabilities = Vec::new();
+            for capability in capabilities {
+                match capability {
+                    Capability::Export => {
+                        let export_capability = vec![vault::Capability::Read];
+                        let export_policy = format!("transit/export/signing-key/{}", key);
+                        vault_policy.add_policy(&export_policy, export_capability);
+                    }
+                    Capability::Read => core_capabilities.push(vault::Capability::Read),
+                    Capability::Rotate => {
+                        let rotate_capability = vec![vault::Capability::Update];
+                        let rotate_policy = format!("transit/keys/{}/rotate", key);
+                        vault_policy.add_policy(&rotate_policy, rotate_capability);
+                    }
+                    Capability::Sign => {
+                        let sign_capability = vec![vault::Capability::Update];
+                        let sign_policy = format!("transit/sign/{}", key);
+                        vault_policy.add_policy(&sign_policy, sign_capability);
+                    }
+                    Capability::Write => core_capabilities.push(vault::Capability::Update),
+                }
+            }
+
+            let path = format!("{}/{}", engine.to_policy_path(), self.name(key, engine));
+            vault_policy.add_policy(&path, core_capabilities);
+            self.client().set_policy(&policy_name, &vault_policy)?;
+            Ok(())
+        }
+
+        pub fn set_policies(
+            &self,
+            name: &str,
+            engine: &VaultEngine,
+            policy: &Policy,
+        ) -> Result<(), Error> {
+            for perm in &policy.permissions {
+                match &perm.id {
+                    Identity::User(id) => self.set_policy(id, engine, name, &perm.capabilities)?,
+                    Identity::Anyone => {
+                        self.set_policy(DIEM_DEFAULT, engine, name, &perm.capabilities)?
+                    }
+                    Identity::NoOne => (),
+                };
+            }
+            Ok(())
+        }
+
+        fn crypto_name(&self, name: &str) -> String {
+            self.name(name, &VaultEngine::Transit)
+        }
+
+        fn secret_name(&self, name: &str) -> String {
+            self.name(name, &VaultEngine::KVSecrets)
+        }
+
+        fn name(&self, name: &str, engine: &VaultEngine) -> String {
+            if let Some(namespace) = &self.namespace {
+                format!("{}{}{}", namespace, engine.ns_seperator(), name)
+            } else {
+                name.into()
+            }
         }
     }
 
-    fn ns_seperator(&self) -> &str {
-        match self {
-            VaultEngine::KVSecrets => "/",
-            VaultEngine::Transit => "__",
+    impl KVStorage for VaultPolicy {
+        fn available(&self) -> Result<(), Error> {
+            self.vault.available()
+        }
+
+        fn get<T: DeserializeOwned>(&self, key: &str) -> Result<GetResponse<T>, Error> {
+            let secret = self.secret_name(key);
+            self.vault.get(&secret)
+        }
+
+        fn set<T: Serialize>(&mut self, key: &str, value: T) -> Result<(), Error> {
+            let secret = self.secret_name(key);
+            self.vault.set(&secret, value)
+        }
+
+        fn reset_and_clear(&mut self) -> Result<(), Error> {
+            self.vault.reset_and_clear()?;
+            self.reset_policies()
+        }
+    }
+
+    impl CryptoStorage for VaultPolicy {
+        fn create_key(&mut self, name: &str) -> Result<Ed25519PublicKey, Error> {
+            let ns_name = self.crypto_name(name);
+            self.vault.create_key(&ns_name)
+        }
+
+        fn export_private_key(&self, name: &str) -> Result<Ed25519PrivateKey, Error> {
+            let name = self.crypto_name(name);
+            self.vault.export_private_key(&name)
+        }
+
+        fn export_private_key_for_version(
+            &self,
+            name: &str,
+            version: Ed25519PublicKey,
+        ) -> Result<Ed25519PrivateKey, Error> {
+            let name = self.crypto_name(name);
+            self.vault.export_private_key_for_version(&name, version)
+        }
+
+        fn import_private_key(&mut self, name: &str, key: Ed25519PrivateKey) -> Result<(), Error> {
+            let ns_name = self.crypto_name(name);
+            self.vault.import_private_key(&ns_name, key)
+        }
+
+        fn get_public_key(&self, name: &str) -> Result<PublicKeyResponse, Error> {
+            let name = self.crypto_name(name);
+            self.vault.get_public_key(&name)
+        }
+
+        fn get_public_key_previous_version(&self, name: &str) -> Result<Ed25519PublicKey, Error> {
+            let name = self.crypto_name(name);
+            self.vault.get_public_key_previous_version(&name)
+        }
+
+        fn rotate_key(&mut self, name: &str) -> Result<Ed25519PublicKey, Error> {
+            let ns_name = self.crypto_name(name);
+            self.vault.rotate_key(&ns_name)
+        }
+
+        fn sign<T: CryptoHash + Serialize>(
+            &self,
+            name: &str,
+            message: &T,
+        ) -> Result<Ed25519Signature, Error> {
+            let name = self.crypto_name(name);
+            self.vault.sign(&name, message)
+        }
+
+        fn sign_using_version<T: CryptoHash + Serialize>(
+            &self,
+            name: &str,
+            version: Ed25519PublicKey,
+            message: &T,
+        ) -> Result<Ed25519Signature, Error> {
+            let name = self.crypto_name(name);
+            self.vault.sign_using_version(&name, version, message)
+        }
+    }
+
+    pub enum VaultEngine {
+        KVSecrets,
+        Transit,
+    }
+
+    impl VaultEngine {
+        fn to_policy_path(&self) -> &str {
+            match self {
+                VaultEngine::KVSecrets => "secret/data",
+                VaultEngine::Transit => "transit/keys",
+            }
+        }
+
+        fn ns_seperator(&self) -> &str {
+            match self {
+                VaultEngine::KVSecrets => NAMESPACE_SEPARATOR,
+                VaultEngine::Transit => TRANSIT_NAMESPACE_SEPARATOR,
+            }
         }
     }
 }

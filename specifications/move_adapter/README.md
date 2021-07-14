@@ -61,7 +61,6 @@ pub trait VMValidator {
 pub trait StateView {
     fn id(&self) -> StateViewId;
     fn get(&self, access_path: &AccessPath) -> Result<Option<Vec<u8>>>;
-    fn multi_get(&self, access_paths: &[AccessPath]) -> Result<Vec<Option<Vec<u8>>>>;
     fn is_genesis(&self) -> bool;
 }
 
@@ -203,11 +202,15 @@ order specified here.
 The adapter performs the following steps for any transaction, regardless of
 the payload:
 
-* Check if the signature in the `SignedTransaction` is consistent with the
-public key and the `RawTransaction` content. If not, this check fails with an
-`INVALID_SIGNATURE` status code. Note that comparing the transaction's public
-key against the sender account's authorization key is done separately in Move
-code.
+* Check if the sender and secondary signers' signatures in the `SignedTransaction`
+is consistent with their public keys and the `RawTransaction` content. If not,
+this check fails with an `INVALID_SIGNATURE` status code. Note that comparing the
+transaction's public keys against the sender and secondary signer accounts' authorization
+keys is done separately in [Move code](#Prologue-Checks).
+
+* If secondary signers exist, check that all signers including the sender and secondary
+signers have distinct account addresses. If not, validation fails with a
+`SIGNERS_CONTAIN_DUPLICATES` status code.
 
 * Load the `RoleId` resource from the sender's account. If the validation is
 successful, this value is returned as the `governance_role` field of the
@@ -313,6 +316,17 @@ transaction sender's account is frozen. If so, the status code is set to
 * Check that the hash of the transaction's public key (from the `authenticator`
 in the `SignedTransaction`) matches the authentication key in the sender's
 account. If not, validation fails with an `INVALID_AUTH_KEY` status code.
+
+* If secondary signers exist for the transaction, perform the following checks:
+    * Check that the number of secondary signer addresses provided is the same
+      as the number of secondary signer public key hashes provided. If not,
+      validation fails with a `SECONDARY_KEYS_ADDRESSES_COUNT_MISMATCH` status code.
+    * For each secondary signer, check if the secondary signer has an account,
+      and if not, validation fails with a `SENDING_ACCOUNT_DOES_NOT_EXIST` status code.
+    * For each secondary signer, check that the hash of the secondary signer's
+      public key (from the `authenticator` in the `SignedTransaction`) matches
+      the authentication key in the secondary signer's account. If not, validation
+      fails with an `INVALID_AUTH_KEY` status code.
 
 * The transaction sender must be able to pay the maximum transaction fee. The
 maximum fee is the product of the transaction's `max_gas_amount` and
@@ -844,7 +858,7 @@ pub fn publish_module(
     &mut self,
     module: Vec<u8>,
     sender: AccountAddress,
-    cost_strategy: &mut CostStrategy,
+    gas_status: &mut GasStatus,
     log_context: &impl LogContext,
 ) -> VMResult<()>;
 ```
@@ -890,7 +904,7 @@ pub fn execute_script(
     ty_args: Vec<TypeTag>,
     args: Vec<Vec<u8>>,
     senders: Vec<AccountAddress>,
-    cost_strategy: &mut CostStrategy,
+    gas_status: &mut GasStatus,
     log_context: &impl LogContext,
 ) -> VMResult<()>;
 ```
@@ -941,7 +955,7 @@ pub fn execute_script_function(
     ty_args: Vec<TypeTag>,
     args: Vec<Vec<u8>>,
     senders: Vec<AccountAddress>,
-    cost_strategy: &mut CostStrategy,
+    gas_status: &mut GasStatus,
     log_context: &impl LogContext,
 ) -> VMResult<()>;
 ```
@@ -973,7 +987,7 @@ pub fn execute_function(
     function_name: &IdentStr,
     ty_args: Vec<TypeTag>,
     args: Vec<Vec<u8>>,
-    cost_strategy: &mut CostStrategy,
+    gas_status: &mut GasStatus,
     log_context: &impl LogContext,
 ) -> VMResult<()>;
 ```

@@ -9,6 +9,7 @@ use crate::{
     },
     Error, State,
 };
+use diem_json_rpc_types::views::{EventWithProofView, TransactionsWithProofsView};
 use serde_json::Value;
 
 #[derive(Debug)]
@@ -38,6 +39,17 @@ impl<T> Response<T> {
     pub fn into_parts(self) -> (T, State) {
         (self.inner, self.state)
     }
+
+    pub fn and_then<U, E, F>(self, f: F) -> Result<Response<U>, E>
+    where
+        F: FnOnce(T) -> Result<U, E>,
+    {
+        let (inner, state) = self.into_parts();
+        match f(inner) {
+            Ok(new_inner) => Ok(Response::new(new_inner, state)),
+            Err(err) => Err(err),
+        }
+    }
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -55,8 +67,8 @@ pub enum MethodResponse {
 
     GetStateProof(StateProofView),
     GetAccountStateWithProof(AccountStateWithProofView),
-    GetTransactionsWithProofs,
-    GetEventsWithProofs,
+    GetTransactionsWithProofs(Option<TransactionsWithProofsView>),
+    GetEventsWithProofs(Vec<EventWithProofView>),
 }
 
 impl MethodResponse {
@@ -83,8 +95,12 @@ impl MethodResponse {
             Method::GetAccountStateWithProof => {
                 MethodResponse::GetAccountStateWithProof(serde_json::from_value(json)?)
             }
-            Method::GetTransactionsWithProofs => MethodResponse::GetTransactionsWithProofs,
-            Method::GetEventsWithProofs => MethodResponse::GetEventsWithProofs,
+            Method::GetTransactionsWithProofs => {
+                MethodResponse::GetTransactionsWithProofs(serde_json::from_value(json)?)
+            }
+            Method::GetEventsWithProofs => {
+                MethodResponse::GetEventsWithProofs(serde_json::from_value(json)?)
+            }
         };
 
         Ok(response)
@@ -103,8 +119,8 @@ impl MethodResponse {
             MethodResponse::GetNetworkStatus(_) => Method::GetNetworkStatus,
             MethodResponse::GetStateProof(_) => Method::GetStateProof,
             MethodResponse::GetAccountStateWithProof(_) => Method::GetAccountStateWithProof,
-            MethodResponse::GetTransactionsWithProofs => Method::GetTransactionsWithProofs,
-            MethodResponse::GetEventsWithProofs => Method::GetEventsWithProofs,
+            MethodResponse::GetTransactionsWithProofs(_) => Method::GetTransactionsWithProofs,
+            MethodResponse::GetEventsWithProofs(_) => Method::GetEventsWithProofs,
         }
     }
 
@@ -116,6 +132,66 @@ impl MethodResponse {
                 "expected MethodResponse::GetAccount found MethodResponse::{:?}",
                 self.method()
             );
+        }
+    }
+
+    pub fn try_into_get_state_proof(self) -> Result<StateProofView, Error> {
+        match self {
+            MethodResponse::GetStateProof(state_proof) => Ok(state_proof),
+            _ => Err(Error::rpc_response(format!(
+                "expected MethodResponse::GetStateProof found MethodResponse::{:?}",
+                self.method()
+            ))),
+        }
+    }
+
+    pub fn try_into_get_account(self) -> Result<Option<AccountView>, Error> {
+        match self {
+            MethodResponse::GetAccount(account_view) => Ok(account_view),
+            _ => Err(Error::rpc_response(format!(
+                "expected MethodResponse::GetAccount found MethodResponse::{:?}",
+                self.method()
+            ))),
+        }
+    }
+
+    pub fn try_into_get_transactions(self) -> Result<Vec<TransactionView>, Error> {
+        match self {
+            MethodResponse::GetTransactions(txs) => Ok(txs),
+            _ => Err(Error::rpc_response(format!(
+                "expected MethodResponse::GetTransactions found MethodResponse::{:?}",
+                self.method()
+            ))),
+        }
+    }
+
+    pub fn try_into_get_events(self) -> Result<Vec<EventView>, Error> {
+        match self {
+            MethodResponse::GetEvents(events) => Ok(events),
+            _ => Err(Error::rpc_response(format!(
+                "expected MethodResponse::GetEvents found MethodResponse::{:?}",
+                self.method()
+            ))),
+        }
+    }
+
+    pub fn try_into_get_currencies(self) -> Result<Vec<CurrencyInfoView>, Error> {
+        match self {
+            MethodResponse::GetCurrencies(currencies) => Ok(currencies),
+            _ => Err(Error::rpc_response(format!(
+                "expected MethodResponse::GetCurrencies found MethodResponse::{:?}",
+                self.method()
+            ))),
+        }
+    }
+
+    pub fn try_into_get_network_status(self) -> Result<u64, Error> {
+        match self {
+            MethodResponse::GetNetworkStatus(status) => Ok(status),
+            _ => Err(Error::rpc_response(format!(
+                "expected MethodResponse::GetNetworkStatus found MethodResponse::{:?}",
+                self.method()
+            ))),
         }
     }
 }

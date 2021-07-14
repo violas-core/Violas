@@ -13,14 +13,14 @@ use crate::{
 use anyhow::bail;
 use cargo_metadata::Message;
 use guppy::PackageId;
-use std::ffi::OsString;
-use structopt::StructOpt;
-use testrunner::{
+use nextest_runner::{
     reporter::{Color, ReporterOpts, TestReporter},
     runner::TestRunnerOpts,
     test_filter::{RunIgnored, TestFilter},
     test_list::{TestBinary, TestList},
 };
+use std::ffi::OsString;
+use structopt::StructOpt;
 
 #[derive(Debug, StructOpt)]
 pub struct Args {
@@ -31,6 +31,8 @@ pub struct Args {
     unit: bool,
     #[structopt(flatten)]
     pub(crate) build_args: BuildArgs,
+    #[structopt(flatten)]
+    pub(crate) runner_opts: TestRunnerOpts,
     #[structopt(long)]
     /// Do not run tests, only compile the test executables
     no_run: bool,
@@ -97,18 +99,17 @@ pub fn run(args: Args, xctx: XContext) -> Result<()> {
                         ),
                     );
 
-                    // Construct the friendly name from the package and build target.
-                    let mut friendly_name = package.name().to_owned();
+                    // Construct the binary ID from the package and build target.
+                    let mut binary_id = package.name().to_owned();
                     if artifact.target.name != package.name() {
-                        friendly_name.push_str("::");
-                        friendly_name.push_str(&artifact.target.name);
+                        binary_id.push_str("::");
+                        binary_id.push_str(&artifact.target.name);
                     }
-                    let friendly_name = Some(friendly_name);
 
                     executables.push(TestBinary {
                         binary,
+                        binary_id,
                         cwd,
-                        friendly_name,
                     });
                 }
             }
@@ -121,17 +122,14 @@ pub fn run(args: Args, xctx: XContext) -> Result<()> {
     let test_filter = TestFilter::new(args.run_ignored, &args.filters);
     let test_list = TestList::new(executables, &test_filter)?;
 
-    let runner_opts = TestRunnerOpts {
-        jobs: args.build_args.jobs.map(|jobs| jobs as usize),
-    };
-    let runner = runner_opts.build(&test_list);
+    let runner = args.runner_opts.build(&test_list);
 
     let color = match args.build_args.color {
         Coloring::Auto => Color::Auto,
         Coloring::Always => Color::Always,
         Coloring::Never => Color::Never,
     };
-    let reporter = TestReporter::new(&test_list, color, args.reporter_opts);
+    let mut reporter = TestReporter::new(&test_list, color, args.reporter_opts);
 
     let run_stats = runner.try_execute(|event| reporter.report_event(event))?;
     if !run_stats.is_success() {

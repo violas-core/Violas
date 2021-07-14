@@ -4,9 +4,9 @@
 use crate::{
     account_config::{
         AdminTransactionEvent, BaseUrlRotationEvent, BurnEvent, CancelBurnEvent,
-        ComplianceKeyRotationEvent, CreateAccountEvent, MintEvent, NewBlockEvent, NewEpochEvent,
-        PreburnEvent, ReceivedMintEvent, ReceivedPaymentEvent, SentPaymentEvent,
-        ToXDXExchangeRateUpdateEvent,
+        ComplianceKeyRotationEvent, CreateAccountEvent, DiemIdDomainEvent, MintEvent,
+        NewBlockEvent, NewEpochEvent, PreburnEvent, ReceivedMintEvent, ReceivedPaymentEvent,
+        SentPaymentEvent, ToXDXExchangeRateUpdateEvent,
     },
     event::EventKey,
     ledger_info::LedgerInfo,
@@ -16,7 +16,7 @@ use crate::{
 use anyhow::{ensure, Error, Result};
 use diem_crypto::hash::CryptoHash;
 use diem_crypto_derive::{BCSCryptoHash, CryptoHasher};
-use move_core_types::{language_storage::TypeTag, move_resource::MoveResource};
+use move_core_types::{language_storage::TypeTag, move_resource::MoveStructType};
 
 #[cfg(any(test, feature = "fuzzing"))]
 use proptest_derive::Arbitrary;
@@ -249,6 +249,16 @@ impl TryFrom<&ContractEvent> for CreateAccountEvent {
     fn try_from(event: &ContractEvent) -> Result<Self> {
         if event.type_tag != TypeTag::Struct(Self::struct_tag()) {
             anyhow::bail!("Expected CreateAccountEvent")
+        }
+        Self::try_from_bytes(&event.event_data)
+    }
+}
+
+impl TryFrom<&ContractEvent> for DiemIdDomainEvent {
+    type Error = Error;
+    fn try_from(event: &ContractEvent) -> Result<Self> {
+        if event.type_tag != TypeTag::Struct(Self::struct_tag()) {
+            anyhow::bail!("Expected DiemIdDomainEvent")
         }
         Self::try_from_bytes(&event.event_data)
     }

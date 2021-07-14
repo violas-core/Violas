@@ -52,14 +52,15 @@ diem-operational-tool = {path = "../../config/management/operational", features 
 diem-secure-storage = { path = "../../secure/storage", features = ["testing"] }
 diem-swarm = { path = "../diem-swarm" }
 diem-time-service = { path = "../../common/time-service" }
-diem-trace = {path = "../../common/trace"}
 diem-types = { path = "../../types", features = ["fuzzing"] }
 diem-workspace-hack = { path = "../../common/workspace-hack" }
+language-e2e-tests = { path = "../../language/testing-infra/e2e-tests" }
 move-core-types = { path = "../../language/move-core/types" }
 network = { path = "../../network" }
 network-builder = { path = "../../network/builder" }
 seed-peer-generator = { path = "../../config/seed-peer-generator" }
 state-sync = { path = "../../state-sync" }
+diem-sdk = { path = "../../sdk" }
 diem-transaction-builder = { path = "../../sdk/transaction-builder" }
 
 futures = "0.3.12"
