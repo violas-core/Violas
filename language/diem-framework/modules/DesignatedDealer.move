@@ -1,13 +1,12 @@
-address 0x1 {
-
 /// Module providing functionality for designated dealers.
-module DesignatedDealer {
-    use 0x1::Errors;
-    use 0x1::Diem;
-    use 0x1::Event;
-    use 0x1::Roles;
-    use 0x1::Signer;
-    use 0x1::XUS::XUS;
+module DiemFramework::DesignatedDealer {
+    use DiemFramework::Diem;
+    use DiemFramework::Roles;
+    use DiemFramework::XUS::XUS;
+    use Std::Errors;
+    use Std::Event;
+    use Std::Signer;
+    friend DiemFramework::DiemAccount;
 
     /// A `DesignatedDealer` always holds this `Dealer` resource regardless of the
     /// currencies it can hold. All `ReceivedMintEvent` events for all
@@ -26,7 +25,7 @@ module DesignatedDealer {
     /// tier a mint to a DD needs to be in.
     /// DEPRECATED: This resource is no longer used and will be removed from the system
     // PreburnQueue published at top level in Diem.move
-    struct TierInfo<CoinType> has key {
+    struct TierInfo<phantom CoinType> has key {
         /// Time window start in microseconds
         window_start: u64,
         /// The minted inflow during this time window
@@ -61,7 +60,7 @@ module DesignatedDealer {
     /// Publishes a `Dealer` resource under `dd` with a `PreburnQueue`.
     /// If `add_all_currencies = true` this will add a `PreburnQueue`,
     /// for each known currency at launch.
-    public fun publish_designated_dealer_credential<CoinType: store>(
+    public(friend) fun publish_designated_dealer_credential<CoinType>(
         dd: &signer,
         tc_account: &signer,
         add_all_currencies: bool,
@@ -101,7 +100,7 @@ module DesignatedDealer {
     /// Adds the needed resources to the DD account `dd` in order to work with `CoinType`.
     /// Public so that a currency can be added to a DD later on. Will require
     /// multi-signer transactions in order to add a new currency to an existing DD.
-    public fun add_currency<CoinType: store>(dd: &signer, tc_account: &signer) {
+    public fun add_currency<CoinType>(dd: &signer, tc_account: &signer) {
         Roles::assert_treasury_compliance(tc_account);
         let dd_addr = Signer::address_of(dd);
         assert(exists_at(dd_addr), Errors::not_published(EDEALER));
@@ -127,7 +126,7 @@ module DesignatedDealer {
         aborts_if exists<Diem::Preburn<CoinType>>(dd_addr) with Errors::INVALID_STATE;
     }
 
-    public fun tiered_mint<CoinType: store>(
+    public fun tiered_mint<CoinType>(
         tc_account: &signer,
         amount: u64,
         dd_addr: address,
@@ -157,18 +156,17 @@ module DesignatedDealer {
         Diem::mint<CoinType>(tc_account, amount)
     }
     spec tiered_mint {
-        use 0x1::CoreAddresses;
         pragma opaque;
 
         include TieredMintAbortsIf<CoinType>;
 
         modifies global<Dealer>(dd_addr);
-        modifies global<Diem::CurrencyInfo<CoinType>>(CoreAddresses::CURRENCY_INFO_ADDRESS());
-        ensures exists<Diem::CurrencyInfo<CoinType>>(CoreAddresses::CURRENCY_INFO_ADDRESS());
+        modifies global<Diem::CurrencyInfo<CoinType>>(@CurrencyInfo);
+        ensures exists<Diem::CurrencyInfo<CoinType>>(@CurrencyInfo);
         modifies global<TierInfo<CoinType>>(dd_addr);
         ensures !exists<TierInfo<CoinType>>(dd_addr);
-        let currency_info = global<Diem::CurrencyInfo<CoinType>>(CoreAddresses::CURRENCY_INFO_ADDRESS());
-        let post post_currency_info = global<Diem::CurrencyInfo<CoinType>>(CoreAddresses::CURRENCY_INFO_ADDRESS());
+        let currency_info = global<Diem::CurrencyInfo<CoinType>>(@CurrencyInfo);
+        let post post_currency_info = global<Diem::CurrencyInfo<CoinType>>(@CurrencyInfo);
         ensures result.value == amount;
         ensures post_currency_info == update_field(currency_info, total_value, currency_info.total_value + amount);
     }
@@ -202,5 +200,4 @@ module DesignatedDealer {
         invariant update forall addr: address where old(exists<Dealer>(addr)): exists<Dealer>(addr);
     }
 
-}
 }

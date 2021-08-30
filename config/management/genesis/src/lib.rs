@@ -3,10 +3,13 @@
 
 #![forbid(unsafe_code)]
 
+pub mod builder;
 pub mod command;
 mod genesis;
 mod key;
 pub mod layout;
+mod move_modules;
+pub mod validator_builder;
 mod validator_config;
 mod validator_operator;
 mod verify;
@@ -15,7 +18,7 @@ mod violas_config;
 
 #[cfg(any(test, feature = "testing"))]
 pub mod config_builder;
-#[cfg(any(test, feature = "testing"))]
+#[cfg(test)]
 mod storage_helper;
 #[cfg(any(test, feature = "testing"))]
 pub mod swarm_config;

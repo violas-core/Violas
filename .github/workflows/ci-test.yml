@@ -33,6 +33,7 @@ jobs:
       test-website-build: ${{ steps.website-changes.outputs.changes-found }}
       test-non-rust-lint: ${{ steps.non-rust-lint-changes.outputs.changes-found }}
       test-docker-compose: ${{ steps.docker-compose-changes.outputs.changes-found }}
+      test-test-coverage: ${{ steps.test-coverage.outputs.changes-found }}
     steps:
       - uses: actions/checkout@v2.3.4
         with:
@@ -44,13 +45,13 @@ jobs:
         run: ./scripts/git-checks.sh
       - id: changes
         name: determine changes
-        uses: diem/actions/changes@266156eaff7ba6e1253cf7019506c7b3702f73de
+        uses: diem/actions/changes@faadd16607b77dfa2231a8f366883e01717b3225
         with:
           workflow-file: ci-test.yml
           github-token: ${{secrets.GITHUB_TOKEN}}
       - id: need-build-images
         name: find changes need image build.
-        uses: diem/actions/matches@266156eaff7ba6e1253cf7019506c7b3702f73de
+        uses: diem/actions/matches@faadd16607b77dfa2231a8f366883e01717b3225
         with:
           pattern: '^documentation\|^developers.diem.com'
           invert: "true"
@@ -92,39 +93,39 @@ jobs:
           echo "::set-output name=name::$(echo $output)";
       - id: rust-changes
         name: find rust/cargo changes.
-        uses: diem/actions/matches@266156eaff7ba6e1253cf7019506c7b3702f73de
+        uses: diem/actions/matches@faadd16607b77dfa2231a8f366883e01717b3225
         with:
           pattern: '^documentation\|^docker\|^scripts\|^developers.diem.com'
           invert: "true"
       - id: non-rust-lint-changes
         name: find shell/dockerfile changes
-        uses: diem/actions/matches@266156eaff7ba6e1253cf7019506c7b3702f73de
+        uses: diem/actions/matches@faadd16607b77dfa2231a8f366883e01717b3225
         with:
           pattern: 'Dockerfile$\|.*.sh$|^developers.diem.com'
       - id: helm-changes
         name: find helm changes
-        uses: diem/actions/matches@266156eaff7ba6e1253cf7019506c7b3702f73de
+        uses: diem/actions/matches@faadd16607b77dfa2231a8f366883e01717b3225
         with:
-          pattern: '^.github\|^helm\|^developers.diem.com'
+          pattern: '^helm'
       - id: dev-setup-sh-changes
         name: find dev-setup.sh/base docker image changes
-        uses: diem/actions/matches@266156eaff7ba6e1253cf7019506c7b3702f73de
+        uses: diem/actions/matches@faadd16607b77dfa2231a8f366883e01717b3225
         with:
           pattern: 'docker/ci\|scripts/dev_setup.sh'
       - id: docker-compose-changes
         name: find changes that should trigger docker compose testing.
-        uses: diem/actions/matches@266156eaff7ba6e1253cf7019506c7b3702f73de
+        uses: diem/actions/matches@faadd16607b77dfa2231a8f366883e01717b3225
         with:
           pattern: "^documentation"
           invert: "true"
       - id: website-changes
         name: find website changes.
-        uses: diem/actions/matches@266156eaff7ba6e1253cf7019506c7b3702f73de
+        uses: diem/actions/matches@faadd16607b77dfa2231a8f366883e01717b3225
         with:
           pattern: "^documentation|^developers.diem.com"
       - id: test-coverage
         name: check if we should see if code coverage still works.
-        uses: diem/actions/matches@266156eaff7ba6e1253cf7019506c7b3702f73de
+        uses: diem/actions/matches@faadd16607b77dfa2231a8f366883e01717b3225
         with:
           pattern: '^rust.toolchain\|^x.toml\|^devtools\|^.github\|common/logger'
 
@@ -162,7 +163,7 @@ jobs:
           fetch-depth: 0 #get all the history!!!
       - id: changes
         name: determine changes
-        uses: diem/actions/changes@266156eaff7ba6e1253cf7019506c7b3702f73de
+        uses: diem/actions/changes@faadd16607b77dfa2231a8f366883e01717b3225
         with:
           workflow-file: docker-publish.yml
       - name: setup_aws_ecr_login
@@ -534,6 +535,11 @@ jobs:
           $pre_command && mkdir -p target/junit-reports && cargo nextest --jobs ${max_threads} --tries ${nextest_tries} --unit --failure-output=immediate-final --changed-since "origin/$TARGET_BRANCH" --junit target/junit-reports/unit-test.xml
         env:
           TARGET_BRANCH: ${{ needs.prepare.outputs.changes-target-branch }}
+      - name: run jsonrpc integration tests
+        run: |
+          $pre_command && cargo xtest -p jsonrpc-integration-tests --changed-since "origin/$TARGET_BRANCH"
+        env:
+          TARGET_BRANCH: ${{ needs.prepare.outputs.changes-target-branch }}
       - name: run doctests
         run: |
           $pre_command && cargo xtest --doc --jobs ${max_threads} --unit --changed-since "origin/$TARGET_BRANCH"
@@ -572,6 +578,13 @@ jobs:
       - name: run unit tests
         run: |
           $pre_command && mkdir -p target/junit-reports && cargo nextest --jobs ${max_threads} --tries ${nextest_tries} --unit --failure-output=immediate-final --changed-since "origin/$TARGET_BRANCH" --junit target/junit-reports/unit-test.xml
+        env:
+          TARGET_BRANCH: ${{ needs.prepare.outputs.changes-target-branch }}
+          SCCACHE_AWS_ACCESS_KEY_ID: ${{ secrets.ENV_DIEM_S3_AWS_ACCESS_KEY_ID }}
+          SCCACHE_AWS_SECRET_ACCESS_KEY: ${{ secrets.ENV_DIEM_S3_AWS_SECRET_ACCESS_KEY }}
+      - name: run jsonrpc integration tests
+        run: |
+          $pre_command && cargo xtest -p jsonrpc-integration-tests --changed-since "origin/$TARGET_BRANCH"
         env:
           TARGET_BRANCH: ${{ needs.prepare.outputs.changes-target-branch }}
           SCCACHE_AWS_ACCESS_KEY_ID: ${{ secrets.ENV_DIEM_S3_AWS_ACCESS_KEY_ID }}
@@ -680,6 +693,7 @@ jobs:
       - uses: actions/checkout@v2.3.4
         with:
           ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0 #get all the history!!!
       - uses: ./.github/actions/build-setup
       - name: split tests
         run: |

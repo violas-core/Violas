@@ -8,12 +8,16 @@ use crate::{
 };
 use anyhow::{bail, ensure, format_err, Error, Result};
 use compiler::Compiler;
-use diem_client::{views, WaitForTransactionError};
+use diem_client::{
+    stream::{StreamingClient, StreamingClientConfig},
+    views, StreamResult, WaitForTransactionError,
+};
 use diem_crypto::{
     ed25519::{Ed25519PrivateKey, Ed25519PublicKey, Ed25519Signature},
     test_utils::KeyPair,
 };
 use diem_logger::prelude::{error, info};
+use diem_resource_viewer::{AnnotatedAccountStateBlob, DiemValueAnnotator};
 use diem_temppath::TempPath;
 use diem_transaction_builder::stdlib as transaction_builder;
 use diem_types::{
@@ -36,9 +40,12 @@ use diem_types::{
     write_set::{WriteOp, WriteSetMut},
 };
 use diem_wallet::{io_utils, WalletLibrary};
-use num_traits::cast::{FromPrimitive, ToPrimitive};
+use move_vm_test_utils::InMemoryStorage;
+use num_traits::{
+    cast::{FromPrimitive, ToPrimitive},
+    identities::Zero,
+};
 use reqwest::Url;
-use resource_viewer::{AnnotatedAccountStateBlob, MoveValueAnnotator, NullStateView};
 use rust_decimal::Decimal;
 use std::{
     collections::HashMap,
@@ -111,12 +118,13 @@ pub struct ClientProxy {
     /// do not print '.' when waiting for signed transaction
     pub quiet_wait: bool,
     /// Wallet library managing user accounts.
-    wallet: WalletLibrary,
+    pub wallet: WalletLibrary,
     /// Whether to sync with validator on wallet recovery.
     sync_on_wallet_recovery: bool,
     /// temp files (alive for duration of program)
     temp_files: Vec<PathBuf>,
-    // invariant self.address_to_ref_id.values().iter().all(|i| i < self.accounts.len())
+    /// Host of the node that client connects to
+    pub url: Url,
 }
 
 impl ClientProxy {
@@ -207,7 +215,21 @@ impl ClientProxy {
             sync_on_wallet_recovery,
             temp_files: vec![],
             quiet_wait,
+            url,
         })
+    }
+
+    /// Gets a websocket client for the same node `DiemClient` connects to
+    pub async fn streaming_client(
+        &self,
+        config: Option<StreamingClientConfig>,
+    ) -> StreamResult<StreamingClient> {
+        let mut url = self.url.clone();
+        url.set_scheme("ws").expect("Could not set scheme");
+        // Path from /json-rpc/src/stream_rpc/transport/websocket.rs#L43
+        url.set_path("/v1/stream/ws");
+        println!("ws_url: {}", &url);
+        StreamingClient::new(url, config.unwrap_or_default(), None).await
     }
 
     /// Gets account data for the indexed address
@@ -619,8 +641,7 @@ impl ClientProxy {
 
             let compiler = Compiler {
                 address: diem_types::account_config::CORE_CODE_ADDRESS,
-                skip_stdlib_deps: false,
-                extra_deps: vec![],
+                deps: diem_framework_releases::current_modules().iter().collect(),
             };
             compiler
                 .into_script_blob("file_name", &code)
@@ -1292,8 +1313,11 @@ impl ClientProxy {
     ) -> Result<(Option<AnnotatedAccountStateBlob>, Version)> {
         let (blob, ver) = self.client.get_account_state_blob(&address)?;
         if let Some(account_blob) = blob {
-            let state_view = NullStateView::default();
-            let annotator = MoveValueAnnotator::new(&state_view);
+            let mut storage = InMemoryStorage::new();
+            for (blob, module) in diem_framework_releases::current_modules_with_blobs() {
+                storage.publish_or_overwrite_module(module.self_id(), blob.clone())
+            }
+            let annotator = DiemValueAnnotator::new(&storage);
             let annotate_blob =
                 annotator.view_account_state(&AccountState::try_from(&account_blob)?)?;
             Ok((Some(annotate_blob), ver))

@@ -79,12 +79,12 @@ per-transaction basis.
     -  [Parameters](#@Parameters_54)
     -  [Common Abort Conditions](#@Common_Abort_Conditions_55)
     -  [Related Scripts](#@Related_Scripts_56)
--  [Function `add_diem_id_domain`](#0x1_TreasuryComplianceScripts_add_diem_id_domain)
+-  [Function `add_vasp_domain`](#0x1_TreasuryComplianceScripts_add_vasp_domain)
     -  [Summary](#@Summary_57)
     -  [Technical Description](#@Technical_Description_58)
     -  [Parameters](#@Parameters_59)
     -  [Common Abort Conditions](#@Common_Abort_Conditions_60)
--  [Function `remove_diem_id_domain`](#0x1_TreasuryComplianceScripts_remove_diem_id_domain)
+-  [Function `remove_vasp_domain`](#0x1_TreasuryComplianceScripts_remove_vasp_domain)
     -  [Summary](#@Summary_61)
     -  [Technical Description](#@Technical_Description_62)
     -  [Parameters](#@Parameters_63)
@@ -94,11 +94,11 @@ per-transaction basis.
 <pre><code><b>use</b> <a href="AccountFreezing.md#0x1_AccountFreezing">0x1::AccountFreezing</a>;
 <b>use</b> <a href="Diem.md#0x1_Diem">0x1::Diem</a>;
 <b>use</b> <a href="DiemAccount.md#0x1_DiemAccount">0x1::DiemAccount</a>;
-<b>use</b> <a href="DiemId.md#0x1_DiemId">0x1::DiemId</a>;
 <b>use</b> <a href="DualAttestation.md#0x1_DualAttestation">0x1::DualAttestation</a>;
 <b>use</b> <a href="../../../../../../move-stdlib/docs/FixedPoint32.md#0x1_FixedPoint32">0x1::FixedPoint32</a>;
 <b>use</b> <a href="SlidingNonce.md#0x1_SlidingNonce">0x1::SlidingNonce</a>;
 <b>use</b> <a href="TransactionFee.md#0x1_TransactionFee">0x1::TransactionFee</a>;
+<b>use</b> <a href="VASPDomain.md#0x1_VASPDomain">0x1::VASPDomain</a>;
 </code></pre>
 
 
@@ -181,7 +181,7 @@ being <code>preburn_address</code>.
 * <code><a href="TreasuryComplianceScripts.md#0x1_TreasuryComplianceScripts_preburn">TreasuryComplianceScripts::preburn</a></code>
 
 
-<pre><code><b>public</b>(<b>script</b>) <b>fun</b> <a href="TreasuryComplianceScripts.md#0x1_TreasuryComplianceScripts_cancel_burn_with_amount">cancel_burn_with_amount</a>&lt;Token: store&gt;(account: signer, preburn_address: address, amount: u64)
+<pre><code><b>public</b>(<b>script</b>) <b>fun</b> <a href="TreasuryComplianceScripts.md#0x1_TreasuryComplianceScripts_cancel_burn_with_amount">cancel_burn_with_amount</a>&lt;Token&gt;(account: signer, preburn_address: address, amount: u64)
 </code></pre>
 
 
@@ -190,7 +190,7 @@ being <code>preburn_address</code>.
 <summary>Implementation</summary>
 
 
-<pre><code><b>public</b>(<b>script</b>) <b>fun</b> <a href="TreasuryComplianceScripts.md#0x1_TreasuryComplianceScripts_cancel_burn_with_amount">cancel_burn_with_amount</a>&lt;Token: store&gt;(account: signer, preburn_address: address, amount: u64) {
+<pre><code><b>public</b>(<b>script</b>) <b>fun</b> <a href="TreasuryComplianceScripts.md#0x1_TreasuryComplianceScripts_cancel_burn_with_amount">cancel_burn_with_amount</a>&lt;Token&gt;(account: signer, preburn_address: address, amount: u64) {
     <a href="DiemAccount.md#0x1_DiemAccount_cancel_burn">DiemAccount::cancel_burn</a>&lt;Token&gt;(&account, preburn_address, amount)
 }
 </code></pre>
@@ -209,10 +209,10 @@ being <code>preburn_address</code>.
 <b>include</b> <a href="Diem.md#0x1_Diem_CancelBurnWithCapEnsures">Diem::CancelBurnWithCapEnsures</a>&lt;Token&gt;;
 <b>include</b> <a href="DiemAccount.md#0x1_DiemAccount_DepositEnsures">DiemAccount::DepositEnsures</a>&lt;Token&gt;{payee: preburn_address};
 <b>let</b> total_preburn_value = <b>global</b>&lt;<a href="Diem.md#0x1_Diem_CurrencyInfo">Diem::CurrencyInfo</a>&lt;Token&gt;&gt;(
-    <a href="CoreAddresses.md#0x1_CoreAddresses_CURRENCY_INFO_ADDRESS">CoreAddresses::CURRENCY_INFO_ADDRESS</a>()
+    @CurrencyInfo
 ).preburn_value;
 <b>let</b> post post_total_preburn_value = <b>global</b>&lt;<a href="Diem.md#0x1_Diem_CurrencyInfo">Diem::CurrencyInfo</a>&lt;Token&gt;&gt;(
-    <a href="CoreAddresses.md#0x1_CoreAddresses_CURRENCY_INFO_ADDRESS">CoreAddresses::CURRENCY_INFO_ADDRESS</a>()
+    @CurrencyInfo
 ).preburn_value;
 <b>let</b> balance_at_addr = <a href="DiemAccount.md#0x1_DiemAccount_balance">DiemAccount::balance</a>&lt;Token&gt;(preburn_address);
 <b>let</b> post post_balance_at_addr = <a href="DiemAccount.md#0x1_DiemAccount_balance">DiemAccount::balance</a>&lt;Token&gt;(preburn_address);
@@ -340,7 +340,7 @@ held in the <code><a href="Diem.md#0x1_Diem_CurrencyInfo">Diem::CurrencyInfo</a>
 * <code><a href="TreasuryComplianceScripts.md#0x1_TreasuryComplianceScripts_preburn">TreasuryComplianceScripts::preburn</a></code>
 
 
-<pre><code><b>public</b>(<b>script</b>) <b>fun</b> <a href="TreasuryComplianceScripts.md#0x1_TreasuryComplianceScripts_burn_with_amount">burn_with_amount</a>&lt;Token: store&gt;(account: signer, sliding_nonce: u64, preburn_address: address, amount: u64)
+<pre><code><b>public</b>(<b>script</b>) <b>fun</b> <a href="TreasuryComplianceScripts.md#0x1_TreasuryComplianceScripts_burn_with_amount">burn_with_amount</a>&lt;Token&gt;(account: signer, sliding_nonce: u64, preburn_address: address, amount: u64)
 </code></pre>
 
 
@@ -349,7 +349,7 @@ held in the <code><a href="Diem.md#0x1_Diem_CurrencyInfo">Diem::CurrencyInfo</a>
 <summary>Implementation</summary>
 
 
-<pre><code><b>public</b>(<b>script</b>) <b>fun</b> <a href="TreasuryComplianceScripts.md#0x1_TreasuryComplianceScripts_burn_with_amount">burn_with_amount</a>&lt;Token: store&gt;(account: signer, sliding_nonce: u64, preburn_address: address, amount: u64) {
+<pre><code><b>public</b>(<b>script</b>) <b>fun</b> <a href="TreasuryComplianceScripts.md#0x1_TreasuryComplianceScripts_burn_with_amount">burn_with_amount</a>&lt;Token&gt;(account: signer, sliding_nonce: u64, preburn_address: address, amount: u64) {
     <a href="SlidingNonce.md#0x1_SlidingNonce_record_nonce_or_abort">SlidingNonce::record_nonce_or_abort</a>(&account, sliding_nonce);
     <a href="Diem.md#0x1_Diem_burn">Diem::burn</a>&lt;Token&gt;(&account, preburn_address, amount)
 }
@@ -462,7 +462,7 @@ handle with the <code>payee</code> and <code>payer</code> fields being <code>acc
 * <code><a href="TreasuryComplianceScripts.md#0x1_TreasuryComplianceScripts_burn_txn_fees">TreasuryComplianceScripts::burn_txn_fees</a></code>
 
 
-<pre><code><b>public</b>(<b>script</b>) <b>fun</b> <a href="TreasuryComplianceScripts.md#0x1_TreasuryComplianceScripts_preburn">preburn</a>&lt;Token: store&gt;(account: signer, amount: u64)
+<pre><code><b>public</b>(<b>script</b>) <b>fun</b> <a href="TreasuryComplianceScripts.md#0x1_TreasuryComplianceScripts_preburn">preburn</a>&lt;Token&gt;(account: signer, amount: u64)
 </code></pre>
 
 
@@ -471,7 +471,7 @@ handle with the <code>payee</code> and <code>payer</code> fields being <code>acc
 <summary>Implementation</summary>
 
 
-<pre><code><b>public</b>(<b>script</b>) <b>fun</b> <a href="TreasuryComplianceScripts.md#0x1_TreasuryComplianceScripts_preburn">preburn</a>&lt;Token: store&gt;(account: signer, amount: u64) {
+<pre><code><b>public</b>(<b>script</b>) <b>fun</b> <a href="TreasuryComplianceScripts.md#0x1_TreasuryComplianceScripts_preburn">preburn</a>&lt;Token&gt;(account: signer, amount: u64) {
     <b>let</b> withdraw_cap = <a href="DiemAccount.md#0x1_DiemAccount_extract_withdraw_capability">DiemAccount::extract_withdraw_capability</a>(&account);
     <a href="DiemAccount.md#0x1_DiemAccount_preburn">DiemAccount::preburn</a>&lt;Token&gt;(&account, &withdraw_cap, amount);
     <a href="DiemAccount.md#0x1_DiemAccount_restore_withdraw_capability">DiemAccount::restore_withdraw_capability</a>(withdraw_cap);
@@ -507,13 +507,6 @@ Only the account with a Preburn resource or PreburnQueue resource can preburn [[
 
 
 <pre><code><b>aborts_if</b> !(<b>exists</b>&lt;<a href="Diem.md#0x1_Diem_Preburn">Diem::Preburn</a>&lt;Token&gt;&gt;(account_addr) || <b>exists</b>&lt;<a href="Diem.md#0x1_Diem_PreburnQueue">Diem::PreburnQueue</a>&lt;Token&gt;&gt;(account_addr));
-</code></pre>
-
-
-TODO(timeout): this currently times out
-
-
-<pre><code><b>pragma</b> verify = <b>false</b>;
 </code></pre>
 
 
@@ -585,7 +578,7 @@ held in the <code><a href="Diem.md#0x1_Diem_CurrencyInfo">Diem::CurrencyInfo</a>
 * <code><a href="TreasuryComplianceScripts.md#0x1_TreasuryComplianceScripts_cancel_burn_with_amount">TreasuryComplianceScripts::cancel_burn_with_amount</a></code>
 
 
-<pre><code><b>public</b>(<b>script</b>) <b>fun</b> <a href="TreasuryComplianceScripts.md#0x1_TreasuryComplianceScripts_burn_txn_fees">burn_txn_fees</a>&lt;CoinType: store&gt;(tc_account: signer)
+<pre><code><b>public</b>(<b>script</b>) <b>fun</b> <a href="TreasuryComplianceScripts.md#0x1_TreasuryComplianceScripts_burn_txn_fees">burn_txn_fees</a>&lt;CoinType&gt;(tc_account: signer)
 </code></pre>
 
 
@@ -594,7 +587,7 @@ held in the <code><a href="Diem.md#0x1_Diem_CurrencyInfo">Diem::CurrencyInfo</a>
 <summary>Implementation</summary>
 
 
-<pre><code><b>public</b>(<b>script</b>) <b>fun</b> <a href="TreasuryComplianceScripts.md#0x1_TreasuryComplianceScripts_burn_txn_fees">burn_txn_fees</a>&lt;CoinType: store&gt;(tc_account: signer) {
+<pre><code><b>public</b>(<b>script</b>) <b>fun</b> <a href="TreasuryComplianceScripts.md#0x1_TreasuryComplianceScripts_burn_txn_fees">burn_txn_fees</a>&lt;CoinType&gt;(tc_account: signer) {
     <a href="TransactionFee.md#0x1_TransactionFee_burn_fees">TransactionFee::burn_fees</a>&lt;CoinType&gt;(&tc_account);
 }
 </code></pre>
@@ -685,7 +678,7 @@ resource published under the <code>designated_dealer_address</code>.
 * <code><a href="AccountAdministrationScripts.md#0x1_AccountAdministrationScripts_rotate_dual_attestation_info">AccountAdministrationScripts::rotate_dual_attestation_info</a></code>
 
 
-<pre><code><b>public</b>(<b>script</b>) <b>fun</b> <a href="TreasuryComplianceScripts.md#0x1_TreasuryComplianceScripts_tiered_mint">tiered_mint</a>&lt;CoinType: store&gt;(tc_account: signer, sliding_nonce: u64, designated_dealer_address: address, mint_amount: u64, tier_index: u64)
+<pre><code><b>public</b>(<b>script</b>) <b>fun</b> <a href="TreasuryComplianceScripts.md#0x1_TreasuryComplianceScripts_tiered_mint">tiered_mint</a>&lt;CoinType&gt;(tc_account: signer, sliding_nonce: u64, designated_dealer_address: address, mint_amount: u64, tier_index: u64)
 </code></pre>
 
 
@@ -694,7 +687,7 @@ resource published under the <code>designated_dealer_address</code>.
 <summary>Implementation</summary>
 
 
-<pre><code><b>public</b>(<b>script</b>) <b>fun</b> <a href="TreasuryComplianceScripts.md#0x1_TreasuryComplianceScripts_tiered_mint">tiered_mint</a>&lt;CoinType: store&gt;(
+<pre><code><b>public</b>(<b>script</b>) <b>fun</b> <a href="TreasuryComplianceScripts.md#0x1_TreasuryComplianceScripts_tiered_mint">tiered_mint</a>&lt;CoinType&gt;(
     tc_account: signer,
     sliding_nonce: u64,
     designated_dealer_address: address,
@@ -1056,7 +1049,7 @@ is given by <code>new_exchange_rate_numerator/new_exchange_rate_denominator</cod
 * <code><a href="TreasuryComplianceScripts.md#0x1_TreasuryComplianceScripts_update_minting_ability">TreasuryComplianceScripts::update_minting_ability</a></code>
 
 
-<pre><code><b>public</b>(<b>script</b>) <b>fun</b> <a href="TreasuryComplianceScripts.md#0x1_TreasuryComplianceScripts_update_exchange_rate">update_exchange_rate</a>&lt;Currency: store&gt;(tc_account: signer, sliding_nonce: u64, new_exchange_rate_numerator: u64, new_exchange_rate_denominator: u64)
+<pre><code><b>public</b>(<b>script</b>) <b>fun</b> <a href="TreasuryComplianceScripts.md#0x1_TreasuryComplianceScripts_update_exchange_rate">update_exchange_rate</a>&lt;Currency&gt;(tc_account: signer, sliding_nonce: u64, new_exchange_rate_numerator: u64, new_exchange_rate_denominator: u64)
 </code></pre>
 
 
@@ -1065,7 +1058,7 @@ is given by <code>new_exchange_rate_numerator/new_exchange_rate_denominator</cod
 <summary>Implementation</summary>
 
 
-<pre><code><b>public</b>(<b>script</b>) <b>fun</b> <a href="TreasuryComplianceScripts.md#0x1_TreasuryComplianceScripts_update_exchange_rate">update_exchange_rate</a>&lt;Currency: store&gt;(
+<pre><code><b>public</b>(<b>script</b>) <b>fun</b> <a href="TreasuryComplianceScripts.md#0x1_TreasuryComplianceScripts_update_exchange_rate">update_exchange_rate</a>&lt;Currency&gt;(
         tc_account: signer,
         sliding_nonce: u64,
         new_exchange_rate_numerator: u64,
@@ -1175,7 +1168,7 @@ This transaction needs to be sent by the Treasury Compliance account.
 * <code><a href="TreasuryComplianceScripts.md#0x1_TreasuryComplianceScripts_update_exchange_rate">TreasuryComplianceScripts::update_exchange_rate</a></code>
 
 
-<pre><code><b>public</b>(<b>script</b>) <b>fun</b> <a href="TreasuryComplianceScripts.md#0x1_TreasuryComplianceScripts_update_minting_ability">update_minting_ability</a>&lt;Currency: store&gt;(tc_account: signer, allow_minting: bool)
+<pre><code><b>public</b>(<b>script</b>) <b>fun</b> <a href="TreasuryComplianceScripts.md#0x1_TreasuryComplianceScripts_update_minting_ability">update_minting_ability</a>&lt;Currency&gt;(tc_account: signer, allow_minting: bool)
 </code></pre>
 
 
@@ -1184,7 +1177,7 @@ This transaction needs to be sent by the Treasury Compliance account.
 <summary>Implementation</summary>
 
 
-<pre><code><b>public</b>(<b>script</b>) <b>fun</b> <a href="TreasuryComplianceScripts.md#0x1_TreasuryComplianceScripts_update_minting_ability">update_minting_ability</a>&lt;Currency: store&gt;(
+<pre><code><b>public</b>(<b>script</b>) <b>fun</b> <a href="TreasuryComplianceScripts.md#0x1_TreasuryComplianceScripts_update_minting_ability">update_minting_ability</a>&lt;Currency&gt;(
     tc_account: signer,
     allow_minting: bool
 ) {
@@ -1196,16 +1189,16 @@ This transaction needs to be sent by the Treasury Compliance account.
 
 </details>
 
-<a name="0x1_TreasuryComplianceScripts_add_diem_id_domain"></a>
+<a name="0x1_TreasuryComplianceScripts_add_vasp_domain"></a>
 
-## Function `add_diem_id_domain`
+## Function `add_vasp_domain`
 
 
 <a name="@Summary_57"></a>
 
 ### Summary
 
-Add a DiemID domain to parent VASP account. The transaction can only be sent by
+Add a VASP domain to parent VASP account. The transaction can only be sent by
 the Treasury Compliance account.
 
 
@@ -1213,7 +1206,7 @@ the Treasury Compliance account.
 
 ### Technical Description
 
-Adds a <code><a href="DiemId.md#0x1_DiemId_DiemIdDomain">DiemId::DiemIdDomain</a></code> to the <code>domains</code> field of the <code><a href="DiemId.md#0x1_DiemId_DiemIdDomains">DiemId::DiemIdDomains</a></code> resource published under
+Adds a <code><a href="VASPDomain.md#0x1_VASPDomain_VASPDomain">VASPDomain::VASPDomain</a></code> to the <code>domains</code> field of the <code><a href="VASPDomain.md#0x1_VASPDomain_VASPDomains">VASPDomain::VASPDomains</a></code> resource published under
 the account at <code>address</code>.
 
 
@@ -1236,13 +1229,13 @@ the account at <code>address</code>.
 | ----------------           | --------------                           | -------------                                                                                                                          |
 | <code><a href="../../../../../../move-stdlib/docs/Errors.md#0x1_Errors_REQUIRES_ROLE">Errors::REQUIRES_ROLE</a></code>    | <code><a href="Roles.md#0x1_Roles_ETREASURY_COMPLIANCE">Roles::ETREASURY_COMPLIANCE</a></code>            | The sending account is not the Treasury Compliance account.                                                                            |
 | <code><a href="../../../../../../move-stdlib/docs/Errors.md#0x1_Errors_REQUIRES_ADDRESS">Errors::REQUIRES_ADDRESS</a></code> | <code><a href="CoreAddresses.md#0x1_CoreAddresses_ETREASURY_COMPLIANCE">CoreAddresses::ETREASURY_COMPLIANCE</a></code>    | <code>tc_account</code> is not the Treasury Compliance account.                                                                                   |
-| <code><a href="../../../../../../move-stdlib/docs/Errors.md#0x1_Errors_NOT_PUBLISHED">Errors::NOT_PUBLISHED</a></code>    | <code><a href="DiemId.md#0x1_DiemId_EDIEM_ID_DOMAIN_MANAGER">DiemId::EDIEM_ID_DOMAIN_MANAGER</a></code>        | The <code><a href="DiemId.md#0x1_DiemId_DiemIdDomainManager">DiemId::DiemIdDomainManager</a></code> resource is not yet published under the Treasury Compliance account.                                 |
-| <code><a href="../../../../../../move-stdlib/docs/Errors.md#0x1_Errors_NOT_PUBLISHED">Errors::NOT_PUBLISHED</a></code>    | <code><a href="DiemId.md#0x1_DiemId_EDIEM_ID_DOMAINS_NOT_PUBLISHED">DiemId::EDIEM_ID_DOMAINS_NOT_PUBLISHED</a></code> | <code>address</code> does not have a <code><a href="DiemId.md#0x1_DiemId_DiemIdDomains">DiemId::DiemIdDomains</a></code> resource published under it.                                                         |
-| <code><a href="../../../../../../move-stdlib/docs/Errors.md#0x1_Errors_INVALID_ARGUMENT">Errors::INVALID_ARGUMENT</a></code> | <code><a href="DiemId.md#0x1_DiemId_EDOMAIN_ALREADY_EXISTS">DiemId::EDOMAIN_ALREADY_EXISTS</a></code>         | The <code>domain</code> already exists in the list of <code><a href="DiemId.md#0x1_DiemId_DiemIdDomain">DiemId::DiemIdDomain</a></code>s  in the <code><a href="DiemId.md#0x1_DiemId_DiemIdDomains">DiemId::DiemIdDomains</a></code> resource published under <code>address</code>. |
-| <code><a href="../../../../../../move-stdlib/docs/Errors.md#0x1_Errors_INVALID_ARGUMENT">Errors::INVALID_ARGUMENT</a></code> | <code><a href="DiemId.md#0x1_DiemId_EINVALID_DIEM_ID_DOMAIN">DiemId::EINVALID_DIEM_ID_DOMAIN</a></code>        | The <code>domain</code> is greater in length than <code><a href="DiemId.md#0x1_DiemId_DOMAIN_LENGTH">DiemId::DOMAIN_LENGTH</a></code>.                                                                        |
+| <code><a href="../../../../../../move-stdlib/docs/Errors.md#0x1_Errors_NOT_PUBLISHED">Errors::NOT_PUBLISHED</a></code>    | <code><a href="VASPDomain.md#0x1_VASPDomain_EVASP_DOMAIN_MANAGER">VASPDomain::EVASP_DOMAIN_MANAGER</a></code>        | The <code><a href="VASPDomain.md#0x1_VASPDomain_VASPDomainManager">VASPDomain::VASPDomainManager</a></code> resource is not yet published under the Treasury Compliance account.                                 |
+| <code><a href="../../../../../../move-stdlib/docs/Errors.md#0x1_Errors_NOT_PUBLISHED">Errors::NOT_PUBLISHED</a></code>    | <code><a href="VASPDomain.md#0x1_VASPDomain_EVASP_DOMAINS_NOT_PUBLISHED">VASPDomain::EVASP_DOMAINS_NOT_PUBLISHED</a></code> | <code>address</code> does not have a <code><a href="VASPDomain.md#0x1_VASPDomain_VASPDomains">VASPDomain::VASPDomains</a></code> resource published under it.                                                         |
+| <code><a href="../../../../../../move-stdlib/docs/Errors.md#0x1_Errors_INVALID_ARGUMENT">Errors::INVALID_ARGUMENT</a></code> | <code>VASPDomain::EDOMAIN_ALREADY_EXISTS</code>         | The <code>domain</code> already exists in the list of <code><a href="VASPDomain.md#0x1_VASPDomain_VASPDomain">VASPDomain::VASPDomain</a></code>s  in the <code><a href="VASPDomain.md#0x1_VASPDomain_VASPDomains">VASPDomain::VASPDomains</a></code> resource published under <code>address</code>. |
+| <code><a href="../../../../../../move-stdlib/docs/Errors.md#0x1_Errors_INVALID_ARGUMENT">Errors::INVALID_ARGUMENT</a></code> | <code><a href="VASPDomain.md#0x1_VASPDomain_EINVALID_VASP_DOMAIN">VASPDomain::EINVALID_VASP_DOMAIN</a></code>        | The <code>domain</code> is greater in length than <code><a href="VASPDomain.md#0x1_VASPDomain_DOMAIN_LENGTH">VASPDomain::DOMAIN_LENGTH</a></code>.                                                                        |
 
 
-<pre><code><b>public</b>(<b>script</b>) <b>fun</b> <a href="TreasuryComplianceScripts.md#0x1_TreasuryComplianceScripts_add_diem_id_domain">add_diem_id_domain</a>(tc_account: signer, address: address, domain: vector&lt;u8&gt;)
+<pre><code><b>public</b>(<b>script</b>) <b>fun</b> <a href="TreasuryComplianceScripts.md#0x1_TreasuryComplianceScripts_add_vasp_domain">add_vasp_domain</a>(tc_account: signer, address: address, domain: vector&lt;u8&gt;)
 </code></pre>
 
 
@@ -1251,12 +1244,12 @@ the account at <code>address</code>.
 <summary>Implementation</summary>
 
 
-<pre><code><b>public</b>(<b>script</b>) <b>fun</b> <a href="TreasuryComplianceScripts.md#0x1_TreasuryComplianceScripts_add_diem_id_domain">add_diem_id_domain</a> (
+<pre><code><b>public</b>(<b>script</b>) <b>fun</b> <a href="TreasuryComplianceScripts.md#0x1_TreasuryComplianceScripts_add_vasp_domain">add_vasp_domain</a> (
     tc_account: signer,
     address: address,
     domain: vector&lt;u8&gt;,
 ) {
-    <a href="DiemId.md#0x1_DiemId_add_diem_id_domain">DiemId::add_diem_id_domain</a>(&tc_account, address, domain);
+    <a href="VASPDomain.md#0x1_VASPDomain_add_vasp_domain">VASPDomain::add_vasp_domain</a>(&tc_account, address, domain);
 }
 </code></pre>
 
@@ -1270,9 +1263,9 @@ the account at <code>address</code>.
 
 
 <pre><code><b>include</b> <a href="DiemAccount.md#0x1_DiemAccount_TransactionChecks">DiemAccount::TransactionChecks</a>{sender: tc_account};
-<b>include</b> <a href="DiemId.md#0x1_DiemId_AddDiemIdDomainAbortsIf">DiemId::AddDiemIdDomainAbortsIf</a>;
-<b>include</b> <a href="DiemId.md#0x1_DiemId_AddDiemIdDomainEnsures">DiemId::AddDiemIdDomainEnsures</a>;
-<b>include</b> <a href="DiemId.md#0x1_DiemId_AddDiemIdDomainEmits">DiemId::AddDiemIdDomainEmits</a>;
+<b>include</b> <a href="VASPDomain.md#0x1_VASPDomain_AddVASPDomainAbortsIf">VASPDomain::AddVASPDomainAbortsIf</a>;
+<b>include</b> <a href="VASPDomain.md#0x1_VASPDomain_AddVASPDomainEnsures">VASPDomain::AddVASPDomainEnsures</a>;
+<b>include</b> <a href="VASPDomain.md#0x1_VASPDomain_AddVASPDomainEmits">VASPDomain::AddVASPDomainEmits</a>;
 <b>aborts_with</b> [check]
     <a href="../../../../../../move-stdlib/docs/Errors.md#0x1_Errors_REQUIRES_ROLE">Errors::REQUIRES_ROLE</a>,
     <a href="../../../../../../move-stdlib/docs/Errors.md#0x1_Errors_REQUIRES_ADDRESS">Errors::REQUIRES_ADDRESS</a>,
@@ -1284,16 +1277,16 @@ the account at <code>address</code>.
 
 </details>
 
-<a name="0x1_TreasuryComplianceScripts_remove_diem_id_domain"></a>
+<a name="0x1_TreasuryComplianceScripts_remove_vasp_domain"></a>
 
-## Function `remove_diem_id_domain`
+## Function `remove_vasp_domain`
 
 
 <a name="@Summary_61"></a>
 
 ### Summary
 
-Remove a DiemID domain from parent VASP account. The transaction can only be sent by
+Remove a VASP domain from parent VASP account. The transaction can only be sent by
 the Treasury Compliance account.
 
 
@@ -1301,7 +1294,7 @@ the Treasury Compliance account.
 
 ### Technical Description
 
-Removes a <code><a href="DiemId.md#0x1_DiemId_DiemIdDomain">DiemId::DiemIdDomain</a></code> from the <code>domains</code> field of the <code><a href="DiemId.md#0x1_DiemId_DiemIdDomains">DiemId::DiemIdDomains</a></code> resource published under
+Removes a <code><a href="VASPDomain.md#0x1_VASPDomain_VASPDomain">VASPDomain::VASPDomain</a></code> from the <code>domains</code> field of the <code><a href="VASPDomain.md#0x1_VASPDomain_VASPDomains">VASPDomain::VASPDomains</a></code> resource published under
 account with <code>address</code>.
 
 
@@ -1324,13 +1317,13 @@ account with <code>address</code>.
 | ----------------           | --------------                           | -------------                                                                                                                          |
 | <code><a href="../../../../../../move-stdlib/docs/Errors.md#0x1_Errors_REQUIRES_ROLE">Errors::REQUIRES_ROLE</a></code>    | <code><a href="Roles.md#0x1_Roles_ETREASURY_COMPLIANCE">Roles::ETREASURY_COMPLIANCE</a></code>            | The sending account is not the Treasury Compliance account.                                                                            |
 | <code><a href="../../../../../../move-stdlib/docs/Errors.md#0x1_Errors_REQUIRES_ADDRESS">Errors::REQUIRES_ADDRESS</a></code> | <code><a href="CoreAddresses.md#0x1_CoreAddresses_ETREASURY_COMPLIANCE">CoreAddresses::ETREASURY_COMPLIANCE</a></code>    | <code>tc_account</code> is not the Treasury Compliance account.                                                                                   |
-| <code><a href="../../../../../../move-stdlib/docs/Errors.md#0x1_Errors_NOT_PUBLISHED">Errors::NOT_PUBLISHED</a></code>    | <code><a href="DiemId.md#0x1_DiemId_EDIEM_ID_DOMAIN_MANAGER">DiemId::EDIEM_ID_DOMAIN_MANAGER</a></code>        | The <code><a href="DiemId.md#0x1_DiemId_DiemIdDomainManager">DiemId::DiemIdDomainManager</a></code> resource is not yet published under the Treasury Compliance account.                                 |
-| <code><a href="../../../../../../move-stdlib/docs/Errors.md#0x1_Errors_NOT_PUBLISHED">Errors::NOT_PUBLISHED</a></code>    | <code><a href="DiemId.md#0x1_DiemId_EDIEM_ID_DOMAINS_NOT_PUBLISHED">DiemId::EDIEM_ID_DOMAINS_NOT_PUBLISHED</a></code> | <code>address</code> does not have a <code><a href="DiemId.md#0x1_DiemId_DiemIdDomains">DiemId::DiemIdDomains</a></code> resource published under it.                                                         |
-| <code><a href="../../../../../../move-stdlib/docs/Errors.md#0x1_Errors_INVALID_ARGUMENT">Errors::INVALID_ARGUMENT</a></code> | <code><a href="DiemId.md#0x1_DiemId_EINVALID_DIEM_ID_DOMAIN">DiemId::EINVALID_DIEM_ID_DOMAIN</a></code>        | The <code>domain</code> is greater in length than <code><a href="DiemId.md#0x1_DiemId_DOMAIN_LENGTH">DiemId::DOMAIN_LENGTH</a></code>.                                                                        |
-| <code><a href="../../../../../../move-stdlib/docs/Errors.md#0x1_Errors_INVALID_ARGUMENT">Errors::INVALID_ARGUMENT</a></code> | <code><a href="DiemId.md#0x1_DiemId_EDOMAIN_NOT_FOUND">DiemId::EDOMAIN_NOT_FOUND</a></code>              | The <code>domain</code> does not exist in the list of <code><a href="DiemId.md#0x1_DiemId_DiemIdDomain">DiemId::DiemIdDomain</a></code>s  in the <code><a href="DiemId.md#0x1_DiemId_DiemIdDomains">DiemId::DiemIdDomains</a></code> resource published under <code>address</code>. |
+| <code><a href="../../../../../../move-stdlib/docs/Errors.md#0x1_Errors_NOT_PUBLISHED">Errors::NOT_PUBLISHED</a></code>    | <code><a href="VASPDomain.md#0x1_VASPDomain_EVASP_DOMAIN_MANAGER">VASPDomain::EVASP_DOMAIN_MANAGER</a></code>        | The <code><a href="VASPDomain.md#0x1_VASPDomain_VASPDomainManager">VASPDomain::VASPDomainManager</a></code> resource is not yet published under the Treasury Compliance account.                                 |
+| <code><a href="../../../../../../move-stdlib/docs/Errors.md#0x1_Errors_NOT_PUBLISHED">Errors::NOT_PUBLISHED</a></code>    | <code><a href="VASPDomain.md#0x1_VASPDomain_EVASP_DOMAINS_NOT_PUBLISHED">VASPDomain::EVASP_DOMAINS_NOT_PUBLISHED</a></code> | <code>address</code> does not have a <code><a href="VASPDomain.md#0x1_VASPDomain_VASPDomains">VASPDomain::VASPDomains</a></code> resource published under it.                                                         |
+| <code><a href="../../../../../../move-stdlib/docs/Errors.md#0x1_Errors_INVALID_ARGUMENT">Errors::INVALID_ARGUMENT</a></code> | <code><a href="VASPDomain.md#0x1_VASPDomain_EINVALID_VASP_DOMAIN">VASPDomain::EINVALID_VASP_DOMAIN</a></code>        | The <code>domain</code> is greater in length than <code><a href="VASPDomain.md#0x1_VASPDomain_DOMAIN_LENGTH">VASPDomain::DOMAIN_LENGTH</a></code>.                                                                        |
+| <code><a href="../../../../../../move-stdlib/docs/Errors.md#0x1_Errors_INVALID_ARGUMENT">Errors::INVALID_ARGUMENT</a></code> | <code><a href="VASPDomain.md#0x1_VASPDomain_EVASP_DOMAIN_NOT_FOUND">VASPDomain::EVASP_DOMAIN_NOT_FOUND</a></code>              | The <code>domain</code> does not exist in the list of <code><a href="VASPDomain.md#0x1_VASPDomain_VASPDomain">VASPDomain::VASPDomain</a></code>s  in the <code><a href="VASPDomain.md#0x1_VASPDomain_VASPDomains">VASPDomain::VASPDomains</a></code> resource published under <code>address</code>. |
 
 
-<pre><code><b>public</b>(<b>script</b>) <b>fun</b> <a href="TreasuryComplianceScripts.md#0x1_TreasuryComplianceScripts_remove_diem_id_domain">remove_diem_id_domain</a>(tc_account: signer, address: address, domain: vector&lt;u8&gt;)
+<pre><code><b>public</b>(<b>script</b>) <b>fun</b> <a href="TreasuryComplianceScripts.md#0x1_TreasuryComplianceScripts_remove_vasp_domain">remove_vasp_domain</a>(tc_account: signer, address: address, domain: vector&lt;u8&gt;)
 </code></pre>
 
 
@@ -1339,12 +1332,12 @@ account with <code>address</code>.
 <summary>Implementation</summary>
 
 
-<pre><code><b>public</b>(<b>script</b>) <b>fun</b> <a href="TreasuryComplianceScripts.md#0x1_TreasuryComplianceScripts_remove_diem_id_domain">remove_diem_id_domain</a> (
+<pre><code><b>public</b>(<b>script</b>) <b>fun</b> <a href="TreasuryComplianceScripts.md#0x1_TreasuryComplianceScripts_remove_vasp_domain">remove_vasp_domain</a> (
     tc_account: signer,
     address: address,
     domain: vector&lt;u8&gt;,
 ) {
-    <a href="DiemId.md#0x1_DiemId_remove_diem_id_domain">DiemId::remove_diem_id_domain</a>(&tc_account, address, domain);
+    <a href="VASPDomain.md#0x1_VASPDomain_remove_vasp_domain">VASPDomain::remove_vasp_domain</a>(&tc_account, address, domain);
 }
 </code></pre>
 

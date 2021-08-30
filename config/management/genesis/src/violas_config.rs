@@ -1,6 +1,11 @@
 use anyhow::Result;
+use diem_types::{
+    chain_id::ChainId,
+    network_address::{NetworkAddress, Protocol},
+};
 use serde::{Deserialize, Serialize};
 use serde_yaml;
+use std::str::FromStr;
 use std::{string::String, vec::Vec};
 
 //#[derive(Debug, Serialize, Deserialize)]
@@ -27,6 +32,52 @@ pub fn read_violas_configuration(config_file_name: &str) -> Result<Config> {
     Ok(c)
 }
 
+pub fn get_chain_id_from_file() -> ChainId {
+    if let Ok(genesis_config) = read_violas_configuration("genesis.yaml") {
+        ChainId::new(genesis_config.chain_id)
+    } else {
+        ChainId::test()
+    }
+}
+
+pub fn get_listen_address_from_file(index: usize) -> Option<(NetworkAddress, NetworkAddress)> {
+    if let Ok(genesis_config) = read_violas_configuration("genesis.yaml") {
+        // Update chain_id
+        let chain_id = ChainId::new(genesis_config.chain_id);
+        // update validators
+        if index < genesis_config.validators.len() {
+            let net_addr_str = genesis_config.validators[index].clone();
+            //address format is "/ip4/10.0.0.16/tcp/80"
+            if let Ok(addr) = NetworkAddress::from_str(net_addr_str.as_str()) {
+                let protocols: Vec<Protocol> = addr.clone().into_iter().collect();
+
+                if let Protocol::Tcp(port) = protocols[1] {
+                    //update validator and fullnode address in genesis blob
+                    let validator_network_address = addr.clone();
+                    let fullnode_network_address =
+                        NetworkAddress::from(protocols[0].clone()).push(Protocol::Tcp(port + 1)); // validator port + 1
+
+                    // set listening address with "0.0.0.0:port"
+                    // validator_network.listen_address =
+                    //     NetworkAddress::from(Protocol::Ip4("0.0.0.0".parse().unwrap()))
+                    //         .push(Protocol::Tcp(port));
+                    // fullnode_network.listen_address =
+                    //     NetworkAddress::from(Protocol::Ip4("0.0.0.0".parse().unwrap()))
+                    //         .push(Protocol::Tcp(port + 1));
+
+                    println!(
+                        "Chain Id : {}, validator address : {}, full node address : {} ",
+                        chain_id, validator_network_address, fullnode_network_address
+                    );
+
+                    return Some((validator_network_address, fullnode_network_address));
+                };
+            };
+        };
+    };
+
+    None
+}
 #[cfg(test)]
 pub fn test_violas_config() -> Result<()> {
     let yaml = "./test.yaml";

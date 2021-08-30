@@ -38,7 +38,7 @@
 The type tag representing the <code><a href="VLS.md#0x1_VLS">VLS</a></code> currency on-chain.
 
 
-<pre><code><b>struct</b> <a href="VLS.md#0x1_VLS">VLS</a> has store
+<pre><code><b>struct</b> <a href="VLS.md#0x1_VLS">VLS</a>
 </code></pre>
 
 
@@ -254,7 +254,7 @@ This function creates the mint, preburn, and burn's capabilities for <code><a hr
     <a href="CoreAddresses.md#0x1_CoreAddresses_assert_currency_info">CoreAddresses::assert_currency_info</a>(lr_account);
 
     // <a href="VLS.md#0x1_VLS_Reserve">Reserve</a> must not exist.
-    <b>assert</b>(!<b>exists</b>&lt;<a href="VLS.md#0x1_VLS_Reserve">Reserve</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_DIEM_ROOT_ADDRESS">CoreAddresses::DIEM_ROOT_ADDRESS</a>()), <a href="../../../../../../move-stdlib/docs/Errors.md#0x1_Errors_already_published">Errors::already_published</a>(<a href="VLS.md#0x1_VLS_E_RESERVE_HAS_BEEN_INITIALIZED">E_RESERVE_HAS_BEEN_INITIALIZED</a>));
+    <b>assert</b>(!<b>exists</b>&lt;<a href="VLS.md#0x1_VLS_Reserve">Reserve</a>&gt;(@DiemRoot), <a href="../../../../../../move-stdlib/docs/Errors.md#0x1_Errors_already_published">Errors::already_published</a>(<a href="VLS.md#0x1_VLS_E_RESERVE_HAS_BEEN_INITIALIZED">E_RESERVE_HAS_BEEN_INITIALIZED</a>));
 
     <b>let</b> (mint_cap, burn_cap) = <a href="Diem.md#0x1_Diem_register_currency">Diem::register_currency</a>&lt;<a href="VLS.md#0x1_VLS">VLS</a>&gt;(
         lr_account,
@@ -295,7 +295,7 @@ This function creates the mint, preburn, and burn's capabilities for <code><a hr
 <b>acquires</b> <a href="VLS.md#0x1_VLS_Reserve">Reserve</a> {
     <a href="DiemTimestamp.md#0x1_DiemTimestamp_assert_operating">DiemTimestamp::assert_operating</a>();
 
-    <b>let</b> reserve = borrow_global_mut&lt;<a href="VLS.md#0x1_VLS_Reserve">Reserve</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_DIEM_ROOT_ADDRESS">CoreAddresses::DIEM_ROOT_ADDRESS</a>());
+    <b>let</b> reserve = borrow_global_mut&lt;<a href="VLS.md#0x1_VLS_Reserve">Reserve</a>&gt;(@DiemRoot);
 
     <b>assert</b>(reserve.initial_timestamp == 0, <a href="../../../../../../move-stdlib/docs/Errors.md#0x1_Errors_already_published">Errors::already_published</a>(<a href="VLS.md#0x1_VLS_E_INITIAL_TIMESTAMP_HAS_BEEN_INITIALIED">E_INITIAL_TIMESTAMP_HAS_BEEN_INITIALIED</a>));
 
@@ -314,7 +314,7 @@ This function creates the mint, preburn, and burn's capabilities for <code><a hr
 Returns true if <code>CoinType</code> is <code><a href="VLS.md#0x1_VLS_VLS">VLS::VLS</a></code>
 
 
-<pre><code><b>public</b> <b>fun</b> <a href="VLS.md#0x1_VLS_is_vls">is_vls</a>&lt;CoinType: store&gt;(): bool
+<pre><code><b>public</b> <b>fun</b> <a href="VLS.md#0x1_VLS_is_vls">is_vls</a>&lt;CoinType&gt;(): bool
 </code></pre>
 
 
@@ -323,7 +323,7 @@ Returns true if <code>CoinType</code> is <code><a href="VLS.md#0x1_VLS_VLS">VLS:
 <summary>Implementation</summary>
 
 
-<pre><code><b>public</b> <b>fun</b> <a href="VLS.md#0x1_VLS_is_vls">is_vls</a>&lt;CoinType: store&gt;(): bool {
+<pre><code><b>public</b> <b>fun</b> <a href="VLS.md#0x1_VLS_is_vls">is_vls</a>&lt;CoinType&gt;(): bool {
     <a href="Diem.md#0x1_Diem_is_currency">Diem::is_currency</a>&lt;CoinType&gt;() &&
         <a href="Diem.md#0x1_Diem_currency_code">Diem::currency_code</a>&lt;CoinType&gt;() == <a href="Diem.md#0x1_Diem_currency_code">Diem::currency_code</a>&lt;<a href="VLS.md#0x1_VLS">VLS</a>&gt;()
 }
@@ -387,7 +387,7 @@ Returns true if CoinType is VLS.
 
     <b>assert</b>(amount_vls &gt; 0, <a href="../../../../../../move-stdlib/docs/Errors.md#0x1_Errors_invalid_argument">Errors::invalid_argument</a>(<a href="VLS.md#0x1_VLS_EMINTING_ZERO_VLS_IS_NOT_ALLOWED">EMINTING_ZERO_VLS_IS_NOT_ALLOWED</a>));
 
-    <b>let</b> reserve = borrow_global_mut&lt;<a href="VLS.md#0x1_VLS_Reserve">Reserve</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_DIEM_ROOT_ADDRESS">CoreAddresses::DIEM_ROOT_ADDRESS</a>());
+    <b>let</b> reserve = borrow_global_mut&lt;<a href="VLS.md#0x1_VLS_Reserve">Reserve</a>&gt;(@DiemRoot);
 
     // Once the coins have been deposited in the reserve, we can mint the <a href="VLS.md#0x1_VLS">VLS</a>
     <a href="Diem.md#0x1_Diem_mint_with_capability">Diem::mint_with_capability</a>&lt;<a href="VLS.md#0x1_VLS">VLS</a>&gt;(amount_vls, &reserve.mint_cap)
@@ -404,11 +404,11 @@ Returns true if CoinType is VLS.
 
 
 <pre><code><b>pragma</b> opaque;
-<b>modifies</b> <b>global</b>&lt;<a href="VLS.md#0x1_VLS_Reserve">Reserve</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_DIEM_ROOT_ADDRESS">CoreAddresses::DIEM_ROOT_ADDRESS</a>());
-<b>modifies</b> <b>global</b>&lt;<a href="Diem.md#0x1_Diem_CurrencyInfo">Diem::CurrencyInfo</a>&lt;<a href="VLS.md#0x1_VLS">VLS</a>&gt;&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_CURRENCY_INFO_ADDRESS">CoreAddresses::CURRENCY_INFO_ADDRESS</a>());
+<b>modifies</b> <b>global</b>&lt;<a href="VLS.md#0x1_VLS_Reserve">Reserve</a>&gt;(@DiemRoot);
+<b>modifies</b> <b>global</b>&lt;<a href="Diem.md#0x1_Diem_CurrencyInfo">Diem::CurrencyInfo</a>&lt;<a href="VLS.md#0x1_VLS">VLS</a>&gt;&gt;(@CurrencyInfo);
 <b>include</b> <a href="VLS.md#0x1_VLS_CreateAbortsIf">CreateAbortsIf</a>;
-<b>let</b> reserve = <b>global</b>&lt;<a href="VLS.md#0x1_VLS_Reserve">Reserve</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_DIEM_ROOT_ADDRESS">CoreAddresses::DIEM_ROOT_ADDRESS</a>());
-<b>ensures</b> <b>exists</b>&lt;<a href="VLS.md#0x1_VLS_Reserve">Reserve</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_DIEM_ROOT_ADDRESS">CoreAddresses::DIEM_ROOT_ADDRESS</a>());
+<b>let</b> reserve = <b>global</b>&lt;<a href="VLS.md#0x1_VLS_Reserve">Reserve</a>&gt;(@DiemRoot);
+<b>ensures</b> <b>exists</b>&lt;<a href="VLS.md#0x1_VLS_Reserve">Reserve</a>&gt;(@DiemRoot);
 <b>include</b> <a href="Diem.md#0x1_Diem_MintEnsures">Diem::MintEnsures</a>&lt;<a href="VLS.md#0x1_VLS">VLS</a>&gt;{value: amount_vls};
 </code></pre>
 
@@ -420,7 +420,7 @@ Returns true if CoinType is VLS.
 
 <pre><code><b>schema</b> <a href="VLS.md#0x1_VLS_CreateAbortsIf">CreateAbortsIf</a> {
     amount_vls: u64;
-    <b>let</b> reserve = <b>global</b>&lt;<a href="VLS.md#0x1_VLS_Reserve">Reserve</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_DIEM_ROOT_ADDRESS">CoreAddresses::DIEM_ROOT_ADDRESS</a>());
+    <b>let</b> reserve = <b>global</b>&lt;<a href="VLS.md#0x1_VLS_Reserve">Reserve</a>&gt;(@DiemRoot);
     <b>aborts_if</b> amount_vls == 0 <b>with</b> <a href="../../../../../../move-stdlib/docs/Errors.md#0x1_Errors_INVALID_ARGUMENT">Errors::INVALID_ARGUMENT</a>;
     <b>include</b> <a href="DiemTimestamp.md#0x1_DiemTimestamp_AbortsIfNotOperating">DiemTimestamp::AbortsIfNotOperating</a>;
     <b>include</b> <a href="Diem.md#0x1_Diem_MintAbortsIf">Diem::MintAbortsIf</a>&lt;<a href="VLS.md#0x1_VLS">VLS</a>&gt;{value: amount_vls};
@@ -449,7 +449,7 @@ mine VLS, total amount 100,000,000
 
 <pre><code><b>public</b> <b>fun</b> <a href="VLS.md#0x1_VLS_mine">mine</a>() : <a href="Diem.md#0x1_Diem">Diem</a>&lt;<a href="VLS.md#0x1_VLS">VLS</a>&gt;
 <b>acquires</b> <a href="VLS.md#0x1_VLS_Reserve">Reserve</a> {
-    <b>let</b> reserve = borrow_global&lt;<a href="VLS.md#0x1_VLS_Reserve">Reserve</a>&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_DIEM_ROOT_ADDRESS">CoreAddresses::DIEM_ROOT_ADDRESS</a>());
+    <b>let</b> reserve = borrow_global&lt;<a href="VLS.md#0x1_VLS_Reserve">Reserve</a>&gt;(@DiemRoot);
     <b>let</b> initial_timestamp = reserve.initial_timestamp;
     <b>assert</b>(initial_timestamp != 0, <a href="../../../../../../move-stdlib/docs/Errors.md#0x1_Errors_invalid_argument">Errors::invalid_argument</a>(<a href="VLS.md#0x1_VLS_E_INITIAL_TIMESTAMP_HAS_NOT_BEEN_INITIALIED">E_INITIAL_TIMESTAMP_HAS_NOT_BEEN_INITIALIED</a>));
 

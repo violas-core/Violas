@@ -16,6 +16,7 @@ This module defines the coin type XUS and its initialization function.
 <b>use</b> <a href="Diem.md#0x1_Diem">0x1::Diem</a>;
 <b>use</b> <a href="DiemTimestamp.md#0x1_DiemTimestamp">0x1::DiemTimestamp</a>;
 <b>use</b> <a href="../../../../../../move-stdlib/docs/FixedPoint32.md#0x1_FixedPoint32">0x1::FixedPoint32</a>;
+<b>use</b> <a href="Roles.md#0x1_Roles">0x1::Roles</a>;
 </code></pre>
 
 
@@ -27,7 +28,7 @@ This module defines the coin type XUS and its initialization function.
 The type tag representing the <code><a href="XUS.md#0x1_XUS">XUS</a></code> currency on-chain.
 
 
-<pre><code><b>struct</b> <a href="XUS.md#0x1_XUS">XUS</a> has store
+<pre><code><b>struct</b> <a href="XUS.md#0x1_XUS">XUS</a>
 </code></pre>
 
 
@@ -69,6 +70,8 @@ Registers the <code><a href="XUS.md#0x1_XUS">XUS</a></code> cointype. This can o
     tc_account: &signer,
 ) {
     <a href="DiemTimestamp.md#0x1_DiemTimestamp_assert_genesis">DiemTimestamp::assert_genesis</a>();
+    <a href="Roles.md#0x1_Roles_assert_treasury_compliance">Roles::assert_treasury_compliance</a>(tc_account);
+    <a href="Roles.md#0x1_Roles_assert_diem_root">Roles::assert_diem_root</a>(dr_account);
     <a href="Diem.md#0x1_Diem_register_SCS_currency">Diem::register_SCS_currency</a>&lt;<a href="XUS.md#0x1_XUS">XUS</a>&gt;(
         dr_account,
         tc_account,
@@ -149,7 +152,7 @@ it does not hold for all types (but does hold for XUS).
 
 
 <pre><code><b>invariant</b> <a href="DiemTimestamp.md#0x1_DiemTimestamp_is_operating">DiemTimestamp::is_operating</a>()
-    ==&gt; <b>exists</b>&lt;<a href="AccountLimits.md#0x1_AccountLimits_LimitsDefinition">AccountLimits::LimitsDefinition</a>&lt;<a href="XUS.md#0x1_XUS">XUS</a>&gt;&gt;(<a href="CoreAddresses.md#0x1_CoreAddresses_DIEM_ROOT_ADDRESS">CoreAddresses::DIEM_ROOT_ADDRESS</a>());
+    ==&gt; <b>exists</b>&lt;<a href="AccountLimits.md#0x1_AccountLimits_LimitsDefinition">AccountLimits::LimitsDefinition</a>&lt;<a href="XUS.md#0x1_XUS">XUS</a>&gt;&gt;(@DiemRoot);
 </code></pre>
 
 
@@ -157,7 +160,7 @@ it does not hold for all types (but does hold for XUS).
 
 
 <pre><code><b>invariant</b> <b>forall</b> addr: address <b>where</b> <b>exists</b>&lt;<a href="AccountLimits.md#0x1_AccountLimits_LimitsDefinition">AccountLimits::LimitsDefinition</a>&lt;<a href="XUS.md#0x1_XUS">XUS</a>&gt;&gt;(addr):
-    addr == <a href="CoreAddresses.md#0x1_CoreAddresses_DIEM_ROOT_ADDRESS">CoreAddresses::DIEM_ROOT_ADDRESS</a>();
+    addr == @DiemRoot;
 </code></pre>
 
 

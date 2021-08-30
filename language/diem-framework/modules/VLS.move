@@ -1,16 +1,16 @@
-address 0x1 {
+address DiemFramework {
 
 module VLS {
-    use 0x1::AccountLimits;
-    use 0x1::CoreAddresses;
-    use 0x1::Errors;
-    use 0x1::FixedPoint32::{Self, FixedPoint32};
-    use 0x1::Diem::{Self, Diem};    
-    use 0x1::DiemTimestamp;    
-    use 0x1::Vector;
+    use DiemFramework::AccountLimits;
+    use DiemFramework::CoreAddresses;    
+    use DiemFramework::Diem::{Self, Diem};    
+    use DiemFramework::DiemTimestamp;    
+    use Std::Errors;
+    use Std::FixedPoint32::{Self, FixedPoint32};
+    use Std::Vector;
     
     /// The type tag representing the `VLS` currency on-chain.
-    struct VLS has store { }
+    struct VLS { }
 
     /// VLS holds mint capability for mining
     struct Reserve has key, store {
@@ -55,7 +55,7 @@ module VLS {
         CoreAddresses::assert_currency_info(lr_account);
 
         // Reserve must not exist.
-        assert(!exists<Reserve>(CoreAddresses::DIEM_ROOT_ADDRESS()), Errors::already_published(E_RESERVE_HAS_BEEN_INITIALIZED));
+        assert(!exists<Reserve>(@DiemRoot), Errors::already_published(E_RESERVE_HAS_BEEN_INITIALIZED));
 
         let (mint_cap, burn_cap) = Diem::register_currency<VLS>(
             lr_account,
@@ -76,7 +76,7 @@ module VLS {
     acquires Reserve {
         DiemTimestamp::assert_operating();
 
-        let reserve = borrow_global_mut<Reserve>(CoreAddresses::DIEM_ROOT_ADDRESS());
+        let reserve = borrow_global_mut<Reserve>(@DiemRoot);
         
         assert(reserve.initial_timestamp == 0, Errors::already_published(E_INITIAL_TIMESTAMP_HAS_BEEN_INITIALIED));
 
@@ -84,7 +84,7 @@ module VLS {
     }
 
     /// Returns true if `CoinType` is `VLS::VLS`
-    public fun is_vls<CoinType: store>(): bool {
+    public fun is_vls<CoinType>(): bool {
         Diem::is_currency<CoinType>() &&
             Diem::currency_code<CoinType>() == Diem::currency_code<VLS>()
     }
@@ -108,7 +108,7 @@ module VLS {
 
         assert(amount_vls > 0, Errors::invalid_argument(EMINTING_ZERO_VLS_IS_NOT_ALLOWED));
         
-        let reserve = borrow_global_mut<Reserve>(CoreAddresses::DIEM_ROOT_ADDRESS());              
+        let reserve = borrow_global_mut<Reserve>(@DiemRoot);
                 
         // Once the coins have been deposited in the reserve, we can mint the VLS
         Diem::mint_with_capability<VLS>(amount_vls, &reserve.mint_cap)
@@ -116,19 +116,19 @@ module VLS {
 
     spec mint {
         pragma opaque;
-        modifies global<Reserve>(CoreAddresses::DIEM_ROOT_ADDRESS());
-        modifies global<Diem::CurrencyInfo<VLS>>(CoreAddresses::CURRENCY_INFO_ADDRESS());
+        modifies global<Reserve>(@DiemRoot);
+        modifies global<Diem::CurrencyInfo<VLS>>(@CurrencyInfo);
         include CreateAbortsIf;
-        let reserve = global<Reserve>(CoreAddresses::DIEM_ROOT_ADDRESS());
+        let reserve = global<Reserve>(@DiemRoot);
                 
-        ensures exists<Reserve>(CoreAddresses::DIEM_ROOT_ADDRESS());
+        ensures exists<Reserve>(@DiemRoot);
         include Diem::MintEnsures<VLS>{value: amount_vls};
     }
 
     spec schema CreateAbortsIf {
         amount_vls: u64;
         
-        let reserve = global<Reserve>(CoreAddresses::DIEM_ROOT_ADDRESS());
+        let reserve = global<Reserve>(@DiemRoot);
         aborts_if amount_vls == 0 with Errors::INVALID_ARGUMENT;
         
         include DiemTimestamp::AbortsIfNotOperating;
@@ -139,7 +139,7 @@ module VLS {
     /// mine VLS, total amount 100,000,000    
     public fun mine() : Diem<VLS>
     acquires Reserve {                
-        let reserve = borrow_global<Reserve>(CoreAddresses::DIEM_ROOT_ADDRESS());
+        let reserve = borrow_global<Reserve>(@DiemRoot);
         let initial_timestamp = reserve.initial_timestamp;
         assert(initial_timestamp != 0, Errors::invalid_argument(E_INITIAL_TIMESTAMP_HAS_NOT_BEEN_INITIALIED));
                 
