@@ -207,52 +207,6 @@ fn test_disable_address_validation() {
 }
 
 #[test]
-fn test_disable_address_validation() {
-    let num_nodes = 1;
-    let (_env, op_tool, backend, _) = launch_swarm_with_op_tool_and_backend(num_nodes, 0);
-
-    // Try to set the validator config with a bad address and verify failure
-    let bad_network_address = NetworkAddress::from_str("/dns4/127.0.0.1/tcp/1234").unwrap();
-    op_tool
-        .set_validator_config(
-            Some(bad_network_address.clone()),
-            None,
-            &backend,
-            false,
-            false,
-        )
-        .unwrap_err();
-
-    // Now disable address verification to set the validator config with a bad network address
-    let txn_ctx = op_tool
-        .set_validator_config(Some(bad_network_address), None, &backend, false, true)
-        .unwrap();
-    assert_eq!(VMStatusView::Executed, txn_ctx.execution_result.unwrap());
-
-    // Rotate the consensus key and verify that it isn't blocked by a bad network address
-    let _ = op_tool.rotate_consensus_key(&backend, false).unwrap();
-
-    // Rotate the validator network key and verify that it isn't blocked by a bad network address
-    let _ = op_tool
-        .rotate_validator_network_key(&backend, false)
-        .unwrap();
-
-    // Rotate the fullnode network key and verify that it isn't blocked by a bad network address
-    let _ = op_tool
-        .rotate_fullnode_network_key(&backend, false)
-        .unwrap();
-
-    // Rotate the operator key and verify that it isn't blocked by a bad network address
-    let _ = op_tool.rotate_operator_key(&backend, false).unwrap();
-
-    // Update the validator network address with a valid address
-    let new_network_address = NetworkAddress::from_str("/ip4/10.0.0.16/tcp/80").unwrap();
-    let _ = op_tool
-        .set_validator_config(Some(new_network_address), None, &backend, false, false)
-        .unwrap();
-}
-
-#[test]
 fn test_set_operator_and_add_new_validator() {
     let status = set_operator_and_add_new_validator_helper();
     assert_ne!(VMStatusView::Executed, status);

@@ -2,10 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{
-    builder::GenesisBuilder,
-    layout::Layout,
-    verify::verify_genesis,
-    violas_config::{get_chain_id_from_file, get_listen_address_from_file},
+    builder::GenesisBuilder, layout::Layout, verify::verify_genesis, violas_config,
     waypoint::create_genesis_waypoint,
 };
 use anyhow::Result;
@@ -214,6 +211,23 @@ impl ValidatorBuilder {
             })
             .collect::<Result<Vec<_>>>()?;
 
+        // Update listen address from genesis.yaml file
+        let mut index = 0;
+        for validator in &mut validators {
+            if let Some((a, b)) = violas_config::get_listen_address_from_file(index) {
+                validator
+                    .config
+                    .validator_network
+                    .as_mut()
+                    .unwrap()
+                    .listen_address = a;
+
+                validator.config.full_node_networks[0].listen_address = b;
+            };
+
+            index += 1;
+        }
+
         // Build genesis
         let mut genesis_storage =
             OnDiskStorage::new(self.config_directory.join("genesis-storage.json"));
@@ -239,6 +253,17 @@ impl ValidatorBuilder {
             anyhow::ensure!(
                 output.split("match").count() == 5,
                 "Failed to verify genesis"
+            );
+
+            // reset listen address to 0.0.0.0:port
+            violas_config::reset_listen_address(
+                &mut validator
+                    .config
+                    .validator_network
+                    .as_mut()
+                    .unwrap()
+                    .listen_address,
+                &mut validator.config.full_node_networks[0].listen_address,
             );
         }
 
@@ -290,12 +315,12 @@ impl ValidatorBuilder {
         let fullnode_network = &mut config.full_node_networks[0];
 
         // Update listen address from genesis.yaml file
-        if let Some((validator_network_listen_address, fullnode_network_listen_address)) =
-            get_listen_address_from_file(index)
-        {
-            validator_network.listen_address = validator_network_listen_address;
-            fullnode_network.listen_address = fullnode_network_listen_address;
-        };
+        // if let Some((validator_network_listen_address, fullnode_network_listen_address)) =
+        //     get_listen_address_from_file(index)
+        // {
+        //     validator_network.listen_address = validator_network_listen_address;
+        //     fullnode_network.listen_address = fullnode_network_listen_address;
+        // };
 
         let validator_identity = validator_network.identity_from_storage();
         validator_network.identity = Identity::from_storage(
@@ -427,7 +452,7 @@ impl ValidatorBuilder {
         }
 
         // Create Genesis and Genesis Waypoint
-        let genesis = genesis_builder.build(get_chain_id_from_file())?;
+        let genesis = genesis_builder.build(violas_config::get_chain_id_from_file())?;
         let waypoint = create_genesis_waypoint(&genesis)?;
 
         Ok((genesis, waypoint))
