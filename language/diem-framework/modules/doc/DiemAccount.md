@@ -4896,7 +4896,7 @@ Create designated dealer account with specified address and authentication key
 The <code>tc_account</code> must be treasury compliance.
 
 
-<pre><code><b>public</b> <b>fun</b> <a href="DiemAccount.md#0x1_DiemAccount_create_designated_dealer_ex">create_designated_dealer_ex</a>&lt;CoinType: store&gt;(tc_account: &signer, new_account_address: address, auth_key: vector&lt;u8&gt;, human_name: vector&lt;u8&gt;, add_all_currencies: bool)
+<pre><code><b>public</b> <b>fun</b> <a href="DiemAccount.md#0x1_DiemAccount_create_designated_dealer_ex">create_designated_dealer_ex</a>&lt;CoinType&gt;(tc_account: &signer, new_account_address: address, auth_key: vector&lt;u8&gt;, human_name: vector&lt;u8&gt;, add_all_currencies: bool)
 </code></pre>
 
 
@@ -4905,7 +4905,7 @@ The <code>tc_account</code> must be treasury compliance.
 <summary>Implementation</summary>
 
 
-<pre><code><b>public</b> <b>fun</b> <a href="DiemAccount.md#0x1_DiemAccount_create_designated_dealer_ex">create_designated_dealer_ex</a>&lt;CoinType: store&gt;(
+<pre><code><b>public</b> <b>fun</b> <a href="DiemAccount.md#0x1_DiemAccount_create_designated_dealer_ex">create_designated_dealer_ex</a>&lt;CoinType&gt;(
     tc_account: &signer,
     new_account_address: address,
     auth_key: vector&lt;u8&gt;,

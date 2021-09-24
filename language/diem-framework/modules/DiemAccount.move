@@ -2295,7 +2295,7 @@ module DiemFramework::DiemAccount {
     
     /// Create designated dealer account with specified address and authentication key
     /// The `tc_account` must be treasury compliance.
-    public fun create_designated_dealer_ex<CoinType: store>(
+    public fun create_designated_dealer_ex<CoinType>(
         tc_account: &signer,
         new_account_address: address,
         auth_key: vector<u8>,
