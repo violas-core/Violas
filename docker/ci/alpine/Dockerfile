@@ -1,5 +1,5 @@
 # while using circle we'll use circle's base image.
-FROM alpine:3.14.0@sha256:234cb88d3020898631af0ccbbcca9a66ae7306ecd30c9720690858c1b007d2a0 AS setup_ci_alpine
+FROM alpine:3.15.0@sha256:21a3deaa0d32a8057914f36584b5288d2e5ecc984380bc0118285c70fa8c9300 AS setup_ci_alpine
 
 WORKDIR /diem
 COPY rust-toolchain /diem/rust-toolchain
