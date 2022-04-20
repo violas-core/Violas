@@ -1,4 +1,4 @@
-FROM debian:buster-20210721@sha256:cc58a29c333ee594f7624d968123429b26916face46169304f07580644dde6b2 AS setup_ci
+FROM debian:buster-20220418@sha256:5360c09d5d3c2f93d4c190c9902350ca75dc599fd470cae1c4b24aac52d6c6a9 AS setup_ci
 
 RUN mkdir /diem
 COPY rust-toolchain /diem/rust-toolchain
