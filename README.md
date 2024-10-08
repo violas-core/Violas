@@ -11,7 +11,7 @@
 [![grcov](https://img.shields.io/badge/Coverage-grcov-green)](https://ci-artifacts.diem.com/coverage/unit-coverage/latest/index.html)
 [![test history](https://img.shields.io/badge/Test-History-green)](https://ci-artifacts.diem.com/testhistory/diem/diem/auto/ci-test.yml/index.html)
 
-Diem Core implements a decentralized, programmable database which provides a financial infrastructure that can empower billions of people.
+Violas is blockchain application based on Diem Core， it implements a decentralized, programmable database which provides a financial infrastructure that can empower billions of people.
 
 ## Note to Developers
 * Diem Core is a prototype.
