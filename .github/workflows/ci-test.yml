@@ -547,7 +547,7 @@ jobs:
           TARGET_BRANCH: ${{ needs.prepare.outputs.changes-target-branch }}
       - name: upload unit test results
         if: always()
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v3
         with:
           name: unit-test-results
           path: target/junit-reports/unit-test.xml
@@ -598,7 +598,7 @@ jobs:
           SCCACHE_AWS_SECRET_ACCESS_KEY: ${{ secrets.ENV_DIEM_S3_AWS_SECRET_ACCESS_KEY }}
       - name: upload unit test results
         if: always()
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v3
         with:
           name: unit-test-results
           path: target/junit-reports/unit-test.xml
@@ -630,7 +630,7 @@ jobs:
           TARGET_BRANCH: ${{ needs.prepare.outputs.changes-target-branch }}
       - name: upload codegen test results
         if: always()
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v3
         with:
           name: codegen-unit-test-results
           path: target/junit-reports/codegen-unit-test.xml
@@ -665,7 +665,7 @@ jobs:
           SCCACHE_AWS_SECRET_ACCESS_KEY: ${{ secrets.ENV_DIEM_S3_AWS_SECRET_ACCESS_KEY }}
       - name: upload codegen test results
         if: always()
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v3
         with:
           name: codegen-unit-test-results
           path: target/junit-reports/codegen-unit-test.xml
@@ -994,7 +994,7 @@ jobs:
           # Replace this with a cargo x bench
           cargo bench --package language-benchmarks
       - name: Archive criterion results
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v3
         with:
           name: bench-baseline
           retention-days: 5
